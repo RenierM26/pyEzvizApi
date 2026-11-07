@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyezvizapi.devices.payload import local_ip_address, switch_values
-from pyezvizapi.constants import DeviceSwitchType
-from pyezvizapi.models import EzvizDeviceRecord
 from pyezvizapi._shared.utils import fetch_nested_value
+from pyezvizapi.constants import DeviceSwitchType
+from pyezvizapi.devices.payload import local_ip_address, switch_values
+from pyezvizapi.models import EzvizDeviceRecord
 
 
 class EzvizSmartPlug:

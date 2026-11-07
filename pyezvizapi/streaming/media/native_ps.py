@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from pyezvizapi.streaming.cloud.protocol import _decrypt_hikvision_ps_video_packets, _MpegPsVideoDecryptState
 from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.streaming.cloud.protocol import (
+    _decrypt_hikvision_ps_video_packets,
+    _MpegPsVideoDecryptState,
+)
 from pyezvizapi.streaming.media.containers import mpeg_ps_complete_prefix_length
 
 MAX_PENDING_PS_BYTES = 1024 * 1024

@@ -10,7 +10,11 @@ from typing import Literal
 
 from Crypto.Cipher import AES
 
-from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError, UnsupportedRtpVideoCodecError
+from pyezvizapi.exceptions import (
+    EzvizUnsupportedMediaError,
+    PyEzvizError,
+    UnsupportedRtpVideoCodecError,
+)
 
 ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
 MPEG_VIDEO_START_CODE_PREFIX = b"\x00\x00\x01"
@@ -1447,7 +1451,7 @@ def _encrypted_aggregation_packet(
     return aggregate_valid or not single_valid
 
 
-def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
+def rtp_packets_to_nal_units(  # noqa: PLR0912, PLR0915
     packets: Iterable[RtpPacket],
     *,
     codec: RtpVideoCodec,

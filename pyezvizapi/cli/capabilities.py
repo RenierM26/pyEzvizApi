@@ -8,8 +8,14 @@ import os
 from pathlib import Path
 import sys
 
+from pyezvizapi.streaming.capabilities import (
+    MAX_FLEET_SAMPLE_BYTES,
+    MAX_FLEET_TARGETS,
+    StreamCapabilityTarget,
+    StreamSampleEvidence,
+    probe_stream_capabilities,
+)
 from pyezvizapi.streaming.local.hcnetsdk.api import HcNetSdkLanEndpoint, HcNetSdkLoginCandidate
-from pyezvizapi.streaming.capabilities import MAX_FLEET_SAMPLE_BYTES, MAX_FLEET_TARGETS, StreamCapabilityTarget, StreamSampleEvidence, probe_stream_capabilities
 from pyezvizapi.streaming.sample import MAX_SAMPLE_BYTES
 
 

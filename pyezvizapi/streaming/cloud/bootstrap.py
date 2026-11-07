@@ -25,13 +25,57 @@ from urllib.parse import urlparse
 from pyezvizapi.cloud.deadline import request_deadline
 from pyezvizapi.cloud.endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from pyezvizapi.constants import MAX_RETRIES
-from pyezvizapi.exceptions import EzvizIncompleteMediaError, EzvizNoMediaError, HTTPError, PyEzvizError, UnsupportedRtpVideoCodecError
-from pyezvizapi.streaming.media.models import has_positive_finite_capture_bound, is_positive_finite_duration_bound
-from pyezvizapi.streaming.media.remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes, write_aac_remux_input
-from pyezvizapi.streaming.media.rtp import ANNEX_B_START_CODE, DEFAULT_AAC_PAYLOAD_TYPES, DEFAULT_VIDEO_PAYLOAD_TYPES, RtpAacStream, RtpPacket, RtpRouteProfile, RtpStreamDescriptor, RtpVideoCodec, RtpVideoDepacketizer, decrypt_idmx_aac_packets, detect_rtp_video_codec, idmx_rtp_stream_descriptors, idmx_video_frame_rate, parse_rtp_packet, rtp_codec_payload_types, rtp_media_kind, rtp_nal_units_have_vcl, rtp_packet_has_valid_idmx_aac_frame, rtp_packets_to_nal_units, rtp_payload_video_codec
+from pyezvizapi.exceptions import (
+    EzvizIncompleteMediaError,
+    EzvizNoMediaError,
+    HTTPError,
+    PyEzvizError,
+    UnsupportedRtpVideoCodecError,
+)
+from pyezvizapi.streaming.cloud.transport import (
+    SocketFactory,
+    StreamTransport,
+    VtmStreamClient,
+    build_vtm_url,
+)
+from pyezvizapi.streaming.media.containers import (
+    decrypt_hikvision_ps_video,
+    detect_transport,
+    mpeg_ps_video_pts_span_seconds,
+)
+from pyezvizapi.streaming.media.models import (
+    has_positive_finite_capture_bound,
+    is_positive_finite_duration_bound,
+)
+from pyezvizapi.streaming.media.remux import (
+    copy_remuxed_output,
+    open_mpegts_remux_process,
+    remux_bytes,
+    write_aac_remux_input,
+)
+from pyezvizapi.streaming.media.rtp import (
+    ANNEX_B_START_CODE,
+    DEFAULT_AAC_PAYLOAD_TYPES,
+    DEFAULT_VIDEO_PAYLOAD_TYPES,
+    RtpAacStream,
+    RtpPacket,
+    RtpRouteProfile,
+    RtpStreamDescriptor,
+    RtpVideoCodec,
+    RtpVideoDepacketizer,
+    decrypt_idmx_aac_packets,
+    detect_rtp_video_codec,
+    idmx_rtp_stream_descriptors,
+    idmx_video_frame_rate,
+    parse_rtp_packet,
+    rtp_codec_payload_types,
+    rtp_media_kind,
+    rtp_nal_units_have_vcl,
+    rtp_packet_has_valid_idmx_aac_frame,
+    rtp_packets_to_nal_units,
+    rtp_payload_video_codec,
+)
 from pyezvizapi.streaming.media.rtp_timing import NativeRtpPsMuxer, timed_rtp_mpegps_payloads
-from pyezvizapi.streaming.media.containers import decrypt_hikvision_ps_video, detect_transport, mpeg_ps_video_pts_span_seconds
-from pyezvizapi.streaming.cloud.transport import SocketFactory, StreamTransport, VtmStreamClient, build_vtm_url
 
 JsonDict = dict[str, Any]
 _RTP_CODEC_PROBE_MAX_PACKETS = 32
@@ -1395,7 +1439,7 @@ def _cloud_rtp_packet_matches_video_route(
     )
 
 
-def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
+def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
     packets: Iterator[Any],
     output: BinaryIO,
     *,
@@ -1687,7 +1731,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
 
     audio_failed = False
 
-    def _write_input(stdin: BinaryIO) -> None:  # noqa: PLR0912,PLR0915
+    def _write_input(stdin: BinaryIO) -> None:  # noqa: PLR0912, PLR0915
         nonlocal audio_failed
         depacketizer = RtpVideoDepacketizer(
             codec,

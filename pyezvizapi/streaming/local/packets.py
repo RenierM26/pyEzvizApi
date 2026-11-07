@@ -5,8 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.streaming.media.rtp import RtpPacket, RtpRouteProfile, RtpStreamDescriptor, parse_rtp_packet
 from pyezvizapi.streaming.media.containers import ANNEX_B_LONG_START_CODE, MPEG_START_CODE_PREFIX
+from pyezvizapi.streaming.media.rtp import (
+    RtpPacket,
+    RtpRouteProfile,
+    RtpStreamDescriptor,
+    parse_rtp_packet,
+)
 
 
 @dataclass(frozen=True)

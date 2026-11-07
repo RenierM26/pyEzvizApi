@@ -1,12 +1,58 @@
-"""commands local stream implementation; legacy runtime hooks remain on the owner module.
+# Runtime hooks deliberately resolve through their legacy owner.
+# ruff: noqa: SLF001
 
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
-# ruff: noqa: SLF001 -- explicit legacy hook boundary.
+"""local stream command handlers; legacy hooks resolve through cli.main."""
 from __future__ import annotations
 
 import pyezvizapi.cli.main as _owner
+
+
+def _env_or_arg(args: _owner.argparse.Namespace, attr: str, env_name: str) -> str | None:
+    """Return a CLI argument value or matching environment fallback."""
+    value = getattr(args, attr, None)
+    if value:
+        return _owner.cast(str, value)
+    env_value = _owner.os_environ_get(env_name)
+    return env_value if env_value else None
+
+def os_environ_get(name: str) -> str | None:
+    """Small wrapper to make environment fallback easy to patch in tests."""
+    return _owner.os.environ.get(name)
+
+def _required_local_sdk_secret(args: _owner.argparse.Namespace, attr: str, env_name: str) -> str:
+    """Read a required local-SDK secret without logging or persisting it."""
+    value = _owner._env_or_arg(args, attr, env_name)
+    if not value:
+        raise _owner.PyEzvizError(f"Missing --{attr.replace('_', '-')} or {env_name}")
+    return value
+
+def _local_sdk_credentials_file(args: _owner.argparse.Namespace) -> dict[str, _owner.Any]:
+    """Read a local-SDK credential bundle without logging secret values."""
+    cached = getattr(args, '_local_sdk_credentials_file_data', None)
+    if isinstance(cached, dict):
+        return cached
+    path = getattr(args, 'credentials_file', None)
+    if not path:
+        return {}
+    try:
+        data = _owner.json.loads(_owner.Path(path).read_text(encoding='utf-8'))
+    except OSError as err:
+        raise _owner.PyEzvizError(f'Could not read --credentials-file: {err}') from err
+    except _owner.json.JSONDecodeError as err:
+        raise _owner.PyEzvizError(f'Invalid --credentials-file JSON: {err}') from err
+    if not isinstance(data, dict):
+        raise _owner.PyEzvizError('--credentials-file must contain a JSON object')
+    vars(args)['_local_sdk_credentials_file_data'] = data
+    return data
+
+def _local_sdk_credentials_value(args: _owner.argparse.Namespace, path: tuple[str, ...]) -> _owner.Any:
+    """Return a value from the optional local-SDK credential bundle."""
+    current: _owner.Any = _owner._local_sdk_credentials_file(args)
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
 
 def _local_sdk_arg_or_credentials(args: _owner.argparse.Namespace, attr: str, path: tuple[str, ...]) -> _owner.Any:
     """Return an explicit CLI value or matching credential-bundle value."""
@@ -259,7 +305,7 @@ def _hcnetsdk_playm4_input_dump_summary(directory: _owner.Path, *, max_frames: i
         raise _owner.PyEzvizError(f'PlayM4 input dump directory not found: {directory}')
     paths = sorted(directory.rglob('*-playm4-input-*.bin'))
     packets = [path.read_bytes() for path in paths]
-    summary: dict[str, _owner.Any] = {'input': str(directory), 'file_count': len(paths), 'byte_count': sum((len(packet) for packet in packets)), 'idmx_h264': _owner.summarize_idmx_h264_local_packets(packets, max_frames=max_frames)}
+    summary: dict[str, _owner.Any] = {'input': str(directory), 'file_count': len(paths), 'byte_count': sum(len(packet) for packet in packets), 'idmx_h264': _owner.summarize_idmx_h264_local_packets(packets, max_frames=max_frames)}
     _owner._add_hcnetsdk_annexb_dump_summary(summary, packets, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path)
     return summary
 
@@ -603,100 +649,3 @@ def _hcnetsdk_command_port_body_word_samples(body: bytes, *, max_samples: int=16
 def _hcnetsdk_command_port_body_tail_word_samples(tail: bytes, *, max_samples: int=16) -> list[dict[str, int]]:
     """Return bounded nonzero 32-bit request-tail words for diagnostics."""
     return _owner._hcnetsdk_command_port_body_word_samples(tail, max_samples=max_samples)
-
-def _handle_stream(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
-    """Handle experimental stream helpers."""
-    if args.stream_action not in {'trace', 'dump', 'proxy', 'local-sdk-dump', 'local-sdk-keys', 'h264-annexb-summary', 'hcnetsdk-command-dump-summary', 'hcnetsdk-command-plan-generate'}:
-        _owner._LOGGER.error('Action not implemented, try running with -h switch for help')
-        return 2
-    if args.stream_action == 'hcnetsdk-command-dump-summary':
-        return _owner._handle_hcnetsdk_command_dump_summary(args)
-    if args.stream_action == 'hcnetsdk-command-plan-generate':
-        return _owner._handle_hcnetsdk_command_plan_generate(args)
-    if args.stream_action == 'h264-annexb-summary':
-        return _owner._handle_h264_annexb_summary(args)
-    if args.stream_action == 'local-sdk-keys':
-        return _owner._handle_local_sdk_keys(args, client)
-    if args.stream_action == 'local-sdk-dump':
-        return _owner._handle_local_sdk_stream_dump(args, client)
-    if args.stream_action == 'proxy':
-        _owner._serve_stream_proxy(args, client)
-        return 0
-    if args.stream_action == 'dump' and args.decrypt_video and (not _owner.has_positive_finite_capture_bound(max_packets=args.max_packets, duration_seconds=args.duration)):
-        raise _owner.PyEzvizError('--decrypt-video requires a positive finite --duration or --max-packets to bound memory use')
-    media_key = _owner._cloud_cli_media_key(args, client) if args.stream_action == 'dump' and args.decrypt_video else None
-    stream = _owner.open_cloud_stream(client, args.serial, channel=args.channel, client_type=args.client_type, token_index=args.token_index, refresh_vtm=not args.no_refresh_vtm, timeout=args.timeout)
-    with _owner._closing_unconnected_cloud_stream(stream):
-        if args.stream_action == 'dump':
-            startup_deadline = _owner._start_cli_cloud_stream(stream, timeout=args.timeout, duration_seconds=args.duration)
-            collected_packets: list[_owner.Any] | None = None
-            if args.decrypt_video:
-                collected_packets = _owner._collect_stream_packets(stream, max_packets=args.max_packets, duration_seconds=args.duration, first_packet_deadline=startup_deadline, allow_encrypted=args.allow_encrypted)
-                transport = _owner._detect_stream_packets_transport(collected_packets)
-                if transport == _owner.StreamTransport.RTP:
-                    if args.format == 'mpegts' and _owner.cloud_rtp_packets_have_audio(collected_packets):
-                        rtp_codec = _owner._detect_rtp_video_codec(collected_packets, media_key=media_key, decrypt_codec=args.decrypt_codec)
-                        _owner._rtp_packets_to_annexb_units(collected_packets, codec=rtp_codec, first_slice_key=media_key, decrypt_codec=args.decrypt_codec)
-                        assert media_key is not None
-
-                        def _write_rtp_mpegts(selected_output: _owner.BinaryIO) -> None:
-                            _owner.copy_decrypted_cloud_stream_packets_to_mpegts(collected_packets, selected_output, ffmpeg_path=args.ffmpeg_path, media_key=media_key, nalu_header_size=_owner._codec_nalu_header_size(args.decrypt_codec), transport=transport)
-                        if args.output == '-':
-                            _write_rtp_mpegts(_owner.sys.stdout.buffer)
-                        else:
-                            with _owner.Path(args.output).open('wb') as output:
-                                _write_rtp_mpegts(output)
-                        return 0
-                    rtp_codec = _owner._detect_rtp_video_codec(collected_packets, media_key=media_key, decrypt_codec=args.decrypt_codec)
-                    decrypt_codec = rtp_codec if args.decrypt_codec == 'auto' else args.decrypt_codec
-                    rtp_units = _owner._rtp_packets_to_annexb_units(collected_packets, codec=rtp_codec, first_slice_key=media_key, decrypt_codec=decrypt_codec)
-                    payload = b''.join(rtp_units) if _owner._codec_nalu_header_size(decrypt_codec) == 0 else _owner._decrypt_rtp_annexb_units(client, args.serial, rtp_units, detected_codec=rtp_codec, decrypt_codec=decrypt_codec, media_key=media_key)
-                    if args.output == '-':
-                        if args.format == 'raw':
-                            _owner.sys.stdout.buffer.write(payload)
-                            _owner.sys.stdout.buffer.flush()
-                        else:
-                            _owner._remux_elementary_video_bytes_to_mpegts(payload, _owner.sys.stdout.buffer, ffmpeg_path=args.ffmpeg_path, codec=rtp_codec)
-                    else:
-                        with _owner.Path(args.output).open('wb') as output:
-                            if args.format == 'raw':
-                                output.write(payload)
-                                output.flush()
-                            else:
-                                _owner._remux_elementary_video_bytes_to_mpegts(payload, output, ffmpeg_path=args.ffmpeg_path, codec=rtp_codec)
-                    return 0
-            if args.output == '-':
-                if args.decrypt_video:
-                    payload = b''.join((packet.body for packet in collected_packets or []))
-                    payload = _owner._decrypt_stream_payload_bytes(client, args.serial, payload, codec=args.decrypt_codec, media_key=media_key)
-                    if args.format == 'raw':
-                        _owner.sys.stdout.buffer.write(payload)
-                        _owner.sys.stdout.buffer.flush()
-                    else:
-                        _owner._remux_mpegps_bytes_to_mpegts(payload, _owner.sys.stdout.buffer, ffmpeg_path=args.ffmpeg_path)
-                elif args.format == 'raw':
-                    _owner._write_stream_payloads(stream, _owner.sys.stdout.buffer, max_packets=args.max_packets, duration_seconds=args.duration, first_packet_deadline=startup_deadline, allow_encrypted=args.allow_encrypted)
-                else:
-                    _owner._remux_stream_payloads_to_mpegts(stream, _owner.sys.stdout.buffer, ffmpeg_path=args.ffmpeg_path, max_packets=args.max_packets, duration_seconds=args.duration, first_packet_deadline=startup_deadline, allow_encrypted=args.allow_encrypted)
-            else:
-                with _owner.Path(args.output).open('wb') as output:
-                    if args.decrypt_video:
-                        payload = b''.join((packet.body for packet in collected_packets or []))
-                        payload = _owner._decrypt_stream_payload_bytes(client, args.serial, payload, codec=args.decrypt_codec, media_key=media_key)
-                        if args.format == 'raw':
-                            output.write(payload)
-                            output.flush()
-                        else:
-                            _owner._remux_mpegps_bytes_to_mpegts(payload, output, ffmpeg_path=args.ffmpeg_path)
-                    elif args.format == 'raw':
-                        _owner._write_stream_payloads(stream, output, max_packets=args.max_packets, duration_seconds=args.duration, first_packet_deadline=startup_deadline, allow_encrypted=args.allow_encrypted)
-                    else:
-                        _owner._remux_stream_payloads_to_mpegts(stream, output, ffmpeg_path=args.ffmpeg_path, max_packets=args.max_packets, duration_seconds=args.duration, first_packet_deadline=startup_deadline, allow_encrypted=args.allow_encrypted)
-            return 0
-        events = [event.as_dict() for event in stream.trace_packets(max_packets=args.max_packets)]
-    if args.json_lines:
-        for event in events:
-            _owner.sys.stdout.write(_owner.json.dumps(event, sort_keys=True) + '\n')
-    else:
-        _owner._write_json(events)
-    return 0

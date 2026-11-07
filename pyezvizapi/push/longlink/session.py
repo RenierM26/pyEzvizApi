@@ -12,11 +12,11 @@ from typing import Any
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 
+from pyezvizapi.exceptions import EzvizPushFatalError
 from pyezvizapi.push.longlink import codec as wire
 from pyezvizapi.push.longlink.auth import PushCredentials, authenticate
 from pyezvizapi.push.longlink.transport import LbsConnection
 from pyezvizapi.push.paho import set_keepalive
-from pyezvizapi.exceptions import EzvizPushFatalError
 
 # Paho VERSION2 maps MQTT 3.1.1 CONNACK 1/2/4/5 to MQTT 5 reason values.
 # Server unavailable (3 -> 0x88) remains retryable with fresh LBS credentials.

@@ -77,8 +77,8 @@ class StreamProxyHTTPServer(ThreadingHTTPServer):
 HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = _cli_arguments.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
 
 # Historical CLI parsing hooks retain their original implementation objects.
-_parse_args = _cli_arguments._parse_args  # noqa: SLF001
-_parse_duration_seconds = _cli_arguments._parse_duration_seconds  # noqa: SLF001
+_parse_args = _cli_arguments._parse_args
+_parse_duration_seconds = _cli_arguments._parse_duration_seconds
 
 
 def _setup_logging(debug: bool) -> None:
@@ -142,7 +142,7 @@ def _ensure_client_service_urls(client: EzvizClient) -> None:
         return
     service_urls = client.get_service_urls()
     if hasattr(client, "_token"):
-        client._token["service_urls"] = service_urls  # noqa: SLF001
+        client._token["service_urls"] = service_urls
     if hasattr(client, "exported_token"):
         cast(Any, client).exported_token["service_urls"] = service_urls
 
@@ -314,196 +314,196 @@ def _handle_devices(args: argparse.Namespace, client: EzvizClient) -> int:
     return 2
 
 
-from pyezvizapi.cli.commands_devices import _handle_devices_light as _handle_devices_light
+from pyezvizapi.cli.commands.devices import _handle_devices_light as _handle_devices_light
 
 
-from pyezvizapi.cli.commands_devices import _handle_pagelist as _handle_pagelist
+from pyezvizapi.cli.commands.devices import _handle_pagelist as _handle_pagelist
 
 
-from pyezvizapi.cli.commands_devices import _handle_device_infos as _handle_device_infos
+from pyezvizapi.cli.commands.devices import _handle_device_infos as _handle_device_infos
 
 
-from pyezvizapi.cli.commands_devices import _handle_unifiedmsg as _handle_unifiedmsg
+from pyezvizapi.cli.commands.devices import _handle_unifiedmsg as _handle_unifiedmsg
 
 
-from pyezvizapi.cli.commands_devices import _decode_compressed_record_list as _decode_compressed_record_list
+from pyezvizapi.cli.commands.recordings import _decode_compressed_record_list as _decode_compressed_record_list
 
 
-from pyezvizapi.cli.commands_devices import _first_record_list as _first_record_list
+from pyezvizapi.cli.commands.recordings import _first_record_list as _first_record_list
 
 
-from pyezvizapi.cli.commands_devices import _handle_sdcard_videos as _handle_sdcard_videos
+from pyezvizapi.cli.commands.recordings import _handle_sdcard_videos as _handle_sdcard_videos
 
 
-from pyezvizapi.cli.commands_recordings import _handle_cloud_videos as _handle_cloud_videos
+from pyezvizapi.cli.commands.recordings import _handle_cloud_videos as _handle_cloud_videos
 
 
-from pyezvizapi.cli.commands_recordings import _handle_cloud_video_download as _handle_cloud_video_download
+from pyezvizapi.cli.commands.recordings import _handle_cloud_video_download as _handle_cloud_video_download
 
 
-from pyezvizapi.cli.commands_recordings import _select_cloud_video_for_seq_id as _select_cloud_video_for_seq_id
+from pyezvizapi.cli.commands.recordings import _select_cloud_video_for_seq_id as _select_cloud_video_for_seq_id
 
 
-from pyezvizapi.cli.commands_recordings import _extract_ticket as _extract_ticket
+from pyezvizapi.cli.commands.recordings import _extract_ticket as _extract_ticket
 
 
-from pyezvizapi.cli.commands_recordings import _cloud_video_start_millis as _cloud_video_start_millis
+from pyezvizapi.cli.commands.recordings import _cloud_video_start_millis as _cloud_video_start_millis
 
 
-from pyezvizapi.cli.commands_recordings import _cas_time_from_millis as _cas_time_from_millis
+from pyezvizapi.cli.commands.recordings import _cas_time_from_millis as _cas_time_from_millis
 
 
-from pyezvizapi.cli.commands_recordings import _handle_cloud_video_decrypt as _handle_cloud_video_decrypt
+from pyezvizapi.cli.commands.recordings import _handle_cloud_video_decrypt as _handle_cloud_video_decrypt
 
 
-from pyezvizapi.cli.commands_recordings import _write_save_result as _write_save_result
+from pyezvizapi.cli.commands.capture import _write_save_result as _write_save_result
 
 
-from pyezvizapi.cli.commands_recordings import _validate_shared_clip_args as _validate_shared_clip_args
+from pyezvizapi.cli.commands.capture import _validate_shared_clip_args as _validate_shared_clip_args
 
 
-from pyezvizapi.cli.commands_recordings import _handle_save_clip as _handle_save_clip
+from pyezvizapi.cli.commands.capture import _handle_save_clip as _handle_save_clip
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_from_args as _hcnetsdk_command_plan_from_args
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_from_args as _hcnetsdk_command_plan_from_args
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_generated_plan_from_args as _hcnetsdk_command_generated_plan_from_args
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_generated_plan_from_args as _hcnetsdk_command_generated_plan_from_args
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_from_json as _hcnetsdk_command_plan_from_json
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_from_json as _hcnetsdk_command_plan_from_json
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_generated_plan_from_json as _hcnetsdk_command_generated_plan_from_json
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_generated_plan_from_json as _hcnetsdk_command_generated_plan_from_json
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_raw_steps as _hcnetsdk_command_plan_raw_steps
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_raw_steps as _hcnetsdk_command_plan_raw_steps
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_step_from_json as _hcnetsdk_command_plan_step_from_json
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_step_from_json as _hcnetsdk_command_plan_step_from_json
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_generated_plan_step_from_json as _hcnetsdk_command_generated_plan_step_from_json
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_generated_plan_step_from_json as _hcnetsdk_command_generated_plan_step_from_json
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_templates_from_json as _hcnetsdk_command_plan_templates_from_json
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_templates_from_json as _hcnetsdk_command_plan_templates_from_json
 
 
-from pyezvizapi.cli.commands_capture import _iter_hcnetsdk_command_template_values as _iter_hcnetsdk_command_template_values
+from pyezvizapi.cli.commands.capture import _iter_hcnetsdk_command_template_values as _iter_hcnetsdk_command_template_values
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_template_from_json as _hcnetsdk_command_plan_template_from_json
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_template_from_json as _hcnetsdk_command_plan_template_from_json
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_int_required as _hcnetsdk_int_required
+from pyezvizapi.cli.commands.capture import _hcnetsdk_int_required as _hcnetsdk_int_required
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_optional_int as _hcnetsdk_optional_int
+from pyezvizapi.cli.commands.capture import _hcnetsdk_optional_int as _hcnetsdk_optional_int
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_bytes_from_json as _hcnetsdk_bytes_from_json
+from pyezvizapi.cli.commands.capture import _hcnetsdk_bytes_from_json as _hcnetsdk_bytes_from_json
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_frames_from_json as _hcnetsdk_command_plan_frames_from_json
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_frames_from_json as _hcnetsdk_command_plan_frames_from_json
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_read_policy as _hcnetsdk_command_plan_read_policy
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_read_policy as _hcnetsdk_command_plan_read_policy
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_response_reads as _hcnetsdk_command_plan_response_reads
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_response_reads as _hcnetsdk_command_plan_response_reads
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_media_socket as _hcnetsdk_command_plan_media_socket
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_media_socket as _hcnetsdk_command_plan_media_socket
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_immediate_media_read as _hcnetsdk_command_plan_immediate_media_read
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_immediate_media_read as _hcnetsdk_command_plan_immediate_media_read
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_delay_after_commands as _hcnetsdk_command_plan_delay_after_commands
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_delay_after_commands as _hcnetsdk_command_plan_delay_after_commands
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_plan_drain_media_before_next as _hcnetsdk_command_plan_drain_media_before_next
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_drain_media_before_next as _hcnetsdk_command_plan_drain_media_before_next
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_bool as _hcnetsdk_bool
+from pyezvizapi.cli.commands.capture import _hcnetsdk_bool as _hcnetsdk_bool
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_int as _hcnetsdk_int
+from pyezvizapi.cli.commands.capture import _hcnetsdk_int as _hcnetsdk_int
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_frames_from_args as _hcnetsdk_command_frames_from_args
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_frames_from_args as _hcnetsdk_command_frames_from_args
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_command_frame_hex_values_from_file as _hcnetsdk_command_frame_hex_values_from_file
+from pyezvizapi.cli.commands.capture import _hcnetsdk_command_frame_hex_values_from_file as _hcnetsdk_command_frame_hex_values_from_file
 
 
-from pyezvizapi.cli.commands_capture import _iter_hcnetsdk_command_frame_hex_values as _iter_hcnetsdk_command_frame_hex_values
+from pyezvizapi.cli.commands.capture import _iter_hcnetsdk_command_frame_hex_values as _iter_hcnetsdk_command_frame_hex_values
 
 
-from pyezvizapi.cli.commands_capture import _bytes_from_hex_value as _bytes_from_hex_value
+from pyezvizapi.cli.commands.capture import _bytes_from_hex_value as _bytes_from_hex_value
 
 
-from pyezvizapi.cli.commands_capture import _hcnetsdk_read_response_policy as _hcnetsdk_read_response_policy
+from pyezvizapi.cli.commands.capture import _hcnetsdk_read_response_policy as _hcnetsdk_read_response_policy
 
 
-from pyezvizapi.cli.commands_capture import _handle_save_image as _handle_save_image
+from pyezvizapi.cli.commands.capture import _handle_save_image as _handle_save_image
 
 
-from pyezvizapi.cli.commands_capture import _handle_save as _handle_save
+from pyezvizapi.cli.commands.capture import _handle_save as _handle_save
 
 
-from pyezvizapi.cli.commands_capture import _handle_light as _handle_light
+from pyezvizapi.cli.commands.devices import _handle_light as _handle_light
 
 
-from pyezvizapi.cli.commands_capture import _handle_home_defence_mode as _handle_home_defence_mode
+from pyezvizapi.cli.commands.devices import _handle_home_defence_mode as _handle_home_defence_mode
 
 
-from pyezvizapi.cli.commands_capture import _handle_mqtt as _handle_mqtt
+from pyezvizapi.cli.commands.push import _handle_mqtt as _handle_mqtt
 
 
-from pyezvizapi.cli.commands_capture import _write_stream_payloads as _write_stream_payloads
+from pyezvizapi.cli.commands.cloud_stream import _write_stream_payloads as _write_stream_payloads
 
 
-from pyezvizapi.cli.commands_push import _start_cli_cloud_stream as _start_cli_cloud_stream
+from pyezvizapi.cli.commands.cloud_stream import _start_cli_cloud_stream as _start_cli_cloud_stream
 
 
-from pyezvizapi.cli.commands_cloud_stream import _collect_stream_payloads as _collect_stream_payloads
+from pyezvizapi.cli.commands.cloud_stream import _collect_stream_payloads as _collect_stream_payloads
 
 
-from pyezvizapi.cli.commands_cloud_stream import _collect_stream_packets as _collect_stream_packets
+from pyezvizapi.cli.commands.cloud_stream import _collect_stream_packets as _collect_stream_packets
 
 
-from pyezvizapi.cli.commands_cloud_stream import _detect_stream_packets_transport as _detect_stream_packets_transport
+from pyezvizapi.cli.commands.cloud_stream import _detect_stream_packets_transport as _detect_stream_packets_transport
 
 
-from pyezvizapi.cli.commands_cloud_stream import _rtp_payload_video_codec as _rtp_payload_video_codec
+from pyezvizapi.cli.commands.cloud_stream import _rtp_payload_video_codec as _rtp_payload_video_codec
 
 
-from pyezvizapi.cli.commands_cloud_stream import _detect_rtp_video_codec as _detect_rtp_video_codec
+from pyezvizapi.cli.commands.cloud_stream import _detect_rtp_video_codec as _detect_rtp_video_codec
 
 
-from pyezvizapi.cli.commands_cloud_stream import _parse_rtp_packets as _parse_rtp_packets
+from pyezvizapi.cli.commands.cloud_stream import _parse_rtp_packets as _parse_rtp_packets
 
 
-from pyezvizapi.cli.commands_cloud_stream import _rtp_packets_to_annexb as _rtp_packets_to_annexb
+from pyezvizapi.cli.commands.cloud_stream import _rtp_packets_to_annexb as _rtp_packets_to_annexb
 
 
-from pyezvizapi.cli.commands_cloud_stream import _rtp_packets_to_annexb_units as _rtp_packets_to_annexb_units
+from pyezvizapi.cli.commands.cloud_stream import _rtp_packets_to_annexb_units as _rtp_packets_to_annexb_units
 
 
-from pyezvizapi.cli.commands_cloud_stream import _decrypt_annexb_video_bytes as _decrypt_annexb_video_bytes
+from pyezvizapi.cli.commands.cloud_stream import _decrypt_annexb_video_bytes as _decrypt_annexb_video_bytes
 
 
-from pyezvizapi.cli.commands_cloud_stream import _decrypt_rtp_annexb_units as _decrypt_rtp_annexb_units
+from pyezvizapi.cli.commands.cloud_stream import _decrypt_rtp_annexb_units as _decrypt_rtp_annexb_units
 
 
-from pyezvizapi.cli.commands_cloud_stream import _remux_elementary_video_bytes_to_mpegts as _remux_elementary_video_bytes_to_mpegts
+from pyezvizapi.cli.commands.cloud_stream import _remux_elementary_video_bytes_to_mpegts as _remux_elementary_video_bytes_to_mpegts
 
 
-from pyezvizapi.cli.commands_cloud_stream import _decrypt_stream_payload_bytes as _decrypt_stream_payload_bytes
+from pyezvizapi.cli.commands.cloud_stream import _decrypt_stream_payload_bytes as _decrypt_stream_payload_bytes
 
 
-from pyezvizapi.cli.commands_cloud_stream import _codec_nalu_header_size as _codec_nalu_header_size
+from pyezvizapi.cli.commands.cloud_stream import _codec_nalu_header_size as _codec_nalu_header_size
 
 
 class _BufferedStreamPayloadDecryptor:
@@ -571,175 +571,175 @@ class _BufferedStreamPayloadDecryptor:
         return self._decrypt_chunk(chunk)
 
 
-from pyezvizapi.cli.commands_cloud_stream import _stream_payload_decryptor as _stream_payload_decryptor
+from pyezvizapi.cli.commands.cloud_stream import _stream_payload_decryptor as _stream_payload_decryptor
 
 
-from pyezvizapi.cli.commands_cloud_stream import _stream_payload_decryptors as _stream_payload_decryptors
+from pyezvizapi.cli.commands.cloud_stream import _stream_payload_decryptors as _stream_payload_decryptors
 
 
-from pyezvizapi.cli.commands_cloud_stream import _stream_payload_decryptors_with_key as _stream_payload_decryptors_with_key
+from pyezvizapi.cli.commands.cloud_stream import _stream_payload_decryptors_with_key as _stream_payload_decryptors_with_key
 
 
-from pyezvizapi.cli.commands_cloud_stream import _cloud_cli_media_key as _cloud_cli_media_key
+from pyezvizapi.cli.commands.cloud_stream import _cloud_cli_media_key as _cloud_cli_media_key
 
 
-from pyezvizapi.cli.commands_cloud_stream import _explicit_cloud_cli_media_key as _explicit_cloud_cli_media_key
+from pyezvizapi.cli.commands.cloud_stream import _explicit_cloud_cli_media_key as _explicit_cloud_cli_media_key
 
 
-from pyezvizapi.cli.commands_cloud_stream import _remux_mpegps_bytes_to_mpegts as _remux_mpegps_bytes_to_mpegts
+from pyezvizapi.cli.commands.cloud_stream import _remux_mpegps_bytes_to_mpegts as _remux_mpegps_bytes_to_mpegts
 
 
-from pyezvizapi.cli.commands_cloud_stream import _remux_stream_payloads_to_mpegts as _remux_stream_payloads_to_mpegts
+from pyezvizapi.cli.commands.cloud_stream import _remux_stream_payloads_to_mpegts as _remux_stream_payloads_to_mpegts
 
 
-from pyezvizapi.cli.commands_cloud_stream import _open_mpegts_remux_process as _open_mpegts_remux_process
+from pyezvizapi.cli.commands.cloud_stream import _open_mpegts_remux_process as _open_mpegts_remux_process
 
 
-from pyezvizapi.cli.commands_cloud_stream import _copy_stream_payloads_to_mpegts as _copy_stream_payloads_to_mpegts
+from pyezvizapi.cli.commands.cloud_stream import _copy_stream_payloads_to_mpegts as _copy_stream_payloads_to_mpegts
 
 
-from pyezvizapi.cli.commands_cloud_stream import _default_stream_proxy_path as _default_stream_proxy_path
+from pyezvizapi.cli.commands.cloud_stream import _default_stream_proxy_path as _default_stream_proxy_path
 
 
-from pyezvizapi.cli.commands_cloud_stream import _normalize_stream_proxy_path as _normalize_stream_proxy_path
+from pyezvizapi.cli.commands.cloud_stream import _normalize_stream_proxy_path as _normalize_stream_proxy_path
 
 
-from pyezvizapi.cli.commands_cloud_stream import _handle_stream_proxy_get as _handle_stream_proxy_get
+from pyezvizapi.cli.commands.cloud_stream import _handle_stream_proxy_get as _handle_stream_proxy_get
 
 
-from pyezvizapi.cli.commands_cloud_stream import _serve_stream_proxy as _serve_stream_proxy
+from pyezvizapi.cli.commands.cloud_stream import _serve_stream_proxy as _serve_stream_proxy
 
 
-from pyezvizapi.cli.commands_cloud_stream import _env_or_arg as _env_or_arg
+from pyezvizapi.cli.commands.local_stream import _env_or_arg as _env_or_arg
 
 
-from pyezvizapi.cli.commands_cloud_stream import os_environ_get as os_environ_get
+from pyezvizapi.cli.commands.local_stream import os_environ_get as os_environ_get
 
 
-from pyezvizapi.cli.commands_cloud_stream import _required_local_sdk_secret as _required_local_sdk_secret
+from pyezvizapi.cli.commands.local_stream import _required_local_sdk_secret as _required_local_sdk_secret
 
 
-from pyezvizapi.cli.commands_cloud_stream import _local_sdk_credentials_file as _local_sdk_credentials_file
+from pyezvizapi.cli.commands.local_stream import _local_sdk_credentials_file as _local_sdk_credentials_file
 
 
-from pyezvizapi.cli.commands_cloud_stream import _local_sdk_credentials_value as _local_sdk_credentials_value
+from pyezvizapi.cli.commands.local_stream import _local_sdk_credentials_value as _local_sdk_credentials_value
 
 
-from pyezvizapi.cli.commands_local_stream import _local_sdk_arg_or_credentials as _local_sdk_arg_or_credentials
+from pyezvizapi.cli.commands.local_stream import _local_sdk_arg_or_credentials as _local_sdk_arg_or_credentials
 
 
-from pyezvizapi.cli.commands_local_stream import _required_local_sdk_arg_or_credentials as _required_local_sdk_arg_or_credentials
+from pyezvizapi.cli.commands.local_stream import _required_local_sdk_arg_or_credentials as _required_local_sdk_arg_or_credentials
 
 
-from pyezvizapi.cli.commands_local_stream import _local_sdk_media_key as _local_sdk_media_key
+from pyezvizapi.cli.commands.local_stream import _local_sdk_media_key as _local_sdk_media_key
 
 
-from pyezvizapi.cli.commands_local_stream import _local_sdk_has_static_media_key as _local_sdk_has_static_media_key
+from pyezvizapi.cli.commands.local_stream import _local_sdk_has_static_media_key as _local_sdk_has_static_media_key
 
 
-from pyezvizapi.cli.commands_local_stream import _read_optional_binary_file as _read_optional_binary_file
+from pyezvizapi.cli.commands.local_stream import _read_optional_binary_file as _read_optional_binary_file
 
 
-from pyezvizapi.cli.commands_local_stream import _local_sdk_cas_device_info as _local_sdk_cas_device_info
+from pyezvizapi.cli.commands.local_stream import _local_sdk_cas_device_info as _local_sdk_cas_device_info
 
 
-from pyezvizapi.cli.commands_local_stream import _build_local_sdk_cli_stream as _build_local_sdk_cli_stream
+from pyezvizapi.cli.commands.local_stream import _build_local_sdk_cli_stream as _build_local_sdk_cli_stream
 
 
-from pyezvizapi.cli.commands_local_stream import _build_local_sdk_ecdh_cli_stream as _build_local_sdk_ecdh_cli_stream
+from pyezvizapi.cli.commands.local_stream import _build_local_sdk_ecdh_cli_stream as _build_local_sdk_ecdh_cli_stream
 
 
-from pyezvizapi.cli.commands_local_stream import _local_sdk_receiver_info_from_args as _local_sdk_receiver_info_from_args
+from pyezvizapi.cli.commands.local_stream import _local_sdk_receiver_info_from_args as _local_sdk_receiver_info_from_args
 
 
-from pyezvizapi.cli.commands_local_stream import _local_sdk_receiver_info_ex_from_args as _local_sdk_receiver_info_ex_from_args
+from pyezvizapi.cli.commands.local_stream import _local_sdk_receiver_info_ex_from_args as _local_sdk_receiver_info_ex_from_args
 
 
-from pyezvizapi.cli.commands_local_stream import _local_sdk_authentication_from_args as _local_sdk_authentication_from_args
+from pyezvizapi.cli.commands.local_stream import _local_sdk_authentication_from_args as _local_sdk_authentication_from_args
 
 
-from pyezvizapi.cli.commands_local_stream import _handle_local_sdk_stream_dump as _handle_local_sdk_stream_dump
+from pyezvizapi.cli.commands.local_stream import _handle_local_sdk_stream_dump as _handle_local_sdk_stream_dump
 
 
-from pyezvizapi.cli.commands_local_stream import _copy_local_sdk_ecdh_cli_stream as _copy_local_sdk_ecdh_cli_stream
+from pyezvizapi.cli.commands.local_stream import _copy_local_sdk_ecdh_cli_stream as _copy_local_sdk_ecdh_cli_stream
 
 
-from pyezvizapi.cli.commands_local_stream import _handle_local_sdk_keys as _handle_local_sdk_keys
+from pyezvizapi.cli.commands.local_stream import _handle_local_sdk_keys as _handle_local_sdk_keys
 
 
-from pyezvizapi.cli.commands_local_stream import _handle_h264_annexb_summary as _handle_h264_annexb_summary
+from pyezvizapi.cli.commands.local_stream import _handle_h264_annexb_summary as _handle_h264_annexb_summary
 
 
-from pyezvizapi.cli.commands_local_stream import _handle_hcnetsdk_command_dump_summary as _handle_hcnetsdk_command_dump_summary
+from pyezvizapi.cli.commands.local_stream import _handle_hcnetsdk_command_dump_summary as _handle_hcnetsdk_command_dump_summary
 
 
-from pyezvizapi.cli.commands_local_stream import _hcnetsdk_command_frame_dump_summary as _hcnetsdk_command_frame_dump_summary
+from pyezvizapi.cli.commands.local_stream import _hcnetsdk_command_frame_dump_summary as _hcnetsdk_command_frame_dump_summary
 
 
-from pyezvizapi.cli.commands_local_stream import _hcnetsdk_inbound_media_dump_summary as _hcnetsdk_inbound_media_dump_summary
+from pyezvizapi.cli.commands.local_stream import _hcnetsdk_inbound_media_dump_summary as _hcnetsdk_inbound_media_dump_summary
 
 
-from pyezvizapi.cli.commands_local_stream import _hcnetsdk_playm4_input_dump_summary as _hcnetsdk_playm4_input_dump_summary
+from pyezvizapi.cli.commands.local_stream import _hcnetsdk_playm4_input_dump_summary as _hcnetsdk_playm4_input_dump_summary
 
 
-from pyezvizapi.cli.commands_local_stream import _hcnetsdk_native_annexb_dump_summary as _hcnetsdk_native_annexb_dump_summary
+from pyezvizapi.cli.commands.local_stream import _hcnetsdk_native_annexb_dump_summary as _hcnetsdk_native_annexb_dump_summary
 
 
-from pyezvizapi.cli.commands_local_stream import _decode_native_annexb_chunk_windows as _decode_native_annexb_chunk_windows
+from pyezvizapi.cli.commands.local_stream import _decode_native_annexb_chunk_windows as _decode_native_annexb_chunk_windows
 
 
-from pyezvizapi.cli.commands_local_stream import _detect_native_annexb_codec as _detect_native_annexb_codec
+from pyezvizapi.cli.commands.local_stream import _detect_native_annexb_codec as _detect_native_annexb_codec
 
 
-from pyezvizapi.cli.commands_local_stream import _iter_annexb_nal_prefixes as _iter_annexb_nal_prefixes
+from pyezvizapi.cli.commands.local_stream import _iter_annexb_nal_prefixes as _iter_annexb_nal_prefixes
 
 
-from pyezvizapi.cli.commands_local_stream import _add_hcnetsdk_annexb_dump_summary as _add_hcnetsdk_annexb_dump_summary
+from pyezvizapi.cli.commands.local_stream import _add_hcnetsdk_annexb_dump_summary as _add_hcnetsdk_annexb_dump_summary
 
 
-from pyezvizapi.cli.commands_local_stream import _scan_hcnetsdk_command_port_media_frames as _scan_hcnetsdk_command_port_media_frames
+from pyezvizapi.cli.commands.local_stream import _scan_hcnetsdk_command_port_media_frames as _scan_hcnetsdk_command_port_media_frames
 
 
-from pyezvizapi.cli.commands_local_stream import _handle_hcnetsdk_command_plan_generate as _handle_hcnetsdk_command_plan_generate
+from pyezvizapi.cli.commands.local_stream import _handle_hcnetsdk_command_plan_generate as _handle_hcnetsdk_command_plan_generate
 
 
-from pyezvizapi.cli.commands_local_stream import _hcnetsdk_generated_plan_to_json as _hcnetsdk_generated_plan_to_json
+from pyezvizapi.cli.commands.local_stream import _hcnetsdk_generated_plan_to_json as _hcnetsdk_generated_plan_to_json
 
 
-from pyezvizapi.cli.commands_local_stream import _hcnetsdk_generated_plan_step_to_json as _hcnetsdk_generated_plan_step_to_json
+from pyezvizapi.cli.commands.local_stream import _hcnetsdk_generated_plan_step_to_json as _hcnetsdk_generated_plan_step_to_json
 
 
-from pyezvizapi.cli.commands_local_stream import _hcnetsdk_command_template_to_json as _hcnetsdk_command_template_to_json
+from pyezvizapi.cli.commands.local_stream import _hcnetsdk_command_template_to_json as _hcnetsdk_command_template_to_json
 
 
-from pyezvizapi.cli.commands_local_stream import _decode_annexb_windows as _decode_annexb_windows
+from pyezvizapi.cli.commands.local_stream import _decode_annexb_windows as _decode_annexb_windows
 
 
-from pyezvizapi.cli.commands_local_stream import _decode_h264_annexb_idr_windows as _decode_h264_annexb_idr_windows
+from pyezvizapi.cli.commands.local_stream import _decode_h264_annexb_idr_windows as _decode_h264_annexb_idr_windows
 
 
-from pyezvizapi.cli.commands_local_stream import _write_local_sdk_metadata_output as _write_local_sdk_metadata_output
+from pyezvizapi.cli.commands.local_stream import _write_local_sdk_metadata_output as _write_local_sdk_metadata_output
 
 
-from pyezvizapi.cli.commands_local_stream import _write_hcnetsdk_sampled_packet_output as _write_hcnetsdk_sampled_packet_output
+from pyezvizapi.cli.commands.local_stream import _write_hcnetsdk_sampled_packet_output as _write_hcnetsdk_sampled_packet_output
 
 
-from pyezvizapi.cli.commands_local_stream import _local_sdk_stream_metadata as _local_sdk_stream_metadata
+from pyezvizapi.cli.commands.local_stream import _local_sdk_stream_metadata as _local_sdk_stream_metadata
 
 
-from pyezvizapi.cli.commands_local_stream import _hcnetsdk_command_port_exchange_metadata as _hcnetsdk_command_port_exchange_metadata
+from pyezvizapi.cli.commands.local_stream import _hcnetsdk_command_port_exchange_metadata as _hcnetsdk_command_port_exchange_metadata
 
 
-from pyezvizapi.cli.commands_local_stream import _hcnetsdk_command_port_body_word_samples as _hcnetsdk_command_port_body_word_samples
+from pyezvizapi.cli.commands.local_stream import _hcnetsdk_command_port_body_word_samples as _hcnetsdk_command_port_body_word_samples
 
 
-from pyezvizapi.cli.commands_local_stream import _hcnetsdk_command_port_body_tail_word_samples as _hcnetsdk_command_port_body_tail_word_samples
+from pyezvizapi.cli.commands.local_stream import _hcnetsdk_command_port_body_tail_word_samples as _hcnetsdk_command_port_body_tail_word_samples
 
 
-from pyezvizapi.cli.commands_local_stream import _handle_stream as _handle_stream
+from pyezvizapi.cli.commands.stream import _handle_stream as _handle_stream
 
 
-from pyezvizapi.cli.commands_stream import _handle_camera as _handle_camera
+from pyezvizapi.cli.commands.devices import _handle_camera as _handle_camera
 
 
 def _load_token_file(path: str | None) -> dict[str, Any] | None:

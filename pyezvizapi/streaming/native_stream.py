@@ -22,10 +22,10 @@ from threading import BoundedSemaphore, Event, Lock, Thread, current_thread
 import time
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
-from pyezvizapi.streaming.capture import AutoClipSource
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.streaming.media.models import MediaPacket
+from pyezvizapi.streaming.capture import AutoClipSource
 from pyezvizapi.streaming.media.completion import NativeMediaCompletion, NativeTrackCompletion
+from pyezvizapi.streaming.media.models import MediaPacket
 from pyezvizapi.streaming.media.native_ps import MAX_PENDING_PS_BYTES, NativePsTransform
 
 if TYPE_CHECKING:

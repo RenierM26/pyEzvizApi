@@ -10,4 +10,4 @@ def set_keepalive(client: Client, interval: int) -> None:
     Its loop reads this field for ping scheduling. Keep this dependency here
     and test it when upgrading Paho; automatic Paho reconnect cannot renew LBS.
     """
-    client._keepalive = interval  # noqa: SLF001 - no public runtime setter
+    client._keepalive = interval  # noqa: SLF001

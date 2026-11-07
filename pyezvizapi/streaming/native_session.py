@@ -1,3 +1,5 @@
+# Preserve existing compatibility exports and internal owner access.
+# ruff: noqa: SLF001
 """Experimental declared-output native session, independent of HA ownership.
 
 A single inherited transport/decrypt/demux worker owns every mux context. Outputs
@@ -7,7 +9,6 @@ IDR dependencies. Explicit replacement retires the previous mux on its worker,
 without media replay. A stalled output fails, never drops packets while succeeding.
 """
 # The physical owner and its private output handles share lifecycle state.
-# ruff: noqa: SLF001
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -22,7 +23,17 @@ from typing import Any
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.streaming.media.access import self_contained_idr
 from pyezvizapi.streaming.media.completion import NativeMediaCompletion
-from pyezvizapi.streaming.native_stream import _POLL_SECONDS, NativeMpegTsStream, NativePacketStream, NativeSourceClock, NativeStreamClosed, NativeStreamOptions, _Cancelled, _PsInput, _TsOutput
+from pyezvizapi.streaming.native_stream import (
+    _POLL_SECONDS,
+    NativeMpegTsStream,
+    NativePacketStream,
+    NativeSourceClock,
+    NativeStreamClosed,
+    NativeStreamOptions,
+    _Cancelled,
+    _PsInput,
+    _TsOutput,
+)
 
 
 def _no_source() -> NativePacketStream:

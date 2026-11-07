@@ -209,7 +209,7 @@ def _ffmpeg_exit_error(return_code: int, stderr_tail: str) -> PyEzvizError:
     return PyEzvizError(message)
 
 
-def copy_remuxed_output(  # noqa: PLR0912,PLR0915
+def copy_remuxed_output(  # noqa: PLR0912, PLR0915
     process: subprocess.Popen[bytes],
     output: BinaryIO,
     *,

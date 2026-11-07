@@ -14,7 +14,11 @@ import ssl
 from typing import Any
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.streaming.local.hcnetsdk.api import HcNetSdkLanEndpoint, HcNetSdkLoginCandidate, discover_hcnetsdk_stream_details_for_login
+from pyezvizapi.streaming.local.hcnetsdk.api import (
+    HcNetSdkLanEndpoint,
+    HcNetSdkLoginCandidate,
+    discover_hcnetsdk_stream_details_for_login,
+)
 from pyezvizapi.streaming.local.hcnetsdk.parameters import normalize_hcnetsdk_parameters
 from pyezvizapi.streaming.sample import inspect_media_sample, validate_media_sample
 

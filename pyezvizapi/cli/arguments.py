@@ -1164,7 +1164,7 @@ def add_stream_proxy_arguments(subparsers_stream: Any) -> None:
     )
 
 
-def add_stream_local_sdk_dump_arguments(subparsers_stream: Any) -> None:  # noqa: PLR0915 -- one declarative command specification
+def add_stream_local_sdk_dump_arguments(subparsers_stream: Any) -> None:  # noqa: PLR0915
     parser_stream_local_dump = subparsers_stream.add_parser(
         "local-sdk-dump",
         help="Dump the direct-local 9010/9020 SDK stream with caller-supplied fields",

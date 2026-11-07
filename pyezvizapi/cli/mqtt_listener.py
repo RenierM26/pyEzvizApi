@@ -16,8 +16,8 @@ import sys
 import time
 from typing import Any, cast
 
-from pyezvizapi.cloud.token_store import save_private_token
 from pyezvizapi.client import EzvizClient
+from pyezvizapi.cloud.token_store import save_private_token
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, PyEzvizError
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")

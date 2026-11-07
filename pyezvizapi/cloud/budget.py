@@ -16,8 +16,8 @@ from typing import Any
 import requests
 from requests.cookies import RequestsCookieJar
 
-from pyezvizapi.cloud.transport import isolated_session
 from pyezvizapi.cloud.deadline import remaining_request_budget
+from pyezvizapi.cloud.transport import isolated_session
 from pyezvizapi.exceptions import PyEzvizError
 
 MAX_BOOTSTRAP_BODY_BYTES = 8 * 1024 * 1024
@@ -84,7 +84,7 @@ class _HttpJob:
         accepted = False
         try:
             # Test/custom transports may return an already materialized response.
-            content = response._content  # noqa: SLF001 -- requests response ownership adapter
+            content = response._content  # noqa: SLF001
             if not isinstance(content, bytes):
                 with self.lock:
                     self.wire = _response_socket(response)

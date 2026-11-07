@@ -18,9 +18,21 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from Crypto.Cipher import AES
 
 from pyezvizapi._shared import image_crypto as _image_crypto
-from pyezvizapi._shared.alarm_time import MILLISECONDS_THRESHOLD, compute_motion_from_alarm, normalize_alarm_time, parse_timezone_value
+from pyezvizapi._shared.alarm_time import (
+    MILLISECONDS_THRESHOLD,
+    compute_motion_from_alarm,
+    normalize_alarm_time,
+    parse_timezone_value,
+)
 from pyezvizapi._shared.coercion import coerce_int, convert_to_dict, decode_json, string_to_list
-from pyezvizapi._shared.mapping import WILDCARD_STEP, PathComponent, deep_merge, fetch_nested_value, first_nested, iter_nested
+from pyezvizapi._shared.mapping import (
+    WILDCARD_STEP,
+    PathComponent,
+    deep_merge,
+    fetch_nested_value,
+    first_nested,
+    iter_nested,
+)
 from pyezvizapi.constants import HIK_ENCRYPTION_HEADER
 from pyezvizapi.exceptions import PyEzvizError
 

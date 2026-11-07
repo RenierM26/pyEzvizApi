@@ -19,7 +19,13 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 from Crypto.Cipher import AES
 
 from pyezvizapi.exceptions import DeviceException, PyEzvizError
-from pyezvizapi.streaming.media.models import DeadlineLegacyPacketSource, MediaPacket, MediaPacketMetadata, MediaPacketSourceAdapter, is_positive_finite_duration_bound
+from pyezvizapi.streaming.media.models import (
+    DeadlineLegacyPacketSource,
+    MediaPacket,
+    MediaPacketMetadata,
+    MediaPacketSourceAdapter,
+    is_positive_finite_duration_bound,
+)
 from pyezvizapi.streaming.media.rtp import rtp_payload as _rtp_payload
 
 VTM_MAGIC = 0x24

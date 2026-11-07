@@ -1,12 +1,58 @@
-"""commands capture implementation; legacy runtime hooks remain on the owner module.
+# Runtime hooks deliberately resolve through their legacy owner.
+# ruff: noqa: SLF001
 
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
-# ruff: noqa: SLF001 -- explicit legacy hook boundary.
+"""capture command handlers; legacy hooks resolve through cli.main."""
 from __future__ import annotations
 
 import pyezvizapi.cli.main as _owner
+
+
+def _write_save_result(args: _owner.argparse.Namespace, result: _owner.Mapping[str, _owner.Any]) -> None:
+    """Write a human or JSON result for save commands."""
+    if args.json:
+        _owner._write_json(result)
+    else:
+        _owner.sys.stdout.write(f"Wrote {result['bytes']} bytes to {result['output']}\n")
+
+def _validate_shared_clip_args(args: _owner.argparse.Namespace) -> None:
+    """Reject unsupported clock assertions before account or camera access."""
+    if not args.native_shared_clock:
+        return
+    if args.source not in {'local-sdk', 'hcnetsdk-command-port'} or args.format not in {None, 'mpegts'}:
+        raise _owner.PyEzvizError('--native-shared-clock requires explicit native MPEG-TS capture')
+    if args.decrypt_video and (args.hcnetsdk_h264_wait_for_clean_idr_window or args.hcnetsdk_h264_skip_initial_idr_windows or args.hcnetsdk_h264_trim_to_clean_idr_window or args.hcnetsdk_h264_clean_idr_preroll_seconds):
+        raise _owner.PyEzvizError('--native-shared-clock does not support encrypted startup trimming')
+
+def _handle_save_clip(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+    """Save a short direct-local camera clip to disk."""
+    _owner._validate_shared_clip_args(args)
+    if args.channel is None and args.source not in {'cloud', 'auto'}:
+        args.channel = 1
+    decrypt_codec = args.decrypt_codec or ('auto' if args.decrypt_video and args.source in {'auto', 'cloud', 'local-sdk', 'local-sdk-ecdh'} else 'encrypted-header')
+    command_generated_plan = _owner._hcnetsdk_command_generated_plan_from_args(args) if args.source == 'hcnetsdk-command-port' else None
+    command_plan = _owner._hcnetsdk_command_plan_from_args(args) if args.source == 'hcnetsdk-command-port' else None
+    command_frames = _owner._hcnetsdk_command_frames_from_args(args) if args.source == 'hcnetsdk-command-port' and command_plan is None and (command_generated_plan is None) else None
+    read_response_after_each = _owner._hcnetsdk_read_response_policy(args, len(command_frames or ())) if command_frames is not None else True
+    hcnetsdk_command_metadata_callback = (lambda stream: _owner._write_local_sdk_metadata_output(args.hcnetsdk_command_metadata_output, stream, packet_output_path=args.hcnetsdk_command_sampled_packets_output)) if args.source == 'hcnetsdk-command-port' and (args.hcnetsdk_command_metadata_output or args.hcnetsdk_command_sampled_packets_output) else None
+    output_format = args.format
+    if output_format is None:
+        output_format = 'mpegps' if args.source == 'local-sdk-ecdh' and (not args.decrypt_video) else 'mpegts'
+    save_kwargs: dict[str, _owner.Any] = {'source': args.source, 'output_format': output_format, 'duration_seconds': args.duration, 'max_packets': args.max_packets, 'channel': args.channel, 'ffmpeg_path': args.ffmpeg_path, 'decrypt_video': args.decrypt_video, 'nalu_header_size': _owner._codec_nalu_header_size(decrypt_codec), 'cas_serial': args.cas_serial, 'timeout': args.timeout, 'smscode': args.sms_code, 'host': args.host, 'command_port': args.command_port, 'hcnetsdk_command_frames': command_frames, 'hcnetsdk_command_plan': command_plan, 'hcnetsdk_command_generated_plan': command_generated_plan, 'hcnetsdk_command_password': args.hcnetsdk_command_password, 'hcnetsdk_local_ip': args.hcnetsdk_local_ip, 'hcnetsdk_read_response_after_each': read_response_after_each, 'hcnetsdk_command_metadata_callback': hcnetsdk_command_metadata_callback, 'hcnetsdk_h264_skip_initial_idr_windows': args.hcnetsdk_h264_skip_initial_idr_windows, 'hcnetsdk_h264_trim_to_clean_idr_window': args.hcnetsdk_h264_trim_to_clean_idr_window, 'hcnetsdk_h264_clean_idr_preroll_seconds': args.hcnetsdk_h264_clean_idr_preroll_seconds, 'hcnetsdk_h264_clean_idr_max_windows': args.hcnetsdk_h264_clean_idr_max_windows, 'hcnetsdk_h264_wait_for_clean_idr_window': args.hcnetsdk_h264_wait_for_clean_idr_window, 'hcnetsdk_h264_clean_idr_wait_seconds': args.hcnetsdk_h264_clean_idr_wait_seconds}
+    if args.native_shared_clock:
+        save_kwargs['native_shared_clock'] = True
+    if args.source in {'local-sdk', 'local-sdk-ecdh'}:
+        save_kwargs['register_p2p_session'] = not args.no_p2p_register
+    if args.source == 'auto':
+        save_kwargs['local_sdk_ecdh_receiver_port'] = args.local_sdk_ecdh_receiver_port
+    if args.source == 'local-sdk-ecdh':
+        save_kwargs.update({'local_sdk_ecdh_receiver_port': _owner.LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT if args.local_sdk_ecdh_receiver_port is None else args.local_sdk_ecdh_receiver_port, 'local_sdk_ecdh_send_init': args.local_sdk_ecdh_send_init, 'local_sdk_ecdh_max_prefix_bytes': args.local_sdk_ecdh_max_prefix_bytes, 'local_sdk_ecdh_max_frames': args.local_sdk_ecdh_max_frames})
+    if args.source == 'cloud':
+        save_kwargs.update({'cloud_client_type': args.client_type, 'cloud_token_index': args.token_index, 'cloud_refresh_vtm': not args.no_refresh_vtm})
+    if args.decrypt_video and (args.source == 'hcnetsdk-command-port' or _owner._local_sdk_has_static_media_key(args)):
+        save_kwargs['media_key'] = _owner._local_sdk_media_key(args, client)
+    result = client.save_clip(args.serial, args.output, **save_kwargs)
+    _owner._write_save_result(args, result)
+    return 0
 
 def _hcnetsdk_command_plan_from_args(args: _owner.argparse.Namespace) -> _owner.HcNetSdkCommandPortMultiSocketPlan | None:
     """Load a native-style multi-socket command plan from CLI args."""
@@ -55,13 +101,13 @@ def _hcnetsdk_command_plan_from_json(value: _owner.Any) -> _owner.HcNetSdkComman
             raise _owner.PyEzvizError('HCNetSDK command plan JSON is missing socket steps')
     else:
         raise _owner.PyEzvizError('HCNetSDK command plan JSON must be an object or list')
-    steps = tuple((_owner._hcnetsdk_command_plan_step_from_json(item) for item in raw_steps))
+    steps = tuple(_owner._hcnetsdk_command_plan_step_from_json(item) for item in raw_steps)
     return _owner.HcNetSdkCommandPortMultiSocketPlan(steps=steps)
 
 def _hcnetsdk_command_generated_plan_from_json(value: _owner.Any) -> _owner.HcNetSdkCommandPortGeneratedMultiSocketPlan:
     """Build a generated command-port socket plan from JSON."""
     raw_steps = _owner._hcnetsdk_command_plan_raw_steps(value)
-    steps = tuple((_owner._hcnetsdk_command_generated_plan_step_from_json(item) for item in raw_steps))
+    steps = tuple(_owner._hcnetsdk_command_generated_plan_step_from_json(item) for item in raw_steps)
     return _owner.HcNetSdkCommandPortGeneratedMultiSocketPlan(steps=steps)
 
 def _hcnetsdk_command_plan_raw_steps(value: _owner.Any) -> list[_owner.Any]:
@@ -123,7 +169,7 @@ def _hcnetsdk_command_plan_templates_from_json(value: _owner.Mapping[str, _owner
     for key in keys:
         item = value.get(key)
         if item is not None:
-            templates = tuple((_owner._hcnetsdk_command_plan_template_from_json(template) for template in _owner._iter_hcnetsdk_command_template_values(item)))
+            templates = tuple(_owner._hcnetsdk_command_plan_template_from_json(template) for template in _owner._iter_hcnetsdk_command_template_values(item))
             if templates or not required:
                 return templates
     if required:
@@ -185,7 +231,7 @@ def _hcnetsdk_command_plan_frames_from_json(value: _owner.Mapping[str, _owner.An
     for key in keys:
         item = value.get(key)
         if item is not None:
-            frames = tuple((_owner._bytes_from_hex_value(frame_hex) for frame_hex in _owner._iter_hcnetsdk_command_frame_hex_values(item)))
+            frames = tuple(_owner._bytes_from_hex_value(frame_hex) for frame_hex in _owner._iter_hcnetsdk_command_frame_hex_values(item))
             if frames or not required:
                 return frames
     if required:
@@ -202,9 +248,9 @@ def _hcnetsdk_command_plan_read_policy(value: _owner.Mapping[str, _owner.Any], *
     if raw is None:
         raw = value.get('readResponses', default)
     if isinstance(raw, list):
-        return tuple((_owner._hcnetsdk_bool(raw_value) for raw_value in raw))
+        return tuple(_owner._hcnetsdk_bool(raw_value) for raw_value in raw)
     if isinstance(raw, str) and ',' in raw:
-        return tuple((_owner._hcnetsdk_bool(part.strip()) for part in raw.split(',') if part.strip()))
+        return tuple(_owner._hcnetsdk_bool(part.strip()) for part in raw.split(',') if part.strip())
     return _owner._hcnetsdk_bool(raw)
 
 def _hcnetsdk_command_plan_response_reads(value: _owner.Mapping[str, _owner.Any]) -> int | tuple[int, ...] | None:
@@ -219,9 +265,9 @@ def _hcnetsdk_command_plan_response_reads(value: _owner.Mapping[str, _owner.Any]
     if raw is None:
         return None
     if isinstance(raw, list):
-        return tuple((_owner._hcnetsdk_int(raw_value) for raw_value in raw))
+        return tuple(_owner._hcnetsdk_int(raw_value) for raw_value in raw)
     if isinstance(raw, str) and ',' in raw:
-        return tuple((_owner._hcnetsdk_int(part.strip()) for part in raw.split(',') if part.strip()))
+        return tuple(_owner._hcnetsdk_int(part.strip()) for part in raw.split(',') if part.strip())
     return _owner._hcnetsdk_int(raw)
 
 def _hcnetsdk_command_plan_media_socket(value: _owner.Mapping[str, _owner.Any]) -> bool:
@@ -298,7 +344,7 @@ def _hcnetsdk_command_frames_from_args(args: _owner.argparse.Namespace) -> tuple
     frames_file = getattr(args, 'hcnetsdk_command_frames_file', None)
     if frames_file:
         frame_hex_values.extend(_owner._hcnetsdk_command_frame_hex_values_from_file(frames_file))
-    frames = tuple((_owner._bytes_from_hex_value(value) for value in frame_hex_values))
+    frames = tuple(_owner._bytes_from_hex_value(value) for value in frame_hex_values)
     if not frames:
         raise _owner.PyEzvizError('--source hcnetsdk-command-port requires --hcnetsdk-command-frame-hex or --hcnetsdk-command-frames-file')
     return frames
@@ -347,7 +393,7 @@ def _hcnetsdk_read_response_policy(args: _owner.argparse.Namespace, frame_count:
     if not value:
         return True
     parts = [part.strip().lower() for part in value.split(',') if part.strip()]
-    flags = tuple((part in {'1', 'true', 'yes', 'y'} for part in parts))
+    flags = tuple(part in {'1', 'true', 'yes', 'y'} for part in parts)
     if len(flags) != frame_count:
         raise _owner.PyEzvizError('--hcnetsdk-read-responses must include one boolean per command frame')
     valid_values = {'1', '0', 'true', 'false', 'yes', 'no', 'y', 'n'}
@@ -370,77 +416,3 @@ def _handle_save(args: _owner.argparse.Namespace, client: _owner.EzvizClient) ->
         return _owner._handle_save_image(args, client)
     _owner._LOGGER.error('Action not implemented, try running with -h switch for help')
     return 2
-
-def _handle_light(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
-    """Handle `light` subcommands (toggle/status)."""
-    light_bulb = _owner.EzvizLightBulb(client, args.serial)
-    _owner._LOGGER.debug('Light bulb loaded')
-    if args.light_action == 'toggle':
-        light_bulb.toggle_switch()
-        return 0
-    if args.light_action == 'status':
-        _owner._write_json(light_bulb.status())
-        return 0
-    _owner._LOGGER.error('Action not implemented for light: %s', args.light_action)
-    return 2
-
-def _handle_home_defence_mode(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
-    """Handle `home_defence_mode` subcommands (set mode)."""
-    if args.mode:
-        res = client.api_set_defence_mode(getattr(_owner.DefenseModeType, args.mode).value)
-        _owner._write_json(res)
-        return 0
-    return 2
-
-def _handle_mqtt(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
-    """Migrate the login and listen with durable channel-99 token storage."""
-    try:
-        client.enable_channel99()
-    except _owner.EzvizAuthVerificationCode:
-        code = input('MFA code required, please input MFA code.\n')
-        try:
-            sms_code = int(code.strip())
-        except ValueError as err:
-            raise _owner.PyEzvizError('MFA code must be numeric') from err
-        client.enable_channel99(sms_code=sms_code)
-    mqtt = client.get_mqtt_client(on_message_callback=_owner._write_json)
-    mqtt.connect()
-    try:
-        while True:
-            mqtt.raise_if_failed()
-            _owner.time.sleep(1)
-    except KeyboardInterrupt:
-        return 0
-    finally:
-        try:
-            mqtt.stop()
-        except TimeoutError as error:
-            raise _owner.PyEzvizError('Push shutdown timed out; cancellation remains signalled') from error
-
-def _write_stream_payloads(stream: _owner.Any, output: _owner.BinaryIO, *, max_packets: int | None, duration_seconds: float | None=None, first_packet_deadline: float | None=None, allow_encrypted: bool, transform_payload: _owner.Callable[[bytes], bytes] | None=None, flush_each: bool=False, monotonic: _owner.Any=_owner.time.monotonic) -> None:
-    """Write VTM stream packet bodies to a binary file-like object."""
-    deadline = None
-    if duration_seconds is not None:
-        deadline = monotonic() + duration_seconds
-    iterator_kwargs: dict[str, _owner.Any] = {'max_packets': max_packets}
-    if isinstance(stream, _owner.VtmStreamClient):
-        iterator_kwargs.update(duration_seconds=duration_seconds, duration_from_start=True, monotonic=monotonic)
-        if first_packet_deadline is not None:
-            iterator_kwargs['first_packet_deadline'] = first_packet_deadline
-        if duration_seconds is None:
-            iterator_kwargs['first_packet_timeout'] = stream.timeout
-    for packet in stream.iter_packets(**iterator_kwargs):
-        if deadline is not None and monotonic() >= deadline:
-            break
-        if packet.encrypted and (not allow_encrypted):
-            raise _owner.PyEzvizError('Received encrypted VTM stream packet; media decryption is not implemented')
-        payload = transform_payload(packet.body) if transform_payload else packet.body
-        if payload:
-            output.write(payload)
-        if flush_each:
-            output.flush()
-    if transform_payload and hasattr(transform_payload, 'flush'):
-        tail = transform_payload.flush()
-        if tail:
-            output.write(tail)
-    output.flush()

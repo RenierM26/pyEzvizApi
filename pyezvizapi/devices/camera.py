@@ -6,11 +6,16 @@ import datetime
 import logging
 from typing import Any, Literal, TypedDict, cast
 
-from pyezvizapi.devices.payload import local_ip_address, switch_values
+from pyezvizapi._shared.utils import (
+    compute_motion_from_alarm,
+    fetch_nested_value,
+    parse_timezone_value,
+    string_to_list,
+)
 from pyezvizapi.constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
+from pyezvizapi.devices.payload import local_ip_address, switch_values
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.models import EzvizChimeMusic, EzvizDeviceChimeInfo, EzvizDeviceRecord
-from pyezvizapi._shared.utils import compute_motion_from_alarm, fetch_nested_value, parse_timezone_value, string_to_list
 
 _LOGGER = logging.getLogger("pyezvizapi.camera")
 

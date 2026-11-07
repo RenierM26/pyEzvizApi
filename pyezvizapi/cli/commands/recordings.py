@@ -1,12 +1,45 @@
-"""commands recordings implementation; legacy runtime hooks remain on the owner module.
+# Runtime hooks deliberately resolve through their legacy owner.
+# ruff: noqa: SLF001
 
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
-# ruff: noqa: SLF001 -- explicit legacy hook boundary.
+"""recordings command handlers; legacy hooks resolve through cli.main."""
 from __future__ import annotations
 
 import pyezvizapi.cli.main as _owner
+
+
+def _decode_compressed_record_list(value: str) -> list[_owner.Any]:
+    """Decode the app's base64+zlib JSON record-list payload when present."""
+    return _owner._REAL_EZVIZ_CLIENT.decode_records_payload(value)
+
+def _first_record_list(payload: _owner.Any) -> list[_owner.Any]:
+    """Return the first plausible list of record dictionaries from an API response."""
+    return _owner._REAL_EZVIZ_CLIENT.extract_record_list(payload)
+
+def _handle_sdcard_videos(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+    """Fetch SD-card playback record descriptors."""
+    if args.source == 'legacy':
+        channel_serial = args.channel_serial or args.serial
+        response = client.search_records(args.serial, args.channel, channel_serial, args.start_time, args.stop_time, size=args.size)
+    elif args.source == 'common':
+        response = client.search_common_records(args.serial, args.channel, args.start_time, args.stop_time, channel_serial=args.channel_serial, record_type=args.record_type, size=args.size, version=args.version)
+    elif args.source == 'intelligent':
+        response = client.search_intelligent_records(args.serial, args.channel, args.start_time, args.stop_time, version=args.version, record_filter=args.filter)
+    else:
+        response = client.search_records_v2(args.serial, args.channel, args.start_time, args.stop_time, size=args.size, sort_by=args.sort_by, require_label=args.require_label)
+    records = _owner._first_record_list(response)
+    if args.json:
+        _owner._write_json(records if records else response)
+        return 0
+    rows: list[dict[str, _owner.Any]] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        rows.append({'begin': item.get('begin') or item.get('B') or item.get('startTime') or item.get('startTimeStr'), 'end': item.get('end') or item.get('E') or item.get('stopTime') or item.get('stopTimeStr'), 'type': item.get('type') or item.get('Type') or item.get('recordType') or item.get('videoType'), 'path': item.get('path') or item.get('filePath') or item.get('fileUrl'), 'cover': item.get('cover') or item.get('coverUrl') or item.get('coverPic')})
+    if rows:
+        _owner._write_table(rows, ['begin', 'end', 'type', 'path', 'cover'])
+    else:
+        _owner.sys.stdout.write('No SD-card videos returned.\n')
+    return 0
 
 def _handle_cloud_videos(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
     """Fetch cloud video descriptors and optionally hydrate details."""
@@ -149,51 +182,4 @@ def _handle_cloud_video_decrypt(args: _owner.argparse.Namespace, client: _owner.
         _owner._write_json(result)
     else:
         _owner.sys.stdout.write(f'Wrote decrypted cloud video to {output_path}\n')
-    return 0
-
-def _write_save_result(args: _owner.argparse.Namespace, result: _owner.Mapping[str, _owner.Any]) -> None:
-    """Write a human or JSON result for save commands."""
-    if args.json:
-        _owner._write_json(result)
-    else:
-        _owner.sys.stdout.write(f"Wrote {result['bytes']} bytes to {result['output']}\n")
-
-def _validate_shared_clip_args(args: _owner.argparse.Namespace) -> None:
-    """Reject unsupported clock assertions before account or camera access."""
-    if not args.native_shared_clock:
-        return
-    if args.source not in {'local-sdk', 'hcnetsdk-command-port'} or args.format not in {None, 'mpegts'}:
-        raise _owner.PyEzvizError('--native-shared-clock requires explicit native MPEG-TS capture')
-    if args.decrypt_video and (args.hcnetsdk_h264_wait_for_clean_idr_window or args.hcnetsdk_h264_skip_initial_idr_windows or args.hcnetsdk_h264_trim_to_clean_idr_window or args.hcnetsdk_h264_clean_idr_preroll_seconds):
-        raise _owner.PyEzvizError('--native-shared-clock does not support encrypted startup trimming')
-
-def _handle_save_clip(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
-    """Save a short direct-local camera clip to disk."""
-    _owner._validate_shared_clip_args(args)
-    if args.channel is None and args.source not in {'cloud', 'auto'}:
-        args.channel = 1
-    decrypt_codec = args.decrypt_codec or ('auto' if args.decrypt_video and args.source in {'auto', 'cloud', 'local-sdk', 'local-sdk-ecdh'} else 'encrypted-header')
-    command_generated_plan = _owner._hcnetsdk_command_generated_plan_from_args(args) if args.source == 'hcnetsdk-command-port' else None
-    command_plan = _owner._hcnetsdk_command_plan_from_args(args) if args.source == 'hcnetsdk-command-port' else None
-    command_frames = _owner._hcnetsdk_command_frames_from_args(args) if args.source == 'hcnetsdk-command-port' and command_plan is None and (command_generated_plan is None) else None
-    read_response_after_each = _owner._hcnetsdk_read_response_policy(args, len(command_frames or ())) if command_frames is not None else True
-    hcnetsdk_command_metadata_callback = (lambda stream: _owner._write_local_sdk_metadata_output(args.hcnetsdk_command_metadata_output, stream, packet_output_path=args.hcnetsdk_command_sampled_packets_output)) if args.source == 'hcnetsdk-command-port' and (args.hcnetsdk_command_metadata_output or args.hcnetsdk_command_sampled_packets_output) else None
-    output_format = args.format
-    if output_format is None:
-        output_format = 'mpegps' if args.source == 'local-sdk-ecdh' and (not args.decrypt_video) else 'mpegts'
-    save_kwargs: dict[str, _owner.Any] = {'source': args.source, 'output_format': output_format, 'duration_seconds': args.duration, 'max_packets': args.max_packets, 'channel': args.channel, 'ffmpeg_path': args.ffmpeg_path, 'decrypt_video': args.decrypt_video, 'nalu_header_size': _owner._codec_nalu_header_size(decrypt_codec), 'cas_serial': args.cas_serial, 'timeout': args.timeout, 'smscode': args.sms_code, 'host': args.host, 'command_port': args.command_port, 'hcnetsdk_command_frames': command_frames, 'hcnetsdk_command_plan': command_plan, 'hcnetsdk_command_generated_plan': command_generated_plan, 'hcnetsdk_command_password': args.hcnetsdk_command_password, 'hcnetsdk_local_ip': args.hcnetsdk_local_ip, 'hcnetsdk_read_response_after_each': read_response_after_each, 'hcnetsdk_command_metadata_callback': hcnetsdk_command_metadata_callback, 'hcnetsdk_h264_skip_initial_idr_windows': args.hcnetsdk_h264_skip_initial_idr_windows, 'hcnetsdk_h264_trim_to_clean_idr_window': args.hcnetsdk_h264_trim_to_clean_idr_window, 'hcnetsdk_h264_clean_idr_preroll_seconds': args.hcnetsdk_h264_clean_idr_preroll_seconds, 'hcnetsdk_h264_clean_idr_max_windows': args.hcnetsdk_h264_clean_idr_max_windows, 'hcnetsdk_h264_wait_for_clean_idr_window': args.hcnetsdk_h264_wait_for_clean_idr_window, 'hcnetsdk_h264_clean_idr_wait_seconds': args.hcnetsdk_h264_clean_idr_wait_seconds}
-    if args.native_shared_clock:
-        save_kwargs['native_shared_clock'] = True
-    if args.source in {'local-sdk', 'local-sdk-ecdh'}:
-        save_kwargs['register_p2p_session'] = not args.no_p2p_register
-    if args.source == 'auto':
-        save_kwargs['local_sdk_ecdh_receiver_port'] = args.local_sdk_ecdh_receiver_port
-    if args.source == 'local-sdk-ecdh':
-        save_kwargs.update({'local_sdk_ecdh_receiver_port': _owner.LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT if args.local_sdk_ecdh_receiver_port is None else args.local_sdk_ecdh_receiver_port, 'local_sdk_ecdh_send_init': args.local_sdk_ecdh_send_init, 'local_sdk_ecdh_max_prefix_bytes': args.local_sdk_ecdh_max_prefix_bytes, 'local_sdk_ecdh_max_frames': args.local_sdk_ecdh_max_frames})
-    if args.source == 'cloud':
-        save_kwargs.update({'cloud_client_type': args.client_type, 'cloud_token_index': args.token_index, 'cloud_refresh_vtm': not args.no_refresh_vtm})
-    if args.decrypt_video and (args.source == 'hcnetsdk-command-port' or _owner._local_sdk_has_static_media_key(args)):
-        save_kwargs['media_key'] = _owner._local_sdk_media_key(args, client)
-    result = client.save_clip(args.serial, args.output, **save_kwargs)
-    _owner._write_save_result(args, result)
     return 0

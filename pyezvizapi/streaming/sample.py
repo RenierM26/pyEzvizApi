@@ -15,8 +15,8 @@ import subprocess
 from tempfile import TemporaryFile
 from typing import TYPE_CHECKING, Any, BinaryIO, cast
 
-from pyezvizapi.streaming.capture import ClipOptions
 from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.streaming.capture import ClipOptions
 
 if TYPE_CHECKING:
     from pyezvizapi.client import EzvizClient

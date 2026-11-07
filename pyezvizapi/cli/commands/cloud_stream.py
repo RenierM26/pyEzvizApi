@@ -1,12 +1,51 @@
-"""commands cloud stream implementation; legacy runtime hooks remain on the owner module.
+# Runtime hooks deliberately resolve through their legacy owner.
+# ruff: noqa: SLF001
 
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
-# ruff: noqa: SLF001 -- explicit legacy hook boundary.
+"""cloud stream command handlers; legacy hooks resolve through cli.main."""
 from __future__ import annotations
 
 import pyezvizapi.cli.main as _owner
+
+
+def _write_stream_payloads(stream: _owner.Any, output: _owner.BinaryIO, *, max_packets: int | None, duration_seconds: float | None=None, first_packet_deadline: float | None=None, allow_encrypted: bool, transform_payload: _owner.Callable[[bytes], bytes] | None=None, flush_each: bool=False, monotonic: _owner.Any=_owner.time.monotonic) -> None:
+    """Write VTM stream packet bodies to a binary file-like object."""
+    deadline = None
+    if duration_seconds is not None:
+        deadline = monotonic() + duration_seconds
+    iterator_kwargs: dict[str, _owner.Any] = {'max_packets': max_packets}
+    if isinstance(stream, _owner.VtmStreamClient):
+        iterator_kwargs.update(duration_seconds=duration_seconds, duration_from_start=True, monotonic=monotonic)
+        if first_packet_deadline is not None:
+            iterator_kwargs['first_packet_deadline'] = first_packet_deadline
+        if duration_seconds is None:
+            iterator_kwargs['first_packet_timeout'] = stream.timeout
+    for packet in stream.iter_packets(**iterator_kwargs):
+        if deadline is not None and monotonic() >= deadline:
+            break
+        if packet.encrypted and (not allow_encrypted):
+            raise _owner.PyEzvizError('Received encrypted VTM stream packet; media decryption is not implemented')
+        payload = transform_payload(packet.body) if transform_payload else packet.body
+        if payload:
+            output.write(payload)
+        if flush_each:
+            output.flush()
+    if transform_payload and hasattr(transform_payload, 'flush'):
+        tail = transform_payload.flush()
+        if tail:
+            output.write(tail)
+    output.flush()
+
+def _start_cli_cloud_stream(stream: _owner.Any, *, timeout: float | None, duration_seconds: float | None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic) -> float | None:
+    """Start a CLI VTM stream with one bounded negotiation deadline."""
+    if not isinstance(stream, _owner.VtmStreamClient):
+        stream.start()
+        return None
+    startup_seconds = timeout
+    if startup_seconds is None or startup_seconds <= 0:
+        startup_seconds = duration_seconds
+    deadline = None if startup_seconds is None else monotonic() + startup_seconds
+    stream.start(deadline=deadline, monotonic=monotonic)
+    return deadline
 
 def _collect_stream_payloads(stream: _owner.Any, *, max_packets: int | None, duration_seconds: float | None=None, allow_encrypted: bool, monotonic: _owner.Any=_owner.time.monotonic) -> bytes:
     """Collect VTM stream packet bodies into memory."""
@@ -95,10 +134,10 @@ def _rtp_packets_to_annexb_units(packets: list[_owner.Any], *, codec: str, first
         return _owner.decrypt_hikvision_ps_video(video_pes, first_slice_key, nalu_header_size=header_size)[13:]
     parsed = _owner._parse_rtp_packets(packets)
     nal_units = _owner.rtp_packets_to_nal_units(parsed, codec=_owner.cast(_owner.Any, codec), allow_ezviz_headerless_hevc_fu=True, completed_access_units_only=True, first_slice_transform=decrypted_first_slice if first_slice_key is not None and header_size != 0 else None, packet_nal_transform=decrypted_first_slice if first_slice_key is not None and header_size == 0 else None)
-    classified_units = tuple((decrypted_first_slice(nal_unit) for nal_unit in nal_units)) if first_slice_key is not None and header_size != 0 else nal_units
+    classified_units = tuple(decrypted_first_slice(nal_unit) for nal_unit in nal_units) if first_slice_key is not None and header_size != 0 else nal_units
     if not _owner.rtp_nal_units_have_vcl(classified_units, codec=_owner.cast(_owner.Any, codec)):
         raise _owner.EzvizNoMediaError('Cloud RTP capture contained no complete video frame; increase the capture duration')
-    return tuple((b'\x00\x00\x00\x01' + nal_unit for nal_unit in nal_units))
+    return tuple(b'\x00\x00\x00\x01' + nal_unit for nal_unit in nal_units)
 
 def _decrypt_annexb_video_bytes(client: _owner.EzvizClient, serial: str, data: bytes, *, codec: str) -> bytes:
     """Decrypt Annex B video NAL payload bytes using the MPEG-PS transform."""
@@ -114,7 +153,7 @@ def _decrypt_annexb_video_bytes(client: _owner.EzvizClient, serial: str, data: b
 def _decrypt_rtp_annexb_units(client: _owner.EzvizClient, serial: str, units: tuple[bytes, ...], *, detected_codec: str, decrypt_codec: str, media_key: str | bytes | None=None) -> bytes:
     """Decrypt RTP Annex-B units with one camera-key lookup."""
     _mpegps_decryptor, rtp_decryptor = _owner._stream_payload_decryptors(client, serial, codec=decrypt_codec, media_key=media_key)
-    return b''.join((rtp_decryptor(unit, detected_codec) for unit in units))
+    return b''.join(rtp_decryptor(unit, detected_codec) for unit in units)
 
 def _remux_elementary_video_bytes_to_mpegts(data: bytes, output: _owner.BinaryIO, *, ffmpeg_path: str, codec: str) -> None:
     """Remux Annex B HEVC/H.264 elementary stream bytes to MPEG-TS."""
@@ -306,50 +345,3 @@ def _serve_stream_proxy(args: _owner.argparse.Namespace, client: _owner.EzvizCli
         server.serve_forever()
     finally:
         server.server_close()
-
-def _env_or_arg(args: _owner.argparse.Namespace, attr: str, env_name: str) -> str | None:
-    """Return a CLI argument value or matching environment fallback."""
-    value = getattr(args, attr, None)
-    if value:
-        return _owner.cast(str, value)
-    env_value = _owner.os_environ_get(env_name)
-    return env_value if env_value else None
-
-def os_environ_get(name: str) -> str | None:
-    """Small wrapper to make environment fallback easy to patch in tests."""
-    return _owner.os.environ.get(name)
-
-def _required_local_sdk_secret(args: _owner.argparse.Namespace, attr: str, env_name: str) -> str:
-    """Read a required local-SDK secret without logging or persisting it."""
-    value = _owner._env_or_arg(args, attr, env_name)
-    if not value:
-        raise _owner.PyEzvizError(f"Missing --{attr.replace('_', '-')} or {env_name}")
-    return value
-
-def _local_sdk_credentials_file(args: _owner.argparse.Namespace) -> dict[str, _owner.Any]:
-    """Read a local-SDK credential bundle without logging secret values."""
-    cached = getattr(args, '_local_sdk_credentials_file_data', None)
-    if isinstance(cached, dict):
-        return cached
-    path = getattr(args, 'credentials_file', None)
-    if not path:
-        return {}
-    try:
-        data = _owner.json.loads(_owner.Path(path).read_text(encoding='utf-8'))
-    except OSError as err:
-        raise _owner.PyEzvizError(f'Could not read --credentials-file: {err}') from err
-    except _owner.json.JSONDecodeError as err:
-        raise _owner.PyEzvizError(f'Invalid --credentials-file JSON: {err}') from err
-    if not isinstance(data, dict):
-        raise _owner.PyEzvizError('--credentials-file must contain a JSON object')
-    vars(args)['_local_sdk_credentials_file_data'] = data
-    return data
-
-def _local_sdk_credentials_value(args: _owner.argparse.Namespace, path: tuple[str, ...]) -> _owner.Any:
-    """Return a value from the optional local-SDK credential bundle."""
-    current: _owner.Any = _owner._local_sdk_credentials_file(args)
-    for part in path:
-        if not isinstance(current, dict) or part not in current:
-            return None
-        current = current[part]
-    return current

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping as _StaticMapping
+from contextlib import suppress as _suppress
 from datetime import date as _Staticdate, datetime as _Staticdatetime
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
@@ -11,7 +12,7 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkTime as _StaticHcNetSdkTime
 
 if TYPE_CHECKING:
-    import pyezvizapi.streaming.local.hcnetsdk.api as _owner_types
+    import pyezvizapi._typing.hcnetsdk as _owner_types
 
 def hcnetsdk_real_data_to_media_packet(packet: _owner_types.HcNetSdkRealDataPacket, *, _owner: _ModuleType) -> _owner_types.MediaPacket:
     """Normalize an HCNetSDK callback packet without changing its SDK model."""
@@ -818,10 +819,10 @@ def _native_string_bytes(label: str, value: str, *, _owner: _ModuleType) -> byte
 
 def _fixed_ipv4_text(value: bytes | bytearray | memoryview, *, _owner: _ModuleType) -> str:
     raw = bytes(value)
-    with _owner.suppress(UnicodeDecodeError):
+    with _suppress(UnicodeDecodeError):
         text = _owner._nul_stripped_text(raw)
         if text and text.isprintable():
-            with _owner.suppress(ValueError):
+            with _suppress(ValueError):
                 return str(_owner.ipaddress.ip_address(text))
             return text
     binary_ipv4 = raw[:4]
@@ -845,7 +846,7 @@ def _fixed_secret_text(value: bytes | bytearray | memoryview, *, _owner: _Module
     raw = bytes(value)
     if not raw:
         return ''
-    with _owner.suppress(UnicodeDecodeError):
+    with _suppress(UnicodeDecodeError):
         return raw.decode('utf-8')
     return raw.decode('latin-1')
 
@@ -932,7 +933,7 @@ def _xml_int_csv(value: str | None, *, _owner: _ModuleType) -> tuple[int, ...]:
         text = part.strip()
         if not text:
             continue
-        with _owner.suppress(ValueError):
+        with _suppress(ValueError):
             parsed.append(int(text))
     return tuple(parsed)
 

@@ -12,7 +12,6 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from test_native_integration import data as data, runtime as runtime  # noqa: PLC0414
 from test_shared_relay import relay_server
 from tests.streaming.test_native_stream import Source
 from tests.tools.test_local_av_timeline import encode_three_track_ps

@@ -7,7 +7,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.cli.main as _owner_types
+    import pyezvizapi._typing.cli as _owner_types
 
 def _decode_compressed_record_list(value: str, *, _owner: _ModuleType) -> list[_owner_types.Any]:
     """Decode the app's base64+zlib JSON record-list payload when present."""

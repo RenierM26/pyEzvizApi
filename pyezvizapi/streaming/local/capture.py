@@ -7,7 +7,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.streaming.local.session as _owner_types
+    import pyezvizapi._typing.local_stream as _owner_types
 
 def copy_local_stream_to_mpegps(stream: _owner_types.Any, output: _owner_types.BinaryIO, *, max_packets: int | None, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], _owner: _ModuleType) -> None:
     """Write local MPEG-PS payloads directly without an FFmpeg subprocess."""

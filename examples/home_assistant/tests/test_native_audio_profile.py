@@ -14,7 +14,6 @@ from homeassistant.components.camera import Camera
 from homeassistant.exceptions import HomeAssistantError
 import pytest
 from test_composition import grouped
-from test_native_integration import data as data  # noqa: PLC0414
 
 from pyezvizapi.client import EzvizClient
 
@@ -115,16 +114,6 @@ async def test_joint_profile_refuses_missing_ha_contract_before_source(hass, dat
     await registry.close(owner.group.identity.physical)
 
 
-@pytest.fixture
-def supported_host(monkeypatch):
-    """Declare the complete public host surface without creating HLS delivery."""
-    monkeypatch.setattr(completion.ha_stream, "FINITE_SOURCE_COMPLETION_CONTRACT",
-                        completion.CONTRACT, raising=False)
-    monkeypatch.setattr(completion.ha_stream, "FiniteSourceCounts", SimpleNamespace, raising=False)
-    monkeypatch.setattr(Camera, "async_validate_webrtc_offer", lambda self, offer: None, raising=False)
-    for method in ("async_prepare_finite_source", "async_confirm_finite_source",
-                   "async_cancel_finite_source"):
-        monkeypatch.setattr(completion.Stream, method, MagicMock(), raising=False)
 
 
 @pytest.mark.usefixtures("supported_host")

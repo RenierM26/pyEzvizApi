@@ -8,7 +8,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.cli.main as _owner_types
+    import pyezvizapi._typing.cli as _owner_types
 
 def _env_or_arg(args: _owner_types.argparse.Namespace, attr: str, env_name: str, *, _owner: _ModuleType) -> str | None:
     """Return a CLI argument value or matching environment fallback."""

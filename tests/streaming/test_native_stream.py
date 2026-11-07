@@ -275,7 +275,7 @@ def test_primary_source_failure_and_cleanup_failure_are_both_retained():
     assert stream.receipt["source_closed"]
 
 
-@pytest.mark.parametrize("control", ["KeyboardInterrupt", "SystemExit"])
+@pytest.mark.parametrize("control", ["KeyboardInterrupt", "SystemExit", "GeneratorExit", "CancelledError", "NativeCallbackAbort"])
 def test_process_control_callback_is_translated_without_terminating_runner(control):
     # A broken C callback boundary can finalize the interpreter. Isolate this
     # fault injection so a regression cannot poison every subsequent pytest.
@@ -283,7 +283,15 @@ def test_process_control_callback_is_translated_without_terminating_runner(contr
 import builtins, sys
 from pyezvizapi.native_stream import NativeMpegTsStream, NativeStreamOptions, NativeTrackSelection
 from pyezvizapi.exceptions import PyEzvizError
-control = getattr(builtins, sys.argv[1])
+class NativeCallbackAbort(BaseException):
+    pass
+if sys.argv[1] == "NativeCallbackAbort":
+    control = NativeCallbackAbort
+elif sys.argv[1] == "CancelledError":
+    import asyncio
+    control = asyncio.CancelledError
+else:
+    control = getattr(builtins, sys.argv[1])
 class Source:
     close_error = True
     def iter_media_packets(self):

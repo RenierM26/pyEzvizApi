@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.cloud.protocol import VtmStreamClient as _StaticVtmStreamClient
 
 if TYPE_CHECKING:
-    import pyezvizapi.cli.main as _owner_types
+    import pyezvizapi._typing.cli as _owner_types
 
 def _write_stream_payloads(stream: _owner_types.Any, output: _owner_types.BinaryIO, *, max_packets: int | None, duration_seconds: float | None, first_packet_deadline: float | None, allow_encrypted: bool, transform_payload: _owner_types.Callable[[bytes], bytes] | None, flush_each: bool, monotonic: _owner_types.Any, _owner: _ModuleType) -> None:
     """Write VTM stream packet bodies to a binary file-like object."""

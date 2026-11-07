@@ -9,7 +9,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.client as _owner_types
+    import pyezvizapi._typing.client as _owner_types
 
 def get_device_messages_list(self: _owner_types.EzvizClient, serials: str | None, s_type: str | int | _owner_types.Iterable[str | int] | None, *, limit: int, date: str | _owner_types.dt.date | _owner_types.dt.datetime | None, end_time: str | int | None, max_retries: int, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Return unified alarm/message list for the requested devices.

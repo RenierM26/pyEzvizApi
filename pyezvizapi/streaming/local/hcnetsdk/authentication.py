@@ -7,7 +7,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.streaming.local.hcnetsdk.api as _owner_types
+    import pyezvizapi._typing.hcnetsdk as _owner_types
 
 def ezviz_local_sdk_ssl_iv(size: int, *, seed: bytes, _owner: _ModuleType) -> bytes:
     """Return the app-shaped IV used for local SDK SSL-like frames.

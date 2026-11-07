@@ -11,12 +11,7 @@ from custom_components.ezviz_native.relay import RelayError, SharedRelay
 from custom_components.ezviz_native.route import Runtime
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from test_native_integration import (
-    data as data,  # noqa: PLC0414 - pytest fixture re-export
-    path,
-    route_client,
-    runtime as runtime,  # noqa: PLC0414 - pytest fixture re-export
-)
+from test_native_integration import path, route_client
 from tests.streaming.test_native_stream import Source
 from tests.tools.test_local_av_timeline import encode_three_track_ps
 

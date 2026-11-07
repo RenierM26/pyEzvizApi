@@ -7,7 +7,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.cli.main as _owner_types
+    import pyezvizapi._typing.cli as _owner_types
 
 def _handle_devices_light(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Handle `devices_light` subcommands (status)."""

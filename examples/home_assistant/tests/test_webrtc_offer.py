@@ -8,8 +8,7 @@ from custom_components.ezviz_native.group import GroupRegistry
 from custom_components.ezviz_native.webrtc_offer import receives_codec
 from homeassistant.components.camera import Camera
 import pytest
-from test_native_audio_profile import configured, supported_host as supported_host  # noqa: PLC0414
-from test_native_integration import data as data  # noqa: PLC0414
+from test_native_audio_profile import configured
 
 from pyezvizapi.client import EzvizClient
 

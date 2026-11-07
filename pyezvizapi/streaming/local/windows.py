@@ -7,7 +7,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.streaming.local.session as _owner_types
+    import pyezvizapi._typing.local_stream as _owner_types
 
 def collect_h264_idmx_annexb_after_first_clean_idr_window(packets: _owner_types.Iterable[bytes], *, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], ffmpeg_path: str, max_windows: int, wait_seconds: float, _owner: _ModuleType) -> bytes:  # noqa: PLR0912, PLR0915 -- explicit runtime context plus retained signature
     """Collect IDMX packets from the first clean IDR window onward.

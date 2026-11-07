@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from pyezvizapi.constants import DefenseModeType as _StaticDefenseModeType
 
 if TYPE_CHECKING:
-    import pyezvizapi.client as _owner_types
+    import pyezvizapi._typing.client as _owner_types
 
 def set_camera_defence_old(self: _owner_types.EzvizClient, serial: str, enable: int, *, _owner: _ModuleType) -> bool:
     """Enable/Disable motion detection on camera."""

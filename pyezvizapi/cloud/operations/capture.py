@@ -16,7 +16,7 @@ from pyezvizapi.streaming.capture import (
 )
 
 if TYPE_CHECKING:
-    import pyezvizapi.client as _owner_types
+    import pyezvizapi._typing.client as _owner_types
 from typing import Literal
 
 

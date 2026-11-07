@@ -8,7 +8,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.client as _owner_types
+    import pyezvizapi._typing.client as _owner_types
 
 def get_cam_auth_code(self: _owner_types.EzvizClient, serial: str, encrypt_pwd: str | None, msg_auth_code: str | int | None, sender_type: int, max_retries: int, *, _owner: _ModuleType) -> _owner_types.Any:
     """Get Camera auth code. This is the verification code on the camera sticker.

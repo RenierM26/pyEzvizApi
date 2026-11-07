@@ -12,7 +12,7 @@ from pyezvizapi.streaming.local.hcnetsdk.models_configuration import (
 )
 
 if TYPE_CHECKING:
-    import pyezvizapi.streaming.local.hcnetsdk.api as _owner_types
+    import pyezvizapi._typing.hcnetsdk as _owner_types
 
 def ezviz_lan_settings_updates_services_switch(*, login_with_8443: bool | None, login_port: int, open_8000: bool | None, tls_port: int, _owner: _ModuleType) -> bool:
     """Return whether the settings presenter writes ``servicesSwitch``.

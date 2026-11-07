@@ -7,7 +7,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.streaming.local.session as _owner_types
+    import pyezvizapi._typing.local_stream as _owner_types
 
 def collect_local_stream_media_packets(stream: _owner_types.Any, *, max_packets: int | None, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], _owner: _ModuleType) -> list[bytes]:
     """Collect bounded local media payloads while preserving RTP packet boundaries."""

@@ -55,6 +55,7 @@ include = ["pyezvizapi*"]
 
 [tool.setuptools.package-data]
 pyezvizapi = ["py.typed"]
+"pyezvizapi._typing" = ["*.pyi"]
 
 [tool.ruff]
 line-length = 100

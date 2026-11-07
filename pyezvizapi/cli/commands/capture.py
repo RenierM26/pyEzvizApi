@@ -3,11 +3,12 @@
 'capture command handlers; cli.main passes the retained runtime hooks explicitly.'
 from __future__ import annotations
 
+from contextlib import suppress as _suppress
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.cli.main as _owner_types
+    import pyezvizapi._typing.cli as _owner_types
 
 def _write_save_result(args: _owner_types.argparse.Namespace, result: _owner_types.Mapping[str, _owner_types.Any], *, _owner: _ModuleType) -> None:
     """Write a human or JSON result for save commands."""
@@ -335,7 +336,7 @@ def _hcnetsdk_int(value: _owner_types.Any, *, _owner: _ModuleType) -> int:
         try:
             return int(value.strip(), 0)
         except ValueError as err:
-            with _owner.suppress(ValueError):
+            with _suppress(ValueError):
                 return int(value.strip())
             raise _owner.PyEzvizError('Invalid HCNetSDK integer value') from err
     raise _owner.PyEzvizError('Invalid HCNetSDK integer value')

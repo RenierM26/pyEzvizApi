@@ -8,7 +8,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.client as _owner_types
+    import pyezvizapi._typing.client as _owner_types
 
 def search_records(self: _owner_types.EzvizClient, serial: str, channel: int, channel_serial: str, start_time: str, stop_time: str, *, size: int, max_retries: int, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Search recorded video clips for a device."""

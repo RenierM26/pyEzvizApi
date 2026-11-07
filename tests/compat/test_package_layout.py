@@ -41,9 +41,7 @@ def test_historical_pickle_global_and_new_pickle_resolve_to_the_same_class(modul
 COLD_IMPORTS = sorted(
     ".".join(path.relative_to(ROOT).with_suffix("").parts)
     for path in (ROOT / "pyezvizapi").rglob("*.py")
-    if "as _owner_types" in path.read_text()
-    or path.name.startswith("models_")
-    or path.as_posix().endswith("hcnetsdk/constants.py")
+    if path.parent != ROOT / "pyezvizapi" and path.name != "__init__.py"
 )
 
 

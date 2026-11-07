@@ -8,7 +8,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.client as _owner_types
+    import pyezvizapi._typing.client as _owner_types
 
 def set_switch_v3(self: _owner_types.EzvizClient, serial: str, switch_type: int, enable: bool | int, channel: int, max_retries: int, *, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Update a device switch via the v3 endpoint."""

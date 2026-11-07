@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.media.remux import BoundedStderrTail as _StaticBoundedStderrTail
 
 if TYPE_CHECKING:
-    import pyezvizapi.streaming.local.session as _owner_types
+    import pyezvizapi._typing.local_stream as _owner_types
 
 def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int, *, _owner: _ModuleType) -> _owner_types.RtpPacket | None:
     """Normalize standards-shaped and legacy IDMX headers into one RTP model."""

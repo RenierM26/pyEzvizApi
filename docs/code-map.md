@@ -18,7 +18,7 @@ actual runtime owner. `docs/module-map.json` lists every relocated module.
 | Cloud stream negotiation/framing | `streaming/cloud/bootstrap.py; streaming/cloud/protocol.py` |
 | Local SDK sessions and socket ownership | `streaming/local/session.py; streaming/local/ecdh.py` |
 | SDK configuration/discovery/authentication | `streaming/local/hcnetsdk/{configuration,discovery,authentication}.py` |
-| SDK models and wire serialization | `streaming/local/hcnetsdk/models_*.py; streaming/local/hcnetsdk/serialization.py` |
+| SDK models and wire serialization | `streaming/local/hcnetsdk/protocol_types/` (independent values, models and codecs) |
 | Local capture, decode windows and payload routing | `streaming/local/{capture,windows,payloads,diagnostics}.py` |
 | RTP, MPEG-PS, clocks and remux | `streaming/media/` |
 | Streaming source selection and bounded sessions | `streaming/{selection,discovery,capture,native_session,native_stream}.py` |
@@ -44,6 +44,12 @@ and operation implementations receive their existing runtime hooks through an
 explicit `_owner` context argument from the public wrapper. This preserves late monkeypatches rather
 than copying bindings into a second module. Do not replace this with a dynamic
 module proxy, silently copy hooks, or widen transport/media budgets during moves.
+
+SDK protocol implementations are dependency-closed under `protocol_types/`;
+`protocol.py` and the former `models_*` modules only compose compatibility
+exports. Static-only nominal interfaces live in `_typing/*.pyi`, are included
+in the wheel, and are never imported at runtime. This keeps precise annotations
+without an implementation importing its runtime owner back.
 
 Root `__init__.py` keeps its existing lazy exports. Media/HA are not imported as
 a side effect of package discovery. Old module paths remain valid for imports

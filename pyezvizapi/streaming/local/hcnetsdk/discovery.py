@@ -12,7 +12,7 @@ from pyezvizapi.streaming.local.hcnetsdk.models_session import (
 )
 
 if TYPE_CHECKING:
-    import pyezvizapi.streaming.local.hcnetsdk.api as _owner_types
+    import pyezvizapi._typing.hcnetsdk as _owner_types
 
 def classify_lan_ports(endpoint: _owner_types.HcNetSdkLanEndpoint, *, timeout: float | None, socket_factory: _owner_types.SocketFactory, _owner: _ModuleType) -> list[_owner_types.HcNetSdkPortProbe]:
     """Probe advertised LAN ports without authenticating or changing state."""

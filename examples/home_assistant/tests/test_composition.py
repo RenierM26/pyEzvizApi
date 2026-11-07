@@ -11,7 +11,7 @@ from custom_components.ezviz_native.config import load_settings
 from custom_components.ezviz_native.const import DOMAIN
 from custom_components.ezviz_native.diagnostics import async_get_config_entry_diagnostics
 from custom_components.ezviz_native.entry_runtime import GroupEntry, IntegrationRegistry
-from custom_components.ezviz_native.group import GroupIdentity, GroupRegistry
+from custom_components.ezviz_native.group import GroupIdentity
 from custom_components.ezviz_native.relay import RelayError
 from custom_components.ezviz_native.route import Runtime, physical_key
 from homeassistant.components.camera.const import DATA_COMPONENT
@@ -21,7 +21,6 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from test_native_integration import data as data, runtime as runtime  # noqa: PLC0414
 from tests.streaming.test_native_stream import Source, options
 from tests.tools.test_local_av_timeline import encode_three_track_ps
 
@@ -100,20 +99,6 @@ async def settled(runtime):
             await asyncio.sleep(0.01)
 
 
-@pytest.fixture
-def clear_finite(monkeypatch):
-    original, declare = load_settings, GroupRegistry.declare
-
-    def finite(values):
-        result = original(values)
-        return replace(result, options=replace(result.options, finite_source=True))
-
-    def clear_group(self, *args, **kwargs):
-        kwargs["media_key"] = None  # Generated test PS is already clear.
-        return declare(self, *args, **kwargs)
-
-    monkeypatch.setattr("custom_components.ezviz_native.load_settings", finite)
-    monkeypatch.setattr(GroupRegistry, "declare", clear_group)
 
 
 async def test_group_setup_entities_and_source_registration_never_acquire(hass, aiohttp_client, data):

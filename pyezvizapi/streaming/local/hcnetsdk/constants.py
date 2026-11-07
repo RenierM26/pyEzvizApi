@@ -1,5 +1,4 @@
 # Original model namespace is deliberately retained for compatibility exports.
-# ruff: noqa: F401
 """HCNetSDK value models and pure protocol serialization; no socket ownership."""
 from __future__ import annotations
 
@@ -11,7 +10,6 @@ from datetime import date, datetime
 from enum import IntEnum
 import ipaddress
 import json
-import sys as _sys
 from typing import Any
 
 from pyezvizapi.exceptions import PyEzvizError

@@ -7,7 +7,7 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pyezvizapi.client as _owner_types
+    import pyezvizapi._typing.client as _owner_types
 
 def load_devices(self: _owner_types.EzvizClient, refresh: bool, *, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Build status maps for cameras and light bulbs.
@@ -148,6 +148,7 @@ def get_device_infos(self: _owner_types.EzvizClient, serial: str | None, *, _own
             if isinstance(support_ext, str) and support_ext:
                 result[_serial]['deviceInfos']['supportExt'] = _owner.json.loads(support_ext)
         except (TypeError, ValueError):
+            # Malformed optional supportExt must not discard otherwise usable device data.
             pass
         _owner.convert_to_dict(result[_serial]['STATUS'].get('optionals'))
     if not serial:

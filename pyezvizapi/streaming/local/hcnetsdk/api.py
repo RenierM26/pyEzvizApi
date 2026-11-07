@@ -3959,3 +3959,9 @@ def discover_hcnetsdk_stream_details_for_login(endpoint: HcNetSdkLanEndpoint, lo
 
 # Match the earlier implicit wildcard surface; named private compatibility hooks remain available.
 __all__ = [name for name in globals() if not name.startswith("_")]
+
+# Retained named compatibility exports; not additions to the wildcard API.
+__compatibility_exports__ = {
+    '_AES_SBOX': _AES_SBOX,
+    '_AES_RCON': _AES_RCON,
+}

@@ -78,7 +78,7 @@ ignore = ["E501"] # long URLs ok
 "tests/cloud/test_http_helpers.py" = ["SLF001"]
 "tests/push/test_mqtt_demo.py" = ["SLF001"]
 "tests/cloud/test_auth.py" = ["SLF001"]
-"tests/cli/test_client_parsing.py" = ["SLF001"]
+"tests/cloud/test_client_parsing.py" = ["SLF001"]
 "tests/cloud/test_alarm_parsing.py" = ["SLF001"]
 "pyezvizapi/cloud_stream.py" = ["SLF001"]
 

@@ -7,7 +7,7 @@ import pytest
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.native_ps import NativePsTransform
 from pyezvizapi.rtp_timing import _pack_header
-import tests.shared.test_ps_stream_isolation as isolation
+import tests.streaming.media.test_ps_stream_isolation as isolation
 
 CASES = (
     [

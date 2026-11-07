@@ -2748,10 +2748,11 @@ class EzvizClient:
                         ValueError,
                     ) as err:
                         _LOGGER.warning(
-                            "Load_device_failed: serial=%s code=%s msg=%s",
+                            "Load_device_failed: serial=%s code=%s stage=%s error_type=%s",
                             device,
                             "load_error",
-                            str(err),
+                            "light_bulb_status",
+                            type(err).__name__,
                         )
                 elif rec.device_category == DeviceCatagories.SOCKET.value:
                     try:
@@ -2765,10 +2766,11 @@ class EzvizClient:
                         ValueError,
                     ) as err:
                         _LOGGER.warning(
-                            "Load_device_failed: serial=%s code=%s msg=%s",
+                            "Load_device_failed: serial=%s code=%s stage=%s error_type=%s",
                             device,
                             "load_error",
-                            str(err),
+                            "smart_plug_status",
+                            type(err).__name__,
                         )
                 else:
                     try:
@@ -2787,10 +2789,11 @@ class EzvizClient:
                         ValueError,
                     ) as err:
                         _LOGGER.warning(
-                            "Load_device_failed: serial=%s code=%s msg=%s",
+                            "Load_device_failed: serial=%s code=%s stage=%s error_type=%s",
                             device,
                             "load_error",
-                            str(err),
+                            "camera_status",
+                            type(err).__name__,
                         )
         return {**self._cameras, **self._light_bulbs, **self._smart_plugs}
 

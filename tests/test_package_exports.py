@@ -118,3 +118,18 @@ def test_extracted_model_exports_keep_identity_and_legacy_pickle_resolution():
         b"pyezvizapi._hcnetsdk_protocol\n", b"pyezvizapi.hcnetsdk\n"
     )
     assert pickle.loads(legacy_pickle) == endpoint  # local, synthetic round-trip only
+
+
+def test_maintenance_preserves_all_baseline_legacy_namespace_exports():
+    import importlib  # noqa: PLC0415
+    import json  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+    baseline = json.loads((Path(__file__).parent / "fixtures/maintenance-public-exports.json").read_text())
+    for name, contract in baseline.items():
+        module = importlib.import_module("pyezvizapi." + name)
+        expected = set(contract["attributes"])
+        assert expected <= set(dir(module)), name
+        wildcard = set(getattr(module, "__all__", [n for n in dir(module) if not n.startswith("_")]))
+        assert set(contract["wildcard"]) <= wildcard, name
+        if name == "utils":
+            assert wildcard == set(contract["wildcard"])

@@ -19,6 +19,7 @@ from typing import Any, BinaryIO, Literal, cast
 
 from Crypto.Cipher import AES
 
+from . import _local_stream_packets
 from ._local_stream_packets import (  # noqa: F401 -- retained compatibility exports
     H264_FU_A_NAL_TYPE,
     HEVC_NAL_HEADER_SIZE,
@@ -146,6 +147,9 @@ from .stream_media import (
     _is_mpeg_ps_packet_start_id,
     decrypt_hikvision_ps_video,
 )
+
+# Historical support-type import remains available through local_stream.
+RtpStreamDescriptor = _local_stream_packets.RtpStreamDescriptor
 
 HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = "app-lan-live-view"
 

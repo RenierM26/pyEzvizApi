@@ -137,6 +137,8 @@ class StreamProxyHTTPServer(ThreadingHTTPServer):
     block_on_close = False
 
 
+HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = _cli_arguments.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+
 # Historical CLI parsing hooks retain their original implementation objects.
 _parse_args = _cli_arguments._parse_args  # noqa: SLF001
 _parse_duration_seconds = _cli_arguments._parse_duration_seconds  # noqa: SLF001
@@ -4261,6 +4263,10 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if client is not None:
             client.close_session()
+
+
+# Match the earlier implicit wildcard surface while retaining named private hooks.
+__all__ = [name for name in globals() if not name.startswith("_")]
 
 
 if __name__ == "__main__":

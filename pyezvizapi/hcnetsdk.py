@@ -38,7 +38,7 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.asn1 import DerSequence
 
-from . import _hcnetsdk_protocol
+from . import _hcnetsdk_protocol, _resolver
 from ._resolver import DEFAULT_RESOLVER, BoundedResolver, ResolverBusy
 from .exceptions import (
     DeviceException,
@@ -352,6 +352,22 @@ hcnetsdk_command_port_response_payload = _hcnetsdk_protocol.hcnetsdk_command_por
 hcnetsdk_real_data_type_is_media = _hcnetsdk_protocol.hcnetsdk_real_data_type_is_media
 hcnetsdk_real_play_request = _hcnetsdk_protocol.hcnetsdk_real_play_request
 hcnetsdk_stdxml_response_json = _hcnetsdk_protocol.hcnetsdk_stdxml_response_json
+
+
+# Preserve earlier imported support symbols as well as locally defined SDK values.
+Empty = _resolver.Empty
+EzvizStreamHeader = _hcnetsdk_protocol.EzvizStreamHeader
+Full = _resolver.Full
+HcNetSdkConfiguredMedia = _hcnetsdk_protocol.HcNetSdkConfiguredMedia
+Queue = _resolver.Queue
+Thread = _resolver.Thread
+asdict = _hcnetsdk_protocol.asdict
+base64 = _hcnetsdk_protocol.base64
+binascii = _hcnetsdk_protocol.binascii
+dataclass = _hcnetsdk_protocol.dataclass
+field = _hcnetsdk_protocol.field
+normalize_hcnetsdk_parameters = _hcnetsdk_protocol.normalize_hcnetsdk_parameters
+stream_header_from_preview = _hcnetsdk_protocol.stream_header_from_preview
 
 _WINDOWS_EXCLUSIVE_SOURCE_BIND = sys.platform == "win32"
 
@@ -8552,3 +8568,6 @@ def discover_hcnetsdk_stream_details_for_login(
         socket_factory=selected_factory, rsa_key=rsa_key, monotonic=monotonic,
         max_response_bytes=max_response_bytes,
     )
+
+# Match the earlier implicit wildcard surface; named private compatibility hooks remain available.
+__all__ = [name for name in globals() if not name.startswith("_")]

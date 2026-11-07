@@ -1,6 +1,7 @@
 """Malformed device/envelope regression probes; no network calls."""
 # ruff: noqa: SLF001 -- these tests exercise private API parsing boundaries.
 import logging
+import traceback
 from unittest.mock import Mock
 
 import pytest
@@ -70,3 +71,20 @@ def test_json_decode_error_does_not_echo_raw_body():
     with pytest.raises(PyEzvizError) as caught:
         EzvizClient._parse_json(response)
     assert "SECRET_CANARY" not in str(caught.value)
+
+
+@pytest.mark.parametrize("code", ["++1", "--1", "+-1", "-+1", "+", "-"])
+def test_response_summary_rejects_malformed_signed_codes(code):
+    assert EzvizClient._response_summary({"resultCode": code}) == "response code=None, fields=1"
+
+
+def test_json_decode_error_traceback_does_not_echo_parser_message():
+    response = Mock(json=Mock(side_effect=ValueError("SECRET_CANARY")))
+    with pytest.raises(PyEzvizError) as caught:
+        EzvizClient._parse_json(response)
+    assert "SECRET_CANARY" not in "".join(traceback.format_exception(caught.value))
+
+
+@pytest.mark.parametrize(("code", "expected"), [("-1", -1), ("+200", 200), ("0", 0), (500, 500)])
+def test_response_summary_preserves_valid_numeric_codes(code, expected):
+    assert EzvizClient._response_summary({"resultCode": code}) == f"response code={expected}, fields=1"

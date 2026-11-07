@@ -892,8 +892,9 @@ class EzvizClient:
         """Parse an API object without echoing potentially secret response text."""
         try:
             payload = resp.json()
-        except ValueError as err:
-            raise PyEzvizError("Impossible to decode response: invalid JSON") from err
+        except ValueError:
+            # Parser exceptions may embed response text; keep tracebacks redacted too.
+            raise PyEzvizError("Impossible to decode response: invalid JSON") from None
         if not isinstance(payload, dict):
             raise PyEzvizError("Expected a JSON object in API response")
         return payload
@@ -1038,7 +1039,8 @@ class EzvizClient:
         elif isinstance(code, str):
             # Restrict both conversion cost and output; error messages are not
             # a channel for arbitrary server-provided strings or credentials.
-            code = int(code) if len(code) <= 12 and code.isascii() and code.lstrip("+-").isdigit() else None
+            digits = code[1:] if code.startswith(("+", "-")) else code
+            code = int(code) if len(code) <= 12 and code.isascii() and digits.isdigit() else None
         if isinstance(code, int) and not -10**12 < code < 10**12:
             code = None
         return f"response code={code}, fields={len(payload)}"

@@ -31,6 +31,19 @@ def _decode_response(msg: bytes) -> str:
     return msg.decode("latin-1")
 
 
+def _unfold_header_lines(lines: list[str]) -> list[str]:
+    """Unfold RTSP/1.0 continuation lines within the bounded header block."""
+    fields: list[list[str]] = []
+    for line in lines:
+        if line.startswith((" ", "\t")):
+            if not fields:
+                raise AuthTestResultFailed("Invalid RTSP response header continuation")
+            fields[-1].append(line.lstrip(" \t"))
+        else:
+            fields.append([line])
+    return [" ".join(parts) for parts in fields]
+
+
 def genmsg_describe(url: str, seq: int, user_agent: str, auth_seq: str) -> str:
     """Generate RTSP DESCRIBE request message."""
     msg_ret = f"DESCRIBE {url} RTSP/1.0\r\n"
@@ -133,7 +146,7 @@ class TestRTSPAuth:
         if status is None:
             raise AuthTestResultFailed("Invalid RTSP response status")
         headers: dict[str, list[str]] = {}
-        for line in lines[1:]:
+        for line in _unfold_header_lines(lines[1:]):
             key, separator, value = line.partition(":")
             if not separator:
                 raise AuthTestResultFailed("Invalid RTSP response header")

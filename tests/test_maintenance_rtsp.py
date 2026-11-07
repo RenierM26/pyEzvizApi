@@ -116,3 +116,26 @@ def test_missing_digest_realm_is_still_rejected(monkeypatch):
     with pytest.raises(AuthTestResultFailed, match="challenge"):
         TestRTSPAuth("192.0.2.10", "user", "pass", "/h264").main()
     assert session.closed and len(session.sent) == 1
+
+
+@pytest.mark.parametrize("indent", [b" ", b"\t"])
+@pytest.mark.parametrize("realm", [b"camera", b""])
+def test_folded_digest_challenge_authenticates(monkeypatch, indent, realm):
+    challenge = (b'RTSP/1.0 401 Unauthorized\r\nCSeq: 1\r\n'
+                 b'WWW-Authenticate: Digest realm="' + realm + b'",\r\n'
+                 + indent + b'nonce="nonce-1"\r\n\r\n')
+    session = Socket([challenge[:70], challenge[70:], b'RTSP/1.0 200 OK\r\nCSeq: 2\r\n\r\n'])
+    monkeypatch.setattr(socket, "socket", lambda *_a, **_k: session)
+    probe = TestRTSPAuth("192.0.2.10", "user", "pass", "/h264")
+    probe.main()
+    expected = probe.generate_auth_string(realm, "DESCRIBE", "/h264", b"nonce-1")
+    assert session.closed and len(session.sent) == 2
+    assert f"Authorization: {expected}\r\n".encode() in session.sent[1]
+
+
+def test_orphan_header_continuation_is_rejected(monkeypatch):
+    session = Socket([b'RTSP/1.0 200 OK\r\n orphan\r\n\r\n'])
+    monkeypatch.setattr(socket, "socket", lambda *_a, **_k: session)
+    with pytest.raises(AuthTestResultFailed, match="header"):
+        TestRTSPAuth("192.0.2.10").main()
+    assert session.closed

@@ -38,7 +38,7 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.asn1 import DerSequence
 
-from ._hcnetsdk_protocol import (  # noqa: F401 -- retained compatibility exports
+from ._hcnetsdk_protocol import (  # noqa: F401 -- retained compatibility exports; codeql[py/unused-import] lgtm[py/unused-import]
     _AES_RCON,
     _AES_SBOX,
     EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE,

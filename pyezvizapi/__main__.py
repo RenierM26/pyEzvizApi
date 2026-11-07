@@ -23,7 +23,7 @@ import time
 from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
 
-from ._cli_arguments import _parse_args, _parse_duration_seconds  # noqa: F401 -- CLI compatibility hooks
+from ._cli_arguments import _parse_args, _parse_duration_seconds  # noqa: F401 -- CLI compatibility hooks; codeql[py/unused-import] lgtm[py/unused-import]
 from ._token_store import save_private_token
 from .camera import EzvizCamera
 from .cas import CasDeviceSession, EzvizCAS

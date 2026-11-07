@@ -11,6 +11,7 @@ from typing import Any
 import requests
 
 from . import _http_transport
+from ._api_response import meta_code, object_section, parse_json, response_summary
 from ._budget_http import budgeted_http_call
 from ._longlink_profile import profile_for_token, synchronize_http_headers
 from ._token import validate_feature_code
@@ -32,10 +33,10 @@ def discover_services(session: requests.Session, token: dict[str, Any], timeout:
         response.raise_for_status()
     except requests.HTTPError as error:
         raise HTTPError from error
-    result = response.json()
-    if result.get("meta", {}).get("code") != 200:
+    result = parse_json(response)
+    if meta_code(result) != 200:
         raise PyEzvizError("Error getting service URLs")
-    urls: dict[str, Any] = result.get("systemConfigInfo", {})
+    urls = object_section(result, "systemConfigInfo")
     urls["sysConf"] = str(urls.get("sysConf", "")).split("|")
     return urls
 
@@ -60,16 +61,19 @@ def refresh_credentials(
     except requests.HTTPError as error:
         raise HTTPError from error
     try:
-        result = response.json()
-    except ValueError as error:
+        result = parse_json(response)
+    except PyEzvizError as error:
         raise PyEzvizError("Impossible to decode refresh response") from error
-    code = result["meta"]["code"]
+    code = meta_code(result)
     if code in (401, 403):
         raise EzvizAuthTokenExpired("Token expired; login with username and password required")
     if code != 200:
-        raise PyEzvizError(f"Error renewing login token: {result['meta']}")
-    token["session_id"] = str(result["sessionInfo"]["sessionId"])
-    token["rf_session_id"] = str(result["sessionInfo"]["refreshSessionId"])
+        raise PyEzvizError(f"Error renewing login token: {response_summary(result)}")
+    info = object_section(result, "sessionInfo", required=True)
+    session_id, refresh_id = info.get("sessionId"), info.get("refreshSessionId")
+    if not isinstance(session_id, str) or not session_id or not isinstance(refresh_id, str) or not refresh_id:
+        raise PyEzvizError("Invalid refresh credential fields")
+    token.update(session_id=session_id, rf_session_id=refresh_id)
     token["feature_code"] = FEATURE_CODE
     synchronize_http_headers(
         session.headers, profile_for_token(token), token["session_id"], scope="session"

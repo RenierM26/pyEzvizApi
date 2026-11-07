@@ -1,7 +1,8 @@
 # Utility contracts
 
 The historical `pyezvizapi.utils` imports remain a compatibility facade. Imported
-functions are the implementation objects, not wrappers:
+public helpers are the implementation objects, not wrappers. The two private
+image helper names delegate for compatibility:
 
 | Family | Implementation | Contract |
 | --- | --- | --- |

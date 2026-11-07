@@ -16,6 +16,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Extract pure SDK/client/packet responsibilities and command-specific CLI builders; share device helpers and make resolver ownership explicit.
+
 - Bound scoped bootstrap HTTP caller waits and response sizes; collect pagelists iteratively with progress guards.
 
 - Bound RTSP authentication framing and I/O, close sockets deterministically, and retain the legacy import path.

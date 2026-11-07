@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 import json
 from typing import Any
 
+from ._device_payload import switch_values
+
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     """Normalize an optional API object without probing scalar/list values."""
@@ -173,16 +175,7 @@ class EzvizDeviceRecord:
         if device_status is None:
             device_status = status.get("globalStatus")
 
-        # Collapse SWITCH list[{type, enable}] to {type: enable}
-        switches_list = data.get("SWITCH") or []
-        switches: dict[int, bool] = {}
-        for item in switches_list if isinstance(switches_list, list) else []:
-            if not isinstance(item, Mapping):
-                continue
-            t = item.get("type")
-            en = item.get("enable")
-            if isinstance(t, int) and isinstance(en, (bool, int)):
-                switches[t] = bool(en)
+        switches = switch_values(data.get("SWITCH"))
 
         return cls(
             serial=serial,

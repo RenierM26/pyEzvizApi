@@ -88,3 +88,9 @@ def test_valid_image_padding_and_legacy_trailing_bytes_remain_supported(size):
     payload = HIK_ENCRYPTION_HEADER + return_password_hash("ABCDEF").encode() + encrypted
     assert decrypt_image(payload, "ABCDEF") == clear
     assert decrypt_image(payload + b"end", "ABCDEF") == clear
+
+
+def test_existing_config_channel_coercion_is_not_a_preview_normalizer():
+    from pyezvizapi.feature import resolve_channel  # noqa: PLC0415
+    assert resolve_channel({"channelNo": 0}) == 1
+    assert resolve_channel({"channelNo": "0"}) == 0

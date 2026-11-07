@@ -16,6 +16,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Preserve offline status and tolerate malformed device records; validate API objects and omit raw response values from client errors.
+
 - Require positive integer packet/byte counts and finite numeric durations in typed capture limits.
 
 - Reject application-level lock, unlock and PTZ command failures instead of reporting API acceptance.

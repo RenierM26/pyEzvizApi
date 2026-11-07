@@ -99,7 +99,8 @@ def test_close_notifies_a_request_dequeued_before_active_assignment():
     caller.start()
     try:
         assert dequeued.wait(1)
-        assert owner.close(wait_seconds=0) is False
+        drained = owner.close(wait_seconds=0)
+        assert drained is False
         release.set()
         caller.join(timeout=1)
         assert not caller.is_alive()
@@ -108,4 +109,5 @@ def test_close_notifies_a_request_dequeued_before_active_assignment():
     finally:
         release.set()
         caller.join(timeout=3)
-        assert owner.close(wait_seconds=1)
+        drained = owner.close(wait_seconds=1)
+        assert drained

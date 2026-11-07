@@ -12,7 +12,7 @@ import requests
 
 from ._api_response import meta_code, object_section, parse_json, response_summary
 from ._budget_http import budgeted_http_call
-from ._http_transport import isolated_session  # noqa: F401 -- compatibility export
+from ._http_transport import isolated_session  # noqa: F401 -- compatibility export; codeql[py/unused-import] lgtm[py/unused-import]
 from ._longlink_profile import profile_for_token, synchronize_http_headers
 from ._token import validate_feature_code
 from .api_endpoints import API_ENDPOINT_REFRESH_SESSION_ID, API_ENDPOINT_SERVER_INFO

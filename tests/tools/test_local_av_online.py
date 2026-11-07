@@ -9,12 +9,12 @@ from typing import Any
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 M = runpy.run_path(str(ROOT / 'tools/local_av_online.py'))
 P = M['PLAY']
 T = M['TIMELINE']
-OLD = runpy.run_path(str(test_path('test_local_av_incremental.py')))
+OLD = runpy.run_path(str(resolve_test_module('test_local_av_incremental.py')))
 
 
 def video(index=0, pts=1000, width=2):

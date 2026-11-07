@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 M = runpy.run_path(str(ROOT / "tools/local_av_lan_verify.py"))
 G = M["verify"].__globals__
@@ -460,7 +460,7 @@ def test_cli_never_echoes_private_exception_text_and_preserves_existing_result(
 @pytest.mark.parametrize("case", ["good", "clear-hash", "selection", "crypto-finalizer"])
 def test_synthetic_native_source_replay_against_real_playback_receipt(tmp_path, monkeypatch, case):
     """Real public MPEG/PyAV/PCM; mock crypto and output, never camera IO."""
-    capture = runpy.run_path(str(test_path('test_local_av_capture_playback.py')))
+    capture = runpy.run_path(str(resolve_test_module('test_local_av_capture_playback.py')))
     rig = capture["rig"].__wrapped__(tmp_path, monkeypatch)
     pb: dict[str, Any] = {}
     owner, session = capture["session"](

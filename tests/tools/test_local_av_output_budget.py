@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from tests._paths import test_path
+from tests._paths import resolve_test_module
 
-CAP = runpy.run_path(str(test_path('test_local_av_capture_playback.py')))
+CAP = runpy.run_path(str(resolve_test_module('test_local_av_capture_playback.py')))
 M = CAP['M']
 OUT = CAP['OUT']
 C = OUT['CHANNEL']

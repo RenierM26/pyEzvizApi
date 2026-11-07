@@ -17,10 +17,10 @@ from typing import ClassVar
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 M = runpy.run_path(str(ROOT / 'tools/app_live_native_av.py'))
-SOURCE = runpy.run_path(str(test_path('test_app_native_scheduled_video.py')))
+SOURCE = runpy.run_path(str(resolve_test_module('test_app_native_scheduled_video.py')))
 pytestmark = pytest.mark.skipif(os.name != 'posix', reason='POSIX live output')
 
 

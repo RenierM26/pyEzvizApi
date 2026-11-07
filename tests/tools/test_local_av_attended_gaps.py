@@ -6,13 +6,13 @@ from typing import Any
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 P = runpy.run_path(str(ROOT / 'tools/local_av_lan_profiles.py'))
 LAN = runpy.run_path(str(ROOT / 'tools/local_av_lan_playback.py'))
 VERIFY = runpy.run_path(str(ROOT / 'tools/local_av_lan_verify.py'))
-CAP = runpy.run_path(str(test_path('test_local_av_capture_playback.py')))
-ARGS = runpy.run_path(str(test_path('test_local_av_lan_playback.py')))
+CAP = runpy.run_path(str(resolve_test_module('test_local_av_capture_playback.py')))
+ARGS = runpy.run_path(str(resolve_test_module('test_local_av_lan_playback.py')))
 NAME = 'two-minute-gaps'
 
 
@@ -110,7 +110,7 @@ def test_evidence_requires_explicit_same_gap_profile(tmp_path):
 
 @pytest.mark.parametrize('flag', [None, False, 1, 'true', True])
 def test_isolated_worker_projection_requires_explicit_gap_verification(flag):
-    old = runpy.run_path(str(test_path('test_local_av_lan_verify.py')))
+    old = runpy.run_path(str(resolve_test_module('test_local_av_lan_verify.py')))
     report = old['successful_report'](old['replay'].__wrapped__())
     if flag is not None:
         report['gap_media_verified'] = flag

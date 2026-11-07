@@ -14,11 +14,11 @@ from typing import Any
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 SCRIPT = ROOT / 'tools/app_video_preview.py'
 MODULE = runpy.run_path(str(SCRIPT))
-DECODE_TEST = runpy.run_path(str(test_path('test_app_video_decode.py')))
+DECODE_TEST = runpy.run_path(str(resolve_test_module('test_app_video_decode.py')))
 pytestmark = pytest.mark.skipif(os.name != 'posix', reason='POSIX preview transport')
 
 

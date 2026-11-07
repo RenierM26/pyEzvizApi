@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from pyezvizapi.media import CaptureLimits
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 BASE = ROOT / 'tools'
 P = runpy.run_path(str(BASE / 'local_av_lan_profiles.py'))
@@ -16,8 +16,8 @@ D = runpy.run_path(str(BASE / 'local_av_decrypted.py'))
 C = runpy.run_path(str(BASE / 'local_av_chunked.py'))
 E = runpy.run_path(str(BASE / 'local_av_packet_evidence.py'))
 V = runpy.run_path(str(BASE / 'local_av_lan_verify.py'))
-OLD = runpy.run_path(str(test_path('test_local_av_decrypted.py')))
-CAPTURE = runpy.run_path(str(test_path('test_local_av_capture.py')))
+OLD = runpy.run_path(str(resolve_test_module('test_local_av_decrypted.py')))
+CAPTURE = runpy.run_path(str(resolve_test_module('test_local_av_capture.py')))
 
 
 def test_profile_tables_are_explicit_finite_and_return_unshared_values():
@@ -147,7 +147,7 @@ def test_verifier_source_chain_does_not_silently_increase_legacy_span_or_pair_ca
 
 
 def test_profile_binding_rejects_a_downgrade_before_any_native_replay(monkeypatch):
-    base = runpy.run_path(str(test_path('test_local_av_lan_verify.py')))
+    base = runpy.run_path(str(resolve_test_module('test_local_av_lan_verify.py')))
     summary = dict(binding=base['BINDING'], packets=1, bytes=3, sha256='e' * 64)
     parent = base['parent_receipt'](summary)
     monkeypatch.setitem(V['LAN']['CAPTURE'], 'verify_output', lambda *_args: None)
@@ -157,7 +157,7 @@ def test_profile_binding_rejects_a_downgrade_before_any_native_replay(monkeypatc
 
 @pytest.mark.parametrize('tamper', [None, 'crypto', 'reader', 'policy', 'output'])
 def test_composed_long_budget_reaches_all_terminal_stages(tmp_path, monkeypatch, tamper):
-    capture = runpy.run_path(str(test_path('test_local_av_capture_playback.py')))
+    capture = runpy.run_path(str(resolve_test_module('test_local_av_capture_playback.py')))
     if not hasattr(capture['os'], 'memfd_create'):
         pytest.skip('Linux sealed media control')
     rig = capture['rig'].__wrapped__(tmp_path, monkeypatch)

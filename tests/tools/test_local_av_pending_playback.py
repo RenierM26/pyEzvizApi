@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from tests._paths import test_path
+from tests._paths import resolve_test_module
 
-BASE = runpy.run_path(str(test_path('test_local_av_online_playback.py')))
+BASE = runpy.run_path(str(resolve_test_module('test_local_av_online_playback.py')))
 M, OLD = BASE['M'], BASE['OLD']
 pytestmark = BASE['pytestmark']
 SourceBase: Any = BASE['Source']

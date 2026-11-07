@@ -15,13 +15,13 @@ import pytest
 from pyezvizapi import stream_selection
 from pyezvizapi.clip import AutoClipSource, CloudClipSource
 from pyezvizapi.media import CaptureLimits
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 M = runpy.run_path(str(ROOT / 'tools/local_av_capture_playback.py'))
 PREP = M['PREPARE']
 OUT = M['OUTPUT']
-OLD = runpy.run_path(str(test_path('test_local_av_online_playback.py')))
-OWNER = runpy.run_path(str(test_path('test_local_av_capture.py')))['Owner']
+OLD = runpy.run_path(str(resolve_test_module('test_local_av_online_playback.py')))
+OWNER = runpy.run_path(str(resolve_test_module('test_local_av_capture.py')))['Owner']
 BackendBase: Any = OLD['BackendBase']
 pytestmark = pytest.mark.skipif(not hasattr(os, 'memfd_create'), reason='Linux sealed output')
 
@@ -1003,7 +1003,7 @@ def test_pending_invalid_startup_policy_does_not_claim_source(rig, mode):
 
 
 def test_pending_common_keyframe_lead_in_is_explicit_and_not_a_new_clock(rig):
-    helper = runpy.run_path(str(test_path('test_local_av_capture_preparation.py')))
+    helper = runpy.run_path(str(resolve_test_module('test_local_av_capture_preparation.py')))
     altered = (helper['leading_keyframe_ps'](rig[0]), *rig[1:])
     report: dict[str, Any] = {}
     owner, capture = session(altered, report, startup_pairing='common-keyframe', pes_ids=(0xE0, 0xE1, 0xC0),

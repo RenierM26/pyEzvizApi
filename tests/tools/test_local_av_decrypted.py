@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 M = runpy.run_path(str(ROOT / 'tools/local_av_decrypted.py'))
-FIXTURE = runpy.run_path(str(test_path('test_stream_media.py')))
+FIXTURE = runpy.run_path(str(resolve_test_module('test_stream_media.py')))
 
 
 class Source:

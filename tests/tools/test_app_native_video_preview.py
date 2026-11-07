@@ -17,11 +17,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 SCRIPT = ROOT / 'tools/app_native_video_preview.py'
 M = runpy.run_path(str(SCRIPT))
-SOURCE = runpy.run_path(str(test_path('test_app_native_scheduled_video.py')))
+SOURCE = runpy.run_path(str(resolve_test_module('test_app_native_scheduled_video.py')))
 pytestmark = pytest.mark.skipif(os.name != 'posix', reason='POSIX SDL worker transport')
 
 

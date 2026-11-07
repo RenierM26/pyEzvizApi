@@ -7,12 +7,12 @@ import time
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 M = runpy.run_path(str(ROOT / 'tools/local_av_online_playback.py'))
 G = M['GAP']
-OLD = runpy.run_path(str(test_path('test_local_av_online_playback.py')))
-AUDIO = runpy.run_path(str(test_path('test_local_av_audio_gap_output.py')))
+OLD = runpy.run_path(str(resolve_test_module('test_local_av_online_playback.py')))
+AUDIO = runpy.run_path(str(resolve_test_module('test_local_av_audio_gap_output.py')))
 LIMITS = dict(AUDIO['LIMITS'], max_source_span_seconds=60)
 
 

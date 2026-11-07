@@ -13,12 +13,12 @@ from typing import Any
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 SCRIPT = ROOT / 'tools/local_av_incremental.py'
 M = runpy.run_path(str(SCRIPT))
 G = M['inspect'].__globals__
-TIMELINE_TESTS = runpy.run_path(str(test_path('test_local_av_timeline.py')))
+TIMELINE_TESTS = runpy.run_path(str(resolve_test_module('test_local_av_timeline.py')))
 
 
 def lens(stream, index=0, pts=90000, den=90000, width=4):

@@ -9,12 +9,12 @@ from typing import Any
 import pytest
 
 from pyezvizapi.media import CaptureLimits
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 M = runpy.run_path(str(ROOT / 'tools/local_av_capture_preparation.py'))
 C = M['CAPTURE']
-OWNER = runpy.run_path(str(test_path('test_local_av_capture.py')))['Owner']
-OLD = runpy.run_path(str(test_path('test_local_av_incremental.py')))
+OWNER = runpy.run_path(str(resolve_test_module('test_local_av_capture.py')))['Owner']
+OLD = runpy.run_path(str(resolve_test_module('test_local_av_incremental.py')))
 
 
 @pytest.fixture

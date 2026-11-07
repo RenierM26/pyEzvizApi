@@ -12,12 +12,12 @@ import tempfile
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 SCRIPT = ROOT / 'tools/app_native_scheduled_video.py'
 MODULE = runpy.run_path(str(SCRIPT))
-AUDIT_TEST = runpy.run_path(str(test_path('test_app_native_pixel_audit.py')))
-SCHEDULE_TEST = runpy.run_path(str(test_path('test_app_scheduled_video.py')))
+AUDIT_TEST = runpy.run_path(str(resolve_test_module('test_app_native_pixel_audit.py')))
+SCHEDULE_TEST = runpy.run_path(str(resolve_test_module('test_app_scheduled_video.py')))
 
 
 def jsonl(rows):

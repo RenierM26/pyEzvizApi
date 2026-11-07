@@ -3,6 +3,7 @@
 
 import json
 from threading import Event
+from typing import cast
 from unittest.mock import Mock
 
 import paho.mqtt.client as mqtt
@@ -21,7 +22,8 @@ KEY = bytes(range(16))
 
 def make_message(topic: str, payload: bytes | bytearray) -> mqtt.MQTTMessage:
     result = mqtt.MQTTMessage(topic=topic.encode())
-    result.payload = payload
+    # Paho types payload as bytes; this fixture also exercises bytearray delivery.
+    result.payload = cast(bytes, payload)
     return result
 
 

@@ -10,12 +10,12 @@ from typing import Any
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 SCRIPT = ROOT / 'tools/local_av_chunked.py'
 M = runpy.run_path(str(SCRIPT))
 D = M['DECODE']
-OLD = runpy.run_path(str(test_path('test_local_av_incremental.py')))
+OLD = runpy.run_path(str(resolve_test_module('test_local_av_incremental.py')))
 
 
 class Producer:

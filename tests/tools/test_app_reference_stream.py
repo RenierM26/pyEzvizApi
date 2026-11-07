@@ -12,11 +12,11 @@ import zlib
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 M = runpy.run_path(str(ROOT / 'tools/app_reference_stream.py'))
 P = M['PROJECT']
-SOURCE = runpy.run_path(str(test_path('test_app_live_native_av.py')))
+SOURCE = runpy.run_path(str(resolve_test_module('test_app_live_native_av.py')))
 
 
 def test_profile_checks_both_exact_elf_hashes_before_acceptance(monkeypatch):
@@ -161,7 +161,7 @@ def test_audio_ambiguity_never_becomes_an_index_join(tmp_path):
 
 
 def test_host_dual_pipe_cleanup_and_metrics_from_real_dummy_io(tmp_path):
-    prior = runpy.run_path(str(test_path('test_app_live_native_av.py')))
+    prior = runpy.run_path(str(resolve_test_module('test_app_live_native_av.py')))
     if not prior['ctypes'].util.find_library('SDL2-2.0') or not prior['shutil'].which('ffplay'):
         pytest.skip('optional SDL/ffplay unavailable')
     host = M['Host'](tmp_path)
@@ -282,7 +282,7 @@ def test_observation_window_does_not_spend_media_budget_waiting_for_manual_start
 
 
 def test_cancelling_a_running_host_keeps_receipt_and_reaps_output_group(tmp_path):
-    prior = runpy.run_path(str(test_path('test_app_live_native_av.py')))
+    prior = runpy.run_path(str(resolve_test_module('test_app_live_native_av.py')))
     if not prior['shutil'].which('ffplay'):
         pytest.skip('optional ffplay unavailable')
     host = M['Host'](tmp_path)

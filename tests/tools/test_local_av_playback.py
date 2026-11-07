@@ -16,11 +16,11 @@ from typing import Any
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 SCRIPT = ROOT / 'tools/local_av_playback.py'
 M = runpy.run_path(str(SCRIPT))
-SOURCE = runpy.run_path(str(test_path('test_local_av_timeline.py')))
+SOURCE = runpy.run_path(str(resolve_test_module('test_local_av_timeline.py')))
 pytestmark = pytest.mark.skipif(os.name != 'posix', reason='POSIX SDL/PCM output')
 
 

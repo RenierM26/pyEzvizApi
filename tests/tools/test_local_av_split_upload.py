@@ -10,14 +10,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests._paths import ROOT, test_path
+from tests._paths import ROOT, resolve_test_module
 
 BASE = ROOT
 M = runpy.run_path(str(BASE / 'tools/local_av_bounded_playback.py'))
 C = M['CHANNEL']
 PREVIEW = M['PLAY']['PREVIEW']
 VIDEO = M['DECODE']['VIDEO']
-OLD = runpy.run_path(str(test_path('test_local_av_bounded_playback.py')))
+OLD = runpy.run_path(str(resolve_test_module('test_local_av_bounded_playback.py')))
 pytestmark = pytest.mark.skipif(not hasattr(os, 'memfd_create'), reason='Linux sealed descriptors')
 
 

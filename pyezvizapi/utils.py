@@ -30,10 +30,6 @@ from ._coercion import (
     decode_json,
     string_to_list,
 )
-from ._image_crypto import (
-    decrypt_image,
-    return_password_hash,
-)
 from ._mapping import (
     WILDCARD_STEP,
     PathComponent,
@@ -44,6 +40,9 @@ from ._mapping import (
 )
 from .constants import HIK_ENCRYPTION_HEADER
 from .exceptions import PyEzvizError
+
+decrypt_image = _image_crypto.decrypt_image
+return_password_hash = _image_crypto.return_password_hash
 
 # Private compatibility hooks are attributes, not wildcard exports.
 _decrypt_single_block = _image_crypto._decrypt_single_block  # noqa: SLF001

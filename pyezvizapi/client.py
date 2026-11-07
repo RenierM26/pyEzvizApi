@@ -24,7 +24,7 @@ import zlib
 
 import requests
 
-from . import device_factory
+from . import _api_response, device_factory
 from ._auth import refresh_credentials
 from ._budget_http import budgeted_http_call
 from ._longlink_profile import (
@@ -889,80 +889,20 @@ class EzvizClient:
                 )
             return req
 
-    @staticmethod
-    def _parse_json(resp: requests.Response) -> JsonDict:
-        """Parse an API object without echoing potentially secret response text."""
-        try:
-            payload = resp.json()
-        except ValueError as err:
-            raise PyEzvizError("Impossible to decode response: invalid JSON") from err
-        if not isinstance(payload, dict):
-            raise PyEzvizError("Expected a JSON object in API response")
-        return payload
+    _parse_json = staticmethod(_api_response.parse_json)
 
-    @staticmethod
-    def _normalize_json_payload(payload: Any) -> Any:
-        """Return a payload suitable for json= usage, decoding strings when needed."""
+    _normalize_json_payload = staticmethod(_api_response.normalize_json_payload)
 
-        if isinstance(payload, (Mapping, list)):
-            return payload
-        if isinstance(payload, tuple):
-            return list(payload)
-        if isinstance(payload, (bytes, bytearray)):
-            try:
-                return json.loads(payload.decode())
-            except (UnicodeDecodeError, json.JSONDecodeError) as err:
-                raise PyEzvizError("Invalid JSON payload provided") from err
-        if isinstance(payload, str):
-            try:
-                return json.loads(payload)
-            except json.JSONDecodeError as err:
-                raise PyEzvizError("Invalid JSON payload provided") from err
-        raise PyEzvizError("Unsupported payload type for JSON body")
+    _is_ok = staticmethod(_api_response.is_ok)
 
-    @staticmethod
-    def _is_ok(payload: JsonDict) -> bool:
-        """Return True if payload indicates success for both API styles."""
-        meta = payload.get("meta")
-        if isinstance(meta, dict) and meta.get("code") == 200:
-            return True
-        rc = payload.get("resultCode")
-        return rc in (0, "0")
-
-    @staticmethod
-    def _meta_code(payload: JsonDict) -> int | None:
-        """Safely extract meta.code as an int, or None if missing/invalid."""
-        meta = payload.get("meta")
-        code = meta.get("code") if isinstance(meta, Mapping) else None
-        if isinstance(code, (int, str)):
-            try:
-                return int(code)
-            except (TypeError, ValueError):
-                return None
-        return None
+    _meta_code = staticmethod(_api_response.meta_code)
 
     @staticmethod
     def _meta_ok(payload: JsonDict) -> bool:
         """Return True if meta.code equals 200."""
         return EzvizClient._meta_code(payload) == 200
 
-    @staticmethod
-    def _response_code(payload: JsonDict) -> int | str | None:
-        """Return a best-effort code from a response for logging.
-
-        Prefers modern ``meta.code`` if present; falls back to legacy
-        ``resultCode`` or a top-level ``status`` field when available.
-        Returns None if no code-like field is found.
-        """
-        # Prefer modern meta.code
-        mc = EzvizClient._meta_code(payload)
-        if mc is not None:
-            return mc
-        if "resultCode" in payload:
-            return payload.get("resultCode")
-        if "status" in payload:
-            return payload.get("status")
-        return None
+    _response_code = staticmethod(_api_response.response_code)
 
     @staticmethod
     def _http_error_status(err: HTTPError) -> int | None:
@@ -973,44 +913,9 @@ class EzvizClient:
             return cause.response.status_code
         return None
 
-    @staticmethod
-    def _summarize_payload(payload: Any) -> str:
-        """Return a compact, credential-safe payload description for debug logs."""
+    _summarize_payload = staticmethod(_api_response.summarize_payload)
 
-        if payload is None:
-            return "-"
-        if isinstance(payload, Mapping):
-            sensitive_keys = {
-                "password",
-                "oldPassword",
-                "newPassword",
-                "token",
-                "sessionId",
-            }
-            keys = ", ".join(
-                "<redacted>" if key in sensitive_keys else key
-                for key in sorted(str(key) for key in payload)
-            )
-            return f"dict[{keys}]"
-        if isinstance(payload, (list, tuple, set)):
-            return f"{type(payload).__name__}(len={len(payload)})"
-        if isinstance(payload, (bytes, bytearray)):
-            return f"bytes(len={len(payload)})"
-        if isinstance(payload, str):
-            trimmed = payload[:32] + "…" if len(payload) > 32 else payload
-            return f"str(len={len(payload)}, preview={trimmed!r})"
-        return f"{type(payload).__name__}"
-
-    @staticmethod
-    def _body_debug_summary(payload: Any) -> str:
-        """Return a request-body summary without inspecting sensitive contents."""
-
-        if payload is None:
-            return "-"
-        try:
-            return f"{type(payload).__name__}(len={len(payload)})"
-        except TypeError:
-            return type(payload).__name__
+    _body_debug_summary = staticmethod(_api_response.body_debug_summary)
 
     def _ensure_ok(self, payload: JsonDict, message: str) -> None:
         """Raise PyEzvizError with context if response is not OK.
@@ -1026,24 +931,7 @@ class EzvizClient:
                 )
             raise PyEzvizError(f"{message}: {self._response_summary(payload)}")
 
-    @staticmethod
-    def _response_summary(payload: Any) -> str:
-        """Describe a response using numeric codes and shape, never raw values."""
-        if not isinstance(payload, Mapping):
-            return f"response type={type(payload).__name__}"
-        meta = payload.get("meta")
-        code = meta.get("code") if isinstance(meta, Mapping) else None
-        if code is None:
-            code = payload.get("resultCode", payload.get("status"))
-        if isinstance(code, bool) or not isinstance(code, (int, str)):
-            code = None
-        elif isinstance(code, str):
-            # Restrict both conversion cost and output; error messages are not
-            # a channel for arbitrary server-provided strings or credentials.
-            code = int(code) if len(code) <= 12 and code.isascii() and code.lstrip("+-").isdigit() else None
-        if isinstance(code, int) and not -10**12 < code < 10**12:
-            code = None
-        return f"response code={code}, fields={len(payload)}"
+    _response_summary = staticmethod(_api_response.response_summary)
 
     def _send_prepared(
         self,
@@ -1186,7 +1074,7 @@ class EzvizClient:
         if not self._meta_ok(json_output):
             raise PyEzvizError(f"Error getting Service URLs: {self._response_summary(json_output)}")
 
-        service_urls = json_output.get("systemConfigInfo", {})
+        service_urls = _api_response.object_section(json_output, "systemConfigInfo")
         service_urls["sysConf"] = str(service_urls.get("sysConf", "")).split("|")
         return service_urls
 

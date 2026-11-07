@@ -6,6 +6,7 @@ import datetime
 import logging
 from typing import Any, Literal, TypedDict, cast
 
+from ._device_payload import local_ip_address, switch_values
 from .constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
 from .exceptions import PyEzvizError
 from .models import EzvizChimeMusic, EzvizDeviceChimeInfo, EzvizDeviceRecord
@@ -120,15 +121,7 @@ class EzvizCamera:
         if self._record and getattr(self._record, "switches", None):
             self._switch = {int(k): bool(v) for k, v in self._record.switches.items()}
         else:
-            switches = self._device.get("SWITCH") or []
-            if isinstance(switches, list):
-                for item in switches:
-                    if not isinstance(item, dict):
-                        continue
-                    t = item.get("type")
-                    en = item.get("enable")
-                    if isinstance(t, int) and isinstance(en, (bool, int)):
-                        self._switch[t] = bool(en)
+            self._switch = switch_values(self._device.get("SWITCH"))
 
     def fetch_key(self, keys: list[Any], default_value: Any = None) -> Any:
         """Fetch dictionary key."""
@@ -184,21 +177,10 @@ class EzvizCamera:
         self._motion_trigger()
 
     def _local_ip(self) -> str:
-        """Fix empty ip value for certain cameras."""
-        wifi = (self._record.wifi if self._record else self._device.get("WIFI")) or {}
-        addr = wifi.get("address")
-        if isinstance(addr, str) and addr != "0.0.0.0":
-            return addr
-
-        # Seems to return none or 0.0.0.0 on some.
-        conn = (
-            self._record.connection if self._record else self._device.get("CONNECTION")
-        ) or {}
-        local_ip = conn.get("localIp")
-        if isinstance(local_ip, str) and local_ip != "0.0.0.0":
-            return local_ip
-
-        return "0.0.0.0"
+        """Return the preferred reported local address without network access."""
+        wifi = self._record.wifi if self._record else self._device.get("WIFI")
+        connection = self._record.connection if self._record else self._device.get("CONNECTION")
+        return local_ip_address(wifi, connection)
 
     def _resource_route(
         self,

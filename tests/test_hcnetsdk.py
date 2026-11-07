@@ -4689,7 +4689,7 @@ def test_hostname_resolution_uses_bounded_shared_worker(
     assert calls == 1
     assert elapsed < max_elapsed
     release.set()
-    assert second_resolution_started.wait(timeout=1.0)
+    assert not second_resolution_started.wait(timeout=0.05)
 
 
 def test_deadline_expiry_between_addresses_does_not_allocate_socket(

@@ -105,3 +105,15 @@ def test_stream_exports_have_focused_runtime_owners() -> None:
 def test_legacy_stream_modules_keep_existing_imports() -> None:
     assert LegacyEcdhDecoder is EzvizLocalSdkEcdhStreamDecoder
     assert LegacyVtmStreamClient is VtmStreamClient
+
+
+def test_extracted_model_exports_keep_identity_and_legacy_pickle_resolution():
+    import pickle  # noqa: PLC0415
+
+    from pyezvizapi import _hcnetsdk_protocol, hcnetsdk  # noqa: PLC0415
+    assert hcnetsdk.HcNetSdkLanEndpoint is _hcnetsdk_protocol.HcNetSdkLanEndpoint
+    endpoint = hcnetsdk.HcNetSdkLanEndpoint("TEST", "192.0.2.10")
+    legacy_pickle = pickle.dumps(endpoint, protocol=0).replace(
+        b"pyezvizapi._hcnetsdk_protocol\n", b"pyezvizapi.hcnetsdk\n"
+    )
+    assert pickle.loads(legacy_pickle) == endpoint  # local, synthetic round-trip only

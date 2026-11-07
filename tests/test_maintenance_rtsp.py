@@ -90,3 +90,12 @@ def test_deadline_is_shared_across_fragmented_reads(monkeypatch):
 
 def test_legacy_rtsp_import_is_the_same_implementation():
     assert TestRTSPAuth is Implementation
+
+
+@pytest.mark.parametrize("timeout", [0, -1, True, float("nan"), float("inf"), 10**1000])
+def test_invalid_timeout_fails_before_socket_allocation(monkeypatch, timeout):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("must validate before opening socket")
+    monkeypatch.setattr(socket, "socket", forbidden)
+    with pytest.raises(ValueError):
+        TestRTSPAuth("unused.invalid", timeout=timeout)

@@ -20,4 +20,3 @@ def isolated_session(source: requests.Session) -> requests.Session:
     session.hooks = {name: list(hooks) for name, hooks in source.hooks.items()}
     session.adapters = OrderedDict(source.adapters)
     return session
-

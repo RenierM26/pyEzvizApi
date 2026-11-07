@@ -479,3 +479,11 @@ def test_private_settings_reject_invalid_cached_metadata(data, metadata):
     path.write_text(json.dumps(document))
     with pytest.raises(ValueError, match="Cached device metadata"):
         load_settings(data)
+
+
+@pytest.mark.parametrize("document", [None, [], True, "not-an-object"])
+def test_private_settings_reject_non_object_document(data, document):
+    path = Path(data["credentials_path"])
+    path.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="Credential document must be an object"):
+        load_settings(data)

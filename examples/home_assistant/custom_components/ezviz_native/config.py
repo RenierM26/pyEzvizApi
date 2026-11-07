@@ -66,6 +66,8 @@ def load_settings(data: dict[str, Any]) -> Settings:
     if not 0 < len(raw) <= 65536:
         raise ValueError("Credential document exceeds limit")
     doc = json.loads(raw)
+    if not isinstance(doc, dict):
+        raise ValueError("Credential document must be an object")
     device_metadata = doc.get("device")
     if device_metadata is not None and not isinstance(device_metadata, dict):
         raise ValueError("Cached device metadata must be an object")

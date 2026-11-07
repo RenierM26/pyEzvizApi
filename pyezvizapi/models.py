@@ -8,6 +8,15 @@ import json
 from typing import Any
 
 
+def _mapping(value: Any) -> Mapping[str, Any]:
+    """Normalize an optional API object without probing scalar/list values."""
+    return value if isinstance(value, Mapping) else {}
+
+
+def _optional_mapping(value: Any) -> Mapping[str, Any] | None:
+    return value if isinstance(value, Mapping) else None
+
+
 def _optional_int(value: Any) -> int | None:
     """Return an int for API values that may arrive as ints or numeric strings."""
     result: int | None = None
@@ -156,14 +165,20 @@ class EzvizDeviceRecord:
 
         Tolerates missing or partially shaped keys.
         """
-        device_infos = data.get("deviceInfos", {}) or {}
-        status = (data.get("STATUS", {}) or {})
-        optionals = status.get("optionals") if isinstance(status, dict) else None
+        data = _mapping(data)
+        device_infos = _mapping(data.get("deviceInfos"))
+        status = _mapping(data.get("STATUS"))
+        optionals = _optional_mapping(status.get("optionals"))
+        device_status = device_infos.get("status")
+        if device_status is None:
+            device_status = status.get("globalStatus")
 
         # Collapse SWITCH list[{type, enable}] to {type: enable}
         switches_list = data.get("SWITCH") or []
         switches: dict[int, bool] = {}
         for item in switches_list if isinstance(switches_list, list) else []:
+            if not isinstance(item, Mapping):
+                continue
             t = item.get("type")
             en = item.get("enable")
             if isinstance(t, int) and isinstance(en, (bool, int)):
@@ -175,16 +190,16 @@ class EzvizDeviceRecord:
             device_category=device_infos.get("deviceCategory") or device_infos.get("device_category"),
             device_sub_category=device_infos.get("deviceSubCategory") or device_infos.get("device_sub_category"),
             version=device_infos.get("version"),
-            status=device_infos.get("status") or status.get("globalStatus") if isinstance(status, dict) else None,
-            support_ext=device_infos.get("supportExt"),
-            connection=data.get("CONNECTION"),
-            wifi=data.get("WIFI"),
-            qos=data.get("QOS"),
-            vtm=next(iter((data.get("VTM") or {}).values()), None),
-            cloud=next(iter((data.get("CLOUD") or {}).values()), None),
+            status=device_status,
+            support_ext=_optional_mapping(device_infos.get("supportExt")),
+            connection=_optional_mapping(data.get("CONNECTION")),
+            wifi=_optional_mapping(data.get("WIFI")),
+            qos=_optional_mapping(data.get("QOS")),
+            vtm=_optional_mapping(next(iter(_mapping(data.get("VTM")).values()), None)),
+            cloud=_optional_mapping(next(iter(_mapping(data.get("CLOUD")).values()), None)),
             p2p=data.get("P2P"),
             time_plan=data.get("TIME_PLAN"),
-            optionals=optionals if isinstance(optionals, dict) else None,
+            optionals=optionals,
             switches=switches,
             raw=data,
         )
@@ -196,19 +211,6 @@ def build_device_records_map(devices: Mapping[str, Any]) -> dict[str, EzvizDevic
     Keeps behavior robust to partial/missing keys.
     """
     out: dict[str, EzvizDeviceRecord] = {}
-    for serial, payload in (devices or {}).items():
-        try:
-            out[serial] = EzvizDeviceRecord.from_api(serial, payload)
-        except (TypeError, KeyError, ValueError):
-            # Do not crash on unexpected shapes; fall back to raw wrapper
-            out[serial] = EzvizDeviceRecord(
-                serial=serial,
-                name=(payload.get("deviceInfos") or {}).get("name"),
-                device_category=(payload.get("deviceInfos") or {}).get("deviceCategory"),
-                device_sub_category=(payload.get("deviceInfos") or {}).get("deviceSubCategory"),
-                version=(payload.get("deviceInfos") or {}).get("version"),
-                status=(payload.get("deviceInfos") or {}).get("status"),
-                raw=payload,
-                switches={},
-            )
+    for serial, payload in _mapping(devices).items():
+        out[serial] = EzvizDeviceRecord.from_api(serial, payload)
     return out

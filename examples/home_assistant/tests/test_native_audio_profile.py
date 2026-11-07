@@ -228,5 +228,6 @@ async def test_missing_hls_fallback_capability_never_registers(aiohttp_client):
                             native_opus=True, hls_fallback=True)
         with pytest.raises(RelayError, match="unavailable"):
             await relay.source("http://127.0.0.1/forbidden-source")
-        assert await relay.close()
+        closed = await relay.close()
+        assert closed
     assert calls == ["GET"]

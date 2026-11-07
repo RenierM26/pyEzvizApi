@@ -223,6 +223,13 @@
       "full_Paho22_suite_passed": 5058,
       "Paho22_coverage_percent": 90.4,
       "no_dependency_version_pin_or_type_ignore_added": true
+    },
+    "codeql_cleanup_control": {
+      "finding": "Async cleanup performed inside assertion",
+      "correction": "Await cleanup before asserting its result",
+      "preexisting_main_branch_alerts_outside_this_diff": 2,
+      "suppression_or_alert_dismissal_added": false,
+      "cleanup_awaited_outside_assertion": true
     }
   }
 }

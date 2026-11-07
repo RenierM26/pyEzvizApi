@@ -71,8 +71,9 @@ def load_settings(data: dict[str, Any]) -> Settings:
     key = text(cas["key"])
     device = EzvizCasDeviceInfo(serial, text(cas["operation_code"]), key,
                               cas.get("encrypt_type"))
-    # Validate the existing wire format's key/IV before acquisition.
-    _ = device.key_bytes, device.iv_bytes
+    # Direct-local control validates the AES key here; its SDK-owned SSL IV
+    # is independent of the opaque operation code (unlike legacy CAS helpers).
+    _ = device.key_bytes
     if "media_key" in doc and "media_key_hex" in doc:
         raise ValueError("Supply exactly one media key representation")
     media_key = (bytes.fromhex(text(doc["media_key_hex"]))

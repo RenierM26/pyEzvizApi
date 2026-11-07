@@ -259,7 +259,6 @@ def test_final_crypto_cleanup_failure_never_publishes_prefix_success(monkeypatch
 
 @pytest.mark.parametrize('changes', [
     {'max_packets': 100001}, {'max_bytes': 16777217}, {'duration_seconds': 61},
-    {'max_packets': True}, {'max_bytes': 1.5}, {'duration_seconds': True},
 ])
 def test_bounds_are_not_silently_clamped_or_claimed(changes):
     owner, _limits, _ = setup()

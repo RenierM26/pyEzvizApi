@@ -39,6 +39,7 @@ class Settings:
     credential_revision: str | None = None
     relay_native_opus: bool = False
     relay_hls_fallback: bool = False
+    device_metadata: dict[str, Any] | None = None
 
 
 def integer(value: Any, low: int, high: int) -> int:
@@ -65,6 +66,9 @@ def load_settings(data: dict[str, Any]) -> Settings:
     if not 0 < len(raw) <= 65536:
         raise ValueError("Credential document exceeds limit")
     doc = json.loads(raw)
+    device_metadata = doc.get("device")
+    if device_metadata is not None and not isinstance(device_metadata, dict):
+        raise ValueError("Cached device metadata must be an object")
     serial = text(doc["serial"])
     endpoint, cas = doc["endpoint"], doc["cas"]
     host = str(ipaddress.ip_address(text(endpoint["host"])))
@@ -130,6 +134,7 @@ def load_settings(data: dict[str, Any]) -> Settings:
         text(data["credential_revision"]) if lenses else None,
         native_opus,
         hls_fallback,
+        device_metadata,
     )
 
 

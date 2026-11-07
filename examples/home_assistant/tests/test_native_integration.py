@@ -31,6 +31,7 @@ from test_native_stream import Source, repeated_ps_packets
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.native_stream import NativeMpegTsStream
+from pyezvizapi.stream_selection import select_stream_source
 
 
 @pytest.fixture
@@ -448,4 +449,33 @@ def test_direct_local_credentials_still_reject_invalid_control_key(data):
     document["cas"]["key"] = "too-short"
     path.write_text(json.dumps(document))
     with pytest.raises(PyEzvizError):
+        load_settings(data)
+
+
+def test_single_source_preserves_cached_protocol_capabilities(data):
+    path = Path(data["credentials_path"])
+    document = json.loads(path.read_text())
+    document["device"] = {"deviceInfos": {"supportExt": {"1": "1"}}}
+    path.write_text(json.dumps(document))
+    settings = load_settings(data)
+    client = MagicMock(spec=EzvizClient)
+    runtime = Runtime(settings, client)
+    with patch("custom_components.ezviz_native.route.native_mpegts_stream_from_client") as opened:
+        runtime.make_owner()
+        options = opened.call_args.kwargs["source"]
+    selected = select_stream_source(client, settings.credentials.device_info.serial,
+                                    options, channel=settings.channel)
+    assert selected.kind == "local-sdk"
+    assert options.device == document["device"]
+    assert options.mode == "offline" and not options.allow_cloud_fallback
+    assert not client.mock_calls
+
+
+@pytest.mark.parametrize("metadata", [[], True, "not-an-object"])
+def test_private_settings_reject_invalid_cached_metadata(data, metadata):
+    path = Path(data["credentials_path"])
+    document = json.loads(path.read_text())
+    document["device"] = metadata
+    path.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="Cached device metadata"):
         load_settings(data)

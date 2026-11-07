@@ -87,8 +87,10 @@ class TestRTSPAuth:
         self, realm: bytes, method: str, uri: str, nonce: bytes
     ) -> str:
         """Generate the HTTP Digest Authorization header value."""
+        # Legacy RTSP Digest requires MD5 on the wire (RFC 2069); this is not
+        # password storage and cannot be replaced with a different KDF locally.
         m_1 = hashlib.md5(
-            f"{self._rtsp_details['defaultUsername']}:{realm.decode()}:{self._rtsp_details['defaultPassword']}".encode()
+            f"{self._rtsp_details['defaultUsername']}:{realm.decode()}:{self._rtsp_details['defaultPassword']}".encode()  # codeql[py/weak-sensitive-data-hashing] lgtm[py/weak-sensitive-data-hashing] -- mandated Digest wire algorithm
         ).hexdigest()
         m_2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
         response = hashlib.md5(f"{m_1}:{nonce.decode()}:{m_2}".encode()).hexdigest()

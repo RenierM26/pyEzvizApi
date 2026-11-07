@@ -976,3 +976,10 @@ This is distinct from `native_shared_clock` and leaves existing defaults unchang
 See [the HA-hosted native integration](docs/ha-native-integration.md) for an isolated,
 upstream-oriented test integration. It uses the continuous headless library, not
 the player. Actual frontend/live-camera acceptance remains separate.
+
+## Developing and finding code
+
+See the [code map](docs/code-map.md) for module ownership and the
+[package migration plan](docs/package-layout-migration.md) for compatibility
+constraints. Implementation packages are grouped by domain; legacy import paths
+remain supported.

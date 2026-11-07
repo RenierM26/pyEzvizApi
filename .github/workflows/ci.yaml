@@ -115,7 +115,7 @@ jobs:
       - name: pytest with coverage (skip gracefully if no tests yet)
         shell: bash
         run: |
-          if compgen -G "tests/test_*.py" > /dev/null; then
+          if [ -n "$(find tests -name 'test_*.py' -print -quit)" ]; then
             pytest --cov=pyezvizapi --cov-report=term-missing --cov-report=xml --cov-fail-under=85
           else
             echo "No tests found under tests/, skipping pytest."

@@ -9,6 +9,11 @@ historical checkpoints; the follow-up and manifest identify current evidence.
 Stock HA/go2rtc/FFmpeg do not acquire these guarantees from installing pyezvizapi.
 Do not replace a managed HA component or relay binary with this bundle.
 
+The [independent HLS fallback follow-up](hls-independent-fallback.md) adds a
+separately negotiated opt-in policy; the original strict joint policy remains
+unchanged. Its [evidence](hls-fallback-evidence.json) is separate from historical
+qualification counts below.
+
 ## Review bases
 
 | Proposal | Public source base | Contents |

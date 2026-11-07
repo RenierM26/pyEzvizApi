@@ -183,3 +183,51 @@ async def test_complete_host_allows_webrtc_without_constructing_hls(hass, data):
         assert await camera.stream_source() == base + "&video&audio=opus"
     assert camera.stream is None and owner.group.attempts == 0
     await registry.close(owner.group.identity.physical)
+
+
+@pytest.mark.parametrize("fallback", [1, "true", None])
+def test_hls_fallback_requires_a_boolean(data, fallback):
+    with pytest.raises(ValueError):
+        load_settings({**configured(data), "relay_hls_fallback": fallback})
+
+
+def test_hls_fallback_is_explicit_and_requires_native_profile(data):
+    assert not load_settings(configured(data)).relay_hls_fallback
+    assert load_settings({**configured(data), "relay_hls_fallback": True}).relay_hls_fallback
+    with pytest.raises(ValueError):
+        load_settings({**grouped(data), "relay_hls_fallback": True})
+
+
+@pytest.mark.usefixtures("supported_host")
+async def test_hls_fallback_declares_distinct_profile_without_acquisition(hass, data):
+    registry = GroupRegistry()
+    owner = GroupEntry(hass, "fallback", "Primary",
+                       load_settings({**configured(data), "relay_hls_fallback": True}),
+                       MagicMock(spec=EzvizClient), registry)
+    assert owner.group.native_audio_profile == "opus-source-clock-hls-fallback-v1"
+    assert owner.group.attempts == 0
+    await registry.close(owner.group.identity.physical)
+
+
+async def test_missing_hls_fallback_capability_never_registers(aiohttp_client):
+    calls = []
+
+    async def api(request):
+        calls.append(request.method)
+        return web.json_response({"contract": "runtime-token-v1", "features": [
+            "runtime-token-v1", "source-clock-v1", "no-retry-v1",
+            "native-opus-source-clock-v1",
+        ]}, headers={"X-Stream-Ownership": "runtime-token-v1"})
+
+    app = web.Application()
+    app.router.add_route("*", "/api/streams/owned", api)
+    client = await aiohttp_client(app)
+    async with ClientSession() as session:
+        relay = SharedRelay(session, client.server.port, 8554,
+                            trusted_source_clock=True, atomic_ownership=True,
+                            native_opus=True, hls_fallback=True)
+        with pytest.raises(RelayError, match="unavailable"):
+            await relay.source("http://127.0.0.1/forbidden-source")
+        closed = await relay.close()
+        assert closed
+    assert calls == ["GET"]

@@ -1,5 +1,5 @@
 diff --git a/internal/http/http.go b/internal/http/http.go
-index 4b0560c..d5636a7 100644
+index 4b0560c..04d004e 100644
 --- a/internal/http/http.go
 +++ b/internal/http/http.go
 @@ -5,6 +5,7 @@ import (
@@ -18,7 +18,7 @@ index 4b0560c..d5636a7 100644
  	"github.com/AlexxIT/go2rtc/pkg/mpjpeg"
  	"github.com/AlexxIT/go2rtc/pkg/pcm"
  	"github.com/AlexxIT/go2rtc/pkg/tcp"
-@@ -93,7 +95,33 @@ func do(req *http.Request) (core.Producer, error) {
+@@ -93,7 +95,38 @@ func do(req *http.Request) (core.Producer, error) {
  		return pcm.Open(res.Body)
  	}
  
@@ -38,8 +38,13 @@ index 4b0560c..d5636a7 100644
 +			ts.ClockOrigin90k = &origin
 +		}
 +	}
-+	if ts, ok := prod.(*mpegts.Producer); ok && res.Header.Get("X-Native-Audio-Profile") == mpegts.NativeOpusProfile {
-+		if e := ts.EnableNativeOpus(); e != nil {
++	profile := res.Header.Get("X-Native-Audio-Profile")
++	if ts, ok := prod.(*mpegts.Producer); ok && (profile == mpegts.NativeOpusProfile || profile == mpegts.NativeOpusHLSFallbackProfile) {
++		enable := ts.EnableNativeOpus
++		if profile == mpegts.NativeOpusHLSFallbackProfile {
++			enable = ts.EnableNativeOpusHLSFallback
++		}
++		if e := enable(); e != nil {
 +			_ = res.Body.Close()
 +			return nil, e
 +		}
@@ -53,11 +58,200 @@ index 4b0560c..d5636a7 100644
  }
  
  func handleTCP(rawURL string) (core.Producer, error) {
+diff --git a/internal/rtsp/native_profile_test.go b/internal/rtsp/native_profile_test.go
+new file mode 100644
+index 0000000..f8a7254
+--- /dev/null
++++ b/internal/rtsp/native_profile_test.go
+@@ -0,0 +1,94 @@
++package rtsp
++
++import (
++	"errors"
++	"github.com/AlexxIT/go2rtc/internal/streams"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	rtspconn "github.com/AlexxIT/go2rtc/pkg/rtsp"
++	"net"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++type frozenProducer struct{ core.Connection }
++
++func (p *frozenProducer) GetTrack(m *core.Media, c *core.Codec) (*core.Receiver, error) {
++	if c.Name == core.CodecOpus {
++		return nil, core.ErrSourceProfileFrozen
++	}
++	return p.Connection.GetTrack(m, c)
++}
++func (p *frozenProducer) Start() error { return nil }
++
++type videoConsumer struct{ core.Connection }
++
++func (c *videoConsumer) AddTrack(m *core.Media, codec *core.Codec, r *core.Receiver) error {
++	s := core.NewSender(m, codec)
++	s.Bind(r)
++	c.Senders = append(c.Senders, s)
++	return nil
++}
++func TestNativeProfileFrozenRealRTSP(t *testing.T) {
++	video := &core.Media{Kind: core.KindVideo, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{{Name: core.CodecH265, ClockRate: 90000}}}
++	audio := &core.Media{Kind: core.KindAudio, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{{Name: core.CodecOpus, ClockRate: 48000, Channels: 2}}}
++	source := &frozenProducer{Connection: core.Connection{Medias: []*core.Media{video, audio}}}
++	stream, err := streams.New("frozen-response-test")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer streams.Delete("frozen-response-test")
++	stream.AddProducer(source)
++	v := video.Clone()
++	v.Direction = core.DirectionSendonly
++	hls := &videoConsumer{Connection: core.Connection{Medias: []*core.Media{v}}}
++	if err = stream.AddConsumer(hls); err != nil {
++		t.Fatal(err)
++	}
++	defer stream.RemoveConsumer(hls)
++	track := source.Receivers[0]
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ln.Close()
++	var accepts, alternatives atomic.Int32
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		for {
++			c, e := ln.Accept()
++			if e != nil {
++				return
++			}
++			accepts.Add(1)
++			go tcpHandler(rtspconn.NewServer(c))
++		}
++	}()
++	defer func() { ln.Close(); <-done }()
++	streams.HandleFunc("frozenrtsp", func(raw string) (core.Producer, error) { return rtspHandler("rtsp" + raw[len("frozenrtsp"):]) })
++	streams.HandleFunc("frozenalternate", func(string) (core.Producer, error) {
++		alternatives.Add(1)
++		return nil, errors.New("alternative must not run")
++	})
++	for _, backchannel := range []string{"0", "1"} {
++		outer := streams.NewStream([]string{"frozenrtsp://" + ln.Addr().String() + "/frozen-response-test?video=h265&audio=opus#backchannel=" + backchannel, "frozenalternate:test"})
++		vv, aa := video.Clone(), audio.Clone()
++		vv.Direction = core.DirectionSendonly
++		aa.Direction = core.DirectionSendonly
++		consumer := &videoConsumer{Connection: core.Connection{Medias: []*core.Media{vv, aa}}}
++		if err = outer.AddConsumer(consumer); !errors.Is(err, core.ErrSourceProfileFrozen) {
++			t.Fatalf("scoped refusal lost (backchannel=%s): %v", backchannel, err)
++		}
++	}
++	if accepts.Load() != 2 || alternatives.Load() != 0 {
++		t.Fatalf("unexpected retry/fallback: connections=%d alternatives=%d", accepts.Load(), alternatives.Load())
++	}
++	deadline := time.Now().Add(time.Second)
++	for len(track.Senders()) != 1 && time.Now().Before(deadline) {
++		time.Sleep(time.Millisecond)
++	}
++	if len(track.Senders()) != 1 {
++		t.Fatalf("partial RTSP consumer leaked or HLS detached: %d", len(track.Senders()))
++	}
++}
+diff --git a/internal/rtsp/rtsp.go b/internal/rtsp/rtsp.go
+index 31c2c5d..872959b 100644
+--- a/internal/rtsp/rtsp.go
++++ b/internal/rtsp/rtsp.go
+@@ -125,7 +125,8 @@ func rtspHandler(rawURL string) (core.Producer, error) {
+ 	}
+ 
+ 	if err := conn.Describe(); err != nil {
+-		if !conn.Backchannel {
++		_ = conn.Close()
++		if errors.Is(err, core.ErrSourceProfileFrozen) || !conn.Backchannel {
+ 			return nil, err
+ 		}
+ 		log.Trace().Msgf("[rtsp] describe (backchannel=%t) err: %v", conn.Backchannel, err)
+@@ -136,6 +137,7 @@ func rtspHandler(rawURL string) (core.Producer, error) {
+ 			return nil, err
+ 		}
+ 		if err = conn.Describe(); err != nil {
++			_ = conn.Close()
+ 			return nil, err
+ 		}
+ 	}
+@@ -219,6 +221,10 @@ func tcpHandler(conn *rtsp.Conn) {
+ 			conn.Connection.Source = query.Get("source")
+ 
+ 			if err := stream.AddConsumer(conn); err != nil {
++				if errors.Is(err, core.ErrSourceProfileFrozen) {
++					_ = conn.WriteResponse(&tcp.Response{Status: "409 Conflict", Header: map[string][]string{"X-Stream-Native-Error": {"profile-frozen-v1"}}})
++					_ = conn.Close()
++				}
+ 				log.WithLevel(level).Err(err).Str("stream", name).Msg("[rtsp]")
+ 				return
+ 			}
 diff --git a/internal/streams/add_consumer.go b/internal/streams/add_consumer.go
-index 7400ce6..b48c33e 100644
+index 7400ce6..f489cdc 100644
 --- a/internal/streams/add_consumer.go
 +++ b/internal/streams/add_consumer.go
-@@ -107,8 +107,13 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
+@@ -14,9 +14,11 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
+ 	var prodErrors = make([]error, len(s.producers))
+ 	var prodMedias []*core.Media
+ 	var prodStarts []*Producer
++	var terminalError error
+ 
+ 	// Step 1. Get consumer medias
+ 	consMedias := cons.GetMedias()
++medias:
+ 	for _, consMedia := range consMedias {
+ 		log.Trace().Msgf("[streams] check cons=%d media=%s", consN, consMedia)
+ 
+@@ -34,6 +36,10 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
+ 			}
+ 
+ 			if err = prod.Dial(); err != nil {
++				if errors.Is(err, core.ErrSourceProfileFrozen) {
++					terminalError = err
++					break medias
++				}
+ 				log.Trace().Err(err).Msgf("[streams] dial cons=%d prod=%d", consN, prodN)
+ 				prodErrors[prodN] = err
+ 				continue
+@@ -58,6 +64,10 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
+ 
+ 					// Step 4. Get recvonly track from producer
+ 					if track, err = prod.GetTrack(prodMedia, prodCodec); err != nil {
++						if errors.Is(err, core.ErrSourceProfileFrozen) {
++							terminalError = err
++							break medias
++						}
+ 						log.Info().Err(err).Msg("[streams] can't get track")
+ 						prodErrors[prodN] = err
+ 						continue
+@@ -94,9 +104,21 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
+ 	}
+ 
+ 	// stop producers if they don't have readers
++	if terminalError != nil {
++		// RTSP must keep its transport alive long enough to send the scoped
++		// refusal. Detach tracks before checking producer readers regardless.
++		if rollback, ok := cons.(interface{ RollbackTracks() }); ok {
++			rollback.RollbackTracks()
++		} else {
++			terminalError = errors.Join(terminalError, cons.Stop())
++		}
++	}
+ 	if s.pending.Add(-1) == 0 {
+ 		s.stopProducers()
+ 	}
++	if terminalError != nil {
++		return terminalError
++	}
+ 
+ 	if len(prodStarts) == 0 {
+ 		return formatError(consMedias, prodMedias, prodErrors)
+@@ -107,8 +129,13 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
  	s.mu.Unlock()
  
  	// there may be duplicates, but that's not a problem
@@ -110,9 +304,80 @@ index d6142eb..a7ca77e 100644
  
  		if err := app.PatchConfig([]string{"streams", src}, nil); err != nil {
  			http.Error(w, err.Error(), http.StatusBadRequest)
+diff --git a/internal/streams/native_profile_test.go b/internal/streams/native_profile_test.go
+new file mode 100644
+index 0000000..f9b4342
+--- /dev/null
++++ b/internal/streams/native_profile_test.go
+@@ -0,0 +1,65 @@
++package streams
++
++import (
++	"errors"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"testing"
++)
++
++type frozenTestProducer struct {
++	core.Connection
++	frozen      bool
++	gets, stops int
++}
++
++func (p *frozenTestProducer) GetTrack(m *core.Media, c *core.Codec) (*core.Receiver, error) {
++	p.gets++
++	if p.frozen && c.Name == core.CodecOpus {
++		return nil, core.ErrSourceProfileFrozen
++	}
++	return p.Connection.GetTrack(m, c)
++}
++func (p *frozenTestProducer) Start() error { return nil }
++func (p *frozenTestProducer) Stop() error  { p.stops++; return p.Connection.Stop() }
++
++type frozenTestConsumer struct {
++	core.Connection
++	stopped bool
++}
++
++func (c *frozenTestConsumer) AddTrack(m *core.Media, codec *core.Codec, r *core.Receiver) error {
++	s := core.NewSender(m, codec)
++	s.Bind(r)
++	c.Senders = append(c.Senders, s)
++	return nil
++}
++func (c *frozenTestConsumer) Stop() error { c.stopped = true; return c.Connection.Stop() }
++
++func TestNativeProfileFrozenRejectsPartialConsumerWithoutHarmingHLS(t *testing.T) {
++	video := &core.Media{Kind: core.KindVideo, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{{Name: core.CodecH265, ClockRate: 90000}}}
++	audio := &core.Media{Kind: core.KindAudio, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{{Name: core.CodecOpus, ClockRate: 48000}}}
++	source := &frozenTestProducer{Connection: core.Connection{Medias: []*core.Media{video, audio}}, frozen: true}
++	track, _ := source.Connection.GetTrack(video, video.Codecs[0])
++	hls := core.NewSender(video, video.Codecs[0])
++	hls.Bind(track)
++	defer hls.Close()
++	wrapper := &Producer{url: "test:native", conn: source, state: stateStart, receivers: []*core.Receiver{track}}
++	unused := &frozenTestProducer{Connection: core.Connection{Medias: []*core.Media{audio}}}
++	stream := &Stream{producers: []*Producer{wrapper, {url: "test:alternate", conn: unused, state: stateMedias}}}
++	v, a := video.Clone(), audio.Clone()
++	v.Direction = core.DirectionSendonly
++	a.Direction = core.DirectionSendonly
++	consumer := &frozenTestConsumer{Connection: core.Connection{Medias: []*core.Media{v, a}}}
++	if err := stream.AddConsumer(consumer); !errors.Is(err, core.ErrSourceProfileFrozen) {
++		t.Fatalf("partial AV accepted: %v", err)
++	}
++	if !consumer.stopped || len(stream.consumers) != 0 || stream.pending.Load() != 0 {
++		t.Fatal("failed consumer admission leaked")
++	}
++	if source.stops != 0 || wrapper.state != stateStart || len(track.Senders()) == 0 {
++		t.Fatal("healthy HLS sibling was stopped")
++	}
++	if unused.gets != 0 {
++		t.Fatal("frozen profile tried another producer/transcoder")
++	}
++}
 diff --git a/internal/streams/owned.go b/internal/streams/owned.go
 new file mode 100644
-index 0000000..fe8dca9
+index 0000000..7886266
 --- /dev/null
 +++ b/internal/streams/owned.go
 @@ -0,0 +1,101 @@
@@ -144,7 +409,7 @@ index 0000000..fe8dca9
 +		w.Header().Set("Content-Type", "application/json")
 +		features := []string{"runtime-token-v1", "source-clock-v1", "no-retry-v1"}
 +		if mpegts.NativeOpusAvailable() {
-+			features = append(features, "native-opus-source-clock-v1")
++			features = append(features, "native-opus-source-clock-v1", "native-opus-hls-fallback-v1")
 +		}
 +		_ = json.NewEncoder(w).Encode(map[string]any{
 +			"contract": ownershipContract,
@@ -517,10 +782,10 @@ index f3b8df0..47f086c 100644
  
 diff --git a/pkg/core/finite.go b/pkg/core/finite.go
 new file mode 100644
-index 0000000..fb88e39
+index 0000000..7710bd5
 --- /dev/null
 +++ b/pkg/core/finite.go
-@@ -0,0 +1,8 @@
+@@ -0,0 +1,12 @@
 +package core
 +
 +import "errors"
@@ -529,6 +794,10 @@ index 0000000..fb88e39
 +
 +// ErrSourceTerminal does not imply that media completed successfully.
 +var ErrSourceTerminal = errors.New("declared source acquisition ended")
++
++// ErrSourceProfileFrozen forbids partial AV admission, another producer or an
++// implicit transcoder after an explicitly finite acquisition selected HLS-only.
++var ErrSourceProfileFrozen = errors.New("finite source already started without an Opus consumer")
 diff --git a/pkg/core/native_ref.go b/pkg/core/native_ref.go
 new file mode 100644
 index 0000000..8cd03e7
@@ -1581,12 +1850,186 @@ index 5d4129d..01bc7fd 100644
 +	b[3] = byte(t >> 7)
 +	b[4] = byte(t)<<1 | 1
 +}
+diff --git a/pkg/mpegts/native_hls_fallback_test.go b/pkg/mpegts/native_hls_fallback_test.go
+new file mode 100644
+index 0000000..a04bb1a
+--- /dev/null
++++ b/pkg/mpegts/native_hls_fallback_test.go
+@@ -0,0 +1,168 @@
++package mpegts
++
++import (
++	"bytes"
++	"context"
++	"testing"
++	"time"
++
++	"github.com/AlexxIT/go2rtc/pkg/aac"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/rtp"
++)
++
++func fallbackProducer(t *testing.T) *Producer {
++	t.Helper()
++	origin := uint64(90000)
++	codec := aac.ConfigToCodec(aac.EncodeConfig(2, 16000, 1, false))
++	p := &Producer{Connection: core.Connection{Medias: []*core.Media{{Kind: core.KindAudio, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{codec}}}}, Finite: true, OneShot: true, ClockOrigin90k: &origin}
++	if err := p.EnableNativeOpus(); err != nil {
++		t.Fatal(err)
++	}
++	p.nativeOpus.allowHLSFallback = true
++	t.Cleanup(p.nativeOpus.close)
++	return p
++}
++
++func TestNativeHLSFallbackPreservesAACAndVideo(t *testing.T) {
++	p := fallbackProducer(t)
++	video := &core.Media{Kind: core.KindVideo, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{{Name: core.CodecH265, ClockRate: 90000}}}
++	p.Medias = append(p.Medias, video)
++	audioTrack, err := p.GetTrack(p.Medias[0], p.Medias[0].Codecs[0])
++	if err != nil {
++		t.Fatal(err)
++	}
++	videoTrack, err := p.GetTrack(video, video.Codecs[0])
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err = p.nativeOpus.start(); err != nil {
++		t.Fatal(err)
++	}
++	for _, row := range []struct {
++		track   *core.Receiver
++		typ     byte
++		payload []byte
++	}{
++		{audioTrack, StreamTypeAAC, []byte{1, 2, 3}},
++		{videoTrack, StreamTypeH265, []byte{0, 0, 0, 2, 0x26, 1}},
++	} {
++		calls := 0
++		row.track.Input = func(packet *rtp.Packet) {
++			calls++
++			if !bytes.Equal(packet.Payload, row.payload) {
++				t.Fatal("original codec bytes changed")
++			}
++			origin := *p.ClockOrigin90k
++			expected := uint32(origin/90000*uint64(row.track.Codec.ClockRate) + origin%90000*uint64(row.track.Codec.ClockRate)/90000)
++			if packet.Timestamp != expected {
++				t.Fatalf("source clock changed: %d != %d", packet.Timestamp, expected)
++			}
++		}
++		packet := &rtp.Packet{Header: rtp.Header{PayloadType: row.typ}, Payload: bytes.Clone(row.payload)}
++		if err := p.deliver(packet, 90000); err != nil {
++			t.Fatal(err)
++		}
++		if calls != 1 {
++			t.Fatalf("delivered %d originals", calls)
++		}
++	}
++	if p.nativeOpus.cmd != nil {
++		t.Fatal("HLS-only delivery started an unrequested transcoder")
++	}
++}
++
++func TestNativeHLSFallbackDoesNotHideAdmittedOpusFailure(t *testing.T) {
++	p := fallbackProducer(t)
++	if _, err := p.GetTrack(p.Medias[1], p.Medias[1].Codecs[0]); err != nil {
++		t.Fatal(err)
++	}
++	timer := time.AfterFunc(10*time.Millisecond, p.nativeOpus.cancel)
++	defer timer.Stop()
++	if err := p.nativeOpus.start(); err != context.Canceled {
++		t.Fatalf("got %v", err)
++	}
++	if p.nativeOpus.hlsOnly {
++		t.Fatal("failed admitted joint consumer silently fell back")
++	}
++}
++
++func TestNativeHLSFallbackDoesNotWaitForWebRTC(t *testing.T) {
++	p := fallbackProducer(t)
++	n := p.nativeOpus
++	started := time.Now()
++	if err := n.start(); err != nil {
++		t.Fatal(err)
++	}
++	if time.Since(started) > time.Second {
++		t.Fatal("HLS fallback waited for an unrequested consumer")
++	}
++	if !n.hlsOnly || n.cmd != nil {
++		t.Fatal("fallback launched a converter")
++	}
++	if err := n.finish(); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestNativeHLSFallbackRejectsLateOpus(t *testing.T) {
++	p := fallbackProducer(t)
++	if err := p.nativeOpus.start(); err != nil {
++		t.Fatal(err)
++	}
++	count := len(p.Receivers)
++	if _, err := p.GetTrack(p.Medias[1], p.Medias[1].Codecs[0]); err == nil {
++		t.Fatal("late Opus accepted after source start without its prefix")
++	}
++	if len(p.Receivers) != count {
++		t.Fatal("refused late track mutated receiver ownership")
++	}
++}
++
++func TestNativeHLSFallbackCancelledDoesNotStart(t *testing.T) {
++	p := fallbackProducer(t)
++	p.nativeOpus.cancel()
++	if err := p.nativeOpus.start(); err != context.Canceled {
++		t.Fatalf("got %v", err)
++	}
++}
++
++type admissionObservedContext struct {
++	context.Context
++	checked chan struct{}
++}
++
++func (c admissionObservedContext) Err() error {
++	err := c.Context.Err()
++	select {
++	case c.checked <- struct{}{}:
++	default:
++	}
++	return err
++}
++
++func TestNativeHLSFallbackCancellationWhileWaitingForAdmission(t *testing.T) {
++	p := fallbackProducer(t)
++	n := p.nativeOpus
++	checked := make(chan struct{}, 1)
++	n.ctx = admissionObservedContext{Context: n.ctx, checked: checked}
++	n.admission.Lock()
++	result := make(chan error, 1)
++	go func() { result <- n.start() }()
++	select {
++	case <-checked:
++	case <-time.After(time.Second):
++		n.admission.Unlock()
++		t.Fatal("start did not check cancellation")
++	}
++	n.cancel()
++	n.admission.Unlock()
++	select {
++	case err := <-result:
++		if err != context.Canceled {
++			t.Fatalf("cancelled queued source admitted: %v", err)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("queued source did not exit")
++	}
++}
 diff --git a/pkg/mpegts/native_opus.go b/pkg/mpegts/native_opus.go
 new file mode 100644
-index 0000000..54e7ebd
+index 0000000..91d38bb
 --- /dev/null
 +++ b/pkg/mpegts/native_opus.go
-@@ -0,0 +1,224 @@
+@@ -0,0 +1,267 @@
 +package mpegts
 +
 +import (
@@ -1608,22 +2051,30 @@ index 0000000..54e7ebd
 +// NativeOpusProfile declares joint, finite AV delivery. It is never inferred.
 +const NativeOpusProfile = "opus-source-clock-v1"
 +
++// NativeOpusHLSFallbackProfile explicitly permits AAC-only delivery when no
++// Opus receiver has been admitted at source start. The original profile is strict.
++const NativeOpusHLSFallbackProfile = "opus-source-clock-hls-fallback-v1"
++
 +type nativeOpus struct {
-+	domain        *core.PresentationClock
-+	releaseDomain func()
-+	codec         *core.Codec
-+	gate          *core.StartGate
-+	ctx           context.Context
-+	cancel        context.CancelFunc
-+	cmd           *exec.Cmd
-+	input         io.WriteCloser
-+	output        io.ReadCloser
-+	done          chan error
-+	mux           *Muxer
-+	pid           uint16
-+	once          sync.Once
-+	track         *core.Receiver
-+	clock         *core.SourceClock
++	admission        sync.Mutex
++	allowHLSFallback bool
++	started          bool
++	hlsOnly          bool
++	domain           *core.PresentationClock
++	releaseDomain    func()
++	codec            *core.Codec
++	gate             *core.StartGate
++	ctx              context.Context
++	cancel           context.CancelFunc
++	cmd              *exec.Cmd
++	input            io.WriteCloser
++	output           io.ReadCloser
++	done             chan error
++	mux              *Muxer
++	pid              uint16
++	once             sync.Once
++	track            *core.Receiver
++	clock            *core.SourceClock
 +}
 +
 +func (c *Producer) EnableNativeOpus() error {
@@ -1656,6 +2107,25 @@ index 0000000..54e7ebd
 +	return nil
 +}
 +func (n *nativeOpus) start() error {
++	if err := n.ctx.Err(); err != nil {
++		return err
++	}
++	if n.allowHLSFallback {
++		n.admission.Lock()
++		// Cancellation can arrive while GetTrack owns admission. A queued start
++		// must recheck it before committing an HLS-only plan without a gate wait.
++		if err := n.ctx.Err(); err != nil {
++			n.admission.Unlock()
++			return err
++		}
++		n.started = true
++		n.hlsOnly = n.track == nil
++		hlsOnly := n.hlsOnly
++		n.admission.Unlock()
++		if hlsOnly {
++			return nil
++		}
++	}
 +	select {
 +	case <-n.gate.Ready:
 +	case <-n.ctx.Done():
@@ -1701,6 +2171,9 @@ index 0000000..54e7ebd
 +	return err
 +}
 +func (n *nativeOpus) write(packet *rtp.Packet, source uint64) error {
++	if n.hlsOnly {
++		return nil // AAC still reaches its original receiver in Producer.deliver.
++	}
 +	var failure error
 +	if failure = n.input.(interface{ SetWriteDeadline(time.Time) error }).SetWriteDeadline(time.Now().Add(core.ProbeTimeout)); failure != nil {
 +		return failure
@@ -1756,6 +2229,9 @@ index 0000000..54e7ebd
 +	}
 +}
 +func (n *nativeOpus) finish() error {
++	if n.hlsOnly {
++		return nil
++	}
 +	if n.input == nil {
 +		return errors.New("native opus was not started")
 +	}
@@ -1770,6 +2246,16 @@ index 0000000..54e7ebd
 +		n.cancel()
 +		return errors.New("native opus drain expired")
 +	}
++}
++
++// EnableNativeOpusHLSFallback selects a separate, negotiated policy. The media
++// plan freezes before the first packet, not after a converter/readiness failure.
++func (c *Producer) EnableNativeOpusHLSFallback() error {
++	if err := c.EnableNativeOpus(); err != nil {
++		return err
++	}
++	c.nativeOpus.allowHLSFallback = true
++	return nil
 +}
 +func (n *nativeOpus) close() {
 +	n.once.Do(func() {
@@ -1980,7 +2466,7 @@ index 0000000..9d21303
 +	}
 +}
 diff --git a/pkg/mpegts/producer.go b/pkg/mpegts/producer.go
-index 14417bf..4af60f5 100644
+index 14417bf..382103a 100644
 --- a/pkg/mpegts/producer.go
 +++ b/pkg/mpegts/producer.go
 @@ -3,6 +3,8 @@ package mpegts
@@ -2009,8 +2495,17 @@ index 14417bf..4af60f5 100644
  }
  
  func Open(rd io.Reader) (*Producer, error) {
-@@ -35,30 +45,104 @@ func Open(rd io.Reader) (*Producer, error) {
+@@ -33,32 +43,113 @@ func Open(rd io.Reader) (*Producer, error) {
+ }
+ 
  func (c *Producer) GetTrack(media *core.Media, codec *core.Codec) (*core.Receiver, error) {
++	if n := c.nativeOpus; n != nil && n.allowHLSFallback {
++		n.admission.Lock()
++		defer n.admission.Unlock()
++		if n.started && n.hlsOnly && codec.Name == core.CodecOpus {
++			return nil, core.ErrSourceProfileFrozen
++		}
++	}
  	receiver, _ := c.Connection.GetTrack(media, codec)
  	receiver.ID = StreamType(codec)
 +	if c.OneShot {
@@ -2121,7 +2616,7 @@ index 14417bf..4af60f5 100644
  }
  
  func (c *Producer) probe() error {
-@@ -66,6 +150,7 @@ func (c *Producer) probe() error {
+@@ -66,6 +157,7 @@ func (c *Producer) probe() error {
  	defer c.rd.Reset()
  
  	rd := NewDemuxer()
@@ -2129,7 +2624,7 @@ index 14417bf..4af60f5 100644
  
  	// Strategy:
  	// 1. Wait packet with metadata, init other packets for wait
-@@ -175,3 +260,53 @@ func TimestampToRTP(rtp *rtp.Packet, codec *core.Codec) {
+@@ -175,3 +267,53 @@ func TimestampToRTP(rtp *rtp.Packet, codec *core.Codec) {
  	}
  	rtp.Timestamp = uint32(float64(rtp.Timestamp) * float64(codec.ClockRate) / ClockRate)
  }
@@ -2291,10 +2786,20 @@ index 0000000..d33dfc5
 +	}
 +}
 diff --git a/pkg/rtsp/client.go b/pkg/rtsp/client.go
-index c960732..27b10e5 100644
+index c960732..3312255 100644
 --- a/pkg/rtsp/client.go
 +++ b/pkg/rtsp/client.go
-@@ -191,9 +191,24 @@ func (c *Conn) Describe() error {
+@@ -92,6 +92,9 @@ func (c *Conn) Do(req *tcp.Request) (*tcp.Response, error) {
+ 	}
+ 
+ 	c.Fire(res)
++	if res.StatusCode == http.StatusConflict && res.Header.Get("X-Stream-Native-Error") == "profile-frozen-v1" {
++		return res, core.ErrSourceProfileFrozen
++	}
+ 
+ 	switch res.StatusCode {
+ 	case http.StatusOK:
+@@ -191,9 +194,24 @@ func (c *Conn) Describe() error {
  		}
  	}
  
@@ -2319,7 +2824,7 @@ index c960732..27b10e5 100644
  	if err != nil {
  		return err
  	}
-@@ -395,6 +410,15 @@ func (c *Conn) Teardown() (err error) {
+@@ -395,6 +413,15 @@ func (c *Conn) Teardown() (err error) {
  }
  
  func (c *Conn) Close() error {
@@ -2577,8 +3082,96 @@ index e6525d9..880f7eb 100644
  			handlerFunc = h264.RTPDepay(codec, handlerFunc)
  		case core.CodecH265:
  			handlerFunc = h265.RTPPay(c.PacketSize, handlerFunc)
+diff --git a/pkg/rtsp/native_profile_test.go b/pkg/rtsp/native_profile_test.go
+new file mode 100644
+index 0000000..441a48f
+--- /dev/null
++++ b/pkg/rtsp/native_profile_test.go
+@@ -0,0 +1,82 @@
++package rtsp
++
++import (
++	"bufio"
++	"errors"
++	"fmt"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/AlexxIT/go2rtc/pkg/tcp"
++	"io"
++	"net"
++	"net/url"
++	"testing"
++	"time"
++)
++
++func TestNativeProfileFrozenResponse(t *testing.T) {
++	for _, row := range []struct {
++		status, header string
++		frozen         bool
++	}{{"409 Conflict", "X-Stream-Native-Error: profile-frozen-v1\r\n", true}, {"409 Conflict", "", false}, {"400 Bad Request", "X-Stream-Native-Error: profile-frozen-v1\r\n", false}} {
++		t.Run(row.status+row.header, func(t *testing.T) {
++			client, server := net.Pipe()
++			defer client.Close()
++			done := make(chan struct{})
++			go func() {
++				defer close(done)
++				defer server.Close()
++				_, _ = tcp.ReadRequest(bufio.NewReader(server))
++				_, _ = fmt.Fprintf(server, "RTSP/1.0 %s\r\nCSeq: 1\r\n%s\r\n", row.status, row.header)
++			}()
++			c := &Conn{conn: client, reader: bufio.NewReader(client), auth: tcp.NewAuth(nil)}
++			u, _ := url.Parse("rtsp://127.0.0.1/test")
++			_, err := c.Do(&tcp.Request{Method: MethodDescribe, URL: u})
++			if errors.Is(err, core.ErrSourceProfileFrozen) != row.frozen {
++				t.Fatalf("unexpected response mapping: %v", err)
++			}
++			<-done
++		})
++	}
++}
++
++func TestNativeProfileRollbackPreservesResponseTransport(t *testing.T) {
++	client, server := net.Pipe()
++	defer client.Close()
++	defer server.Close()
++	c := NewServer(server)
++	c.state = StateSetup // Stop would close this transport.
++	media := &core.Media{Kind: core.KindVideo, Codecs: []*core.Codec{{Name: core.CodecH265, ClockRate: 90000}}}
++	receiver := core.NewReceiver(media, media.Codecs[0])
++	sender := core.NewSender(media, media.Codecs[0])
++	sender.Bind(receiver)
++	c.Senders = append(c.Senders, sender)
++	c.RollbackTracks()
++	if len(receiver.Senders()) != 0 {
++		t.Fatal("partial track still attached")
++	}
++	done := make(chan error, 1)
++	go func() {
++		err := c.WriteResponse(&tcp.Response{Status: "409 Conflict", Header: map[string][]string{"X-Stream-Native-Error": {"profile-frozen-v1"}}})
++		if err == nil {
++			err = c.Stop()
++		}
++		done <- err
++	}()
++	if err := client.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
++		t.Fatal(err)
++	}
++	response, err := tcp.ReadResponse(bufio.NewReader(client))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if response.StatusCode != 409 || response.Header.Get("X-Stream-Native-Error") != "profile-frozen-v1" {
++		t.Fatalf("wrong scoped response: %+v", response)
++	}
++	if err = <-done; err != nil {
++		t.Fatal(err)
++	}
++	var b [1]byte
++	if _, err = client.Read(b[:]); err != io.EOF {
++		t.Fatalf("transport not closed after refusal: %v", err)
++	}
++}
 diff --git a/pkg/rtsp/producer.go b/pkg/rtsp/producer.go
-index 3d818b6..94e8a91 100644
+index 3d818b6..dba9f83 100644
 --- a/pkg/rtsp/producer.go
 +++ b/pkg/rtsp/producer.go
 @@ -44,6 +44,19 @@ func (c *Conn) GetTrack(media *core.Media, codec *core.Codec) (*core.Receiver, e
@@ -2601,7 +3194,29 @@ index 3d818b6..94e8a91 100644
  	track.ID = channel
  	c.Receivers = append(c.Receivers, track)
  
-@@ -141,3 +154,6 @@ func (c *Conn) Reconnect() error {
+@@ -91,7 +104,9 @@ func (c *Conn) Start() (err error) {
+ 	}
+ }
+ 
+-func (c *Conn) Stop() (err error) {
++// RollbackTracks detaches failed admission without closing the RTSP transport.
++// The server owns sending the refusal and closing the transport afterwards.
++func (c *Conn) RollbackTracks() {
+ 	for _, receiver := range c.Receivers {
+ 		receiver.Close()
+ 	}
+@@ -99,6 +114,10 @@ func (c *Conn) Stop() (err error) {
+ 		sender.Close()
+ 	}
+ 
++}
++
++func (c *Conn) Stop() (err error) {
++	c.RollbackTracks()
+ 	c.stateMu.Lock()
+ 	if c.state != StateNone {
+ 		c.state = StateNone
+@@ -141,3 +160,6 @@ func (c *Conn) Reconnect() error {
  
  	return nil
  }

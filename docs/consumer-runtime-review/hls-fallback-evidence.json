@@ -1,0 +1,238 @@
+{
+  "status": "source-review-only-not-deployment",
+  "policy": {
+    "setting": "relay_hls_fallback",
+    "default": false,
+    "requires_native_opus": true,
+    "capability": "native-opus-hls-fallback-v1",
+    "source_profile": "opus-source-clock-hls-fallback-v1",
+    "strict_profile_unchanged": true,
+    "late_joint_admission_rejected_without_restart_or_alternative_transcoder": true
+  },
+  "regression": {
+    "original_readiness_failures": 2,
+    "unchanged_cancellation_pass": true,
+    "fallback_unit_cases": 6,
+    "scoped_RTSP_status_controls": 3,
+    "partial_admission_rollback_control": 1,
+    "real_RTSP_terminal_refusal_backchannel_modes": 2,
+    "RTSP_rollback_response_before_transport_close": true
+  },
+  "go": {
+    "extracted_paths_hash_verified": 56,
+    "selected_race_packages_passed": [
+      "pkg/mpegts",
+      "pkg/rtsp",
+      "pkg/webrtc",
+      "internal/streams",
+      "internal/rtsp"
+    ],
+    "full_upstream_CI_claimed": false
+  },
+  "python": {
+    "library_tests_passed": 5058,
+    "coverage_percent": 90.4,
+    "example_tests_passed": 224,
+    "optional_real_relay_tests_skipped": 8,
+    "mypy_library_files": 243,
+    "mypy_actual_HA_files": 15,
+    "ruff": true,
+    "codespell": true,
+    "pyright": true,
+    "pip_audit_known_vulnerabilities": 0,
+    "build_and_twine": true,
+    "pip_check": true
+  },
+  "retained_topology": {
+    "ll-hls-only": {
+      "HLS_packet_hashes_PTS_DTS_timebases_identical_to_previous_joint_baseline": true,
+      "nominal_input_duration_differences_from_baseline": 2,
+      "counts": {
+        "factory": 1,
+        "input_demux": 1,
+        "decrypt_feed": 8840
+      },
+      "late_opus_refusal": [
+        {
+          "type": "error",
+          "code": "go2rtc_webrtc_offer_failed"
+        }
+      ],
+      "complete_source_and_cleanup": true,
+      "rows": [
+        {
+          "hevc": 1783,
+          "aac": 1857
+        },
+        {
+          "hevc": 1783,
+          "aac": 1857
+        }
+      ],
+      "opus": {}
+    },
+    "nonll-hls-only": {
+      "HLS_packet_hashes_PTS_DTS_timebases_identical_to_previous_joint_baseline": true,
+      "nominal_input_duration_differences_from_baseline": 0,
+      "counts": {
+        "factory": 1,
+        "input_demux": 1,
+        "decrypt_feed": 8840
+      },
+      "late_opus_refusal": [
+        {
+          "type": "error",
+          "code": "go2rtc_webrtc_offer_failed"
+        }
+      ],
+      "complete_source_and_cleanup": true,
+      "rows": [
+        {
+          "hevc": 1783,
+          "aac": 1857
+        },
+        {
+          "hevc": 1783,
+          "aac": 1857
+        }
+      ],
+      "opus": {}
+    },
+    "ll-joint": {
+      "HLS_packet_hashes_PTS_DTS_timebases_identical_to_previous_joint_baseline": true,
+      "nominal_input_duration_differences_from_baseline": 2,
+      "counts": {
+        "factory": 1,
+        "input_demux": 1,
+        "decrypt_feed": 8840
+      },
+      "late_opus_refusal": null,
+      "complete_source_and_cleanup": true,
+      "rows": [
+        {
+          "hevc": 1783,
+          "aac": 1857
+        },
+        {
+          "hevc": 1783,
+          "aac": 1857
+        }
+      ],
+      "opus": {
+        "primary": {
+          "all_encoded_payloads_and_RTP_timestamps_identical_to_retained_strict_baseline": true,
+          "packets": 5943,
+          "current_converter_input_trace_claimed": false
+        },
+        "secondary": {
+          "all_encoded_payloads_and_RTP_timestamps_identical_to_retained_strict_baseline": true,
+          "packets": 5943,
+          "current_converter_input_trace_claimed": false
+        }
+      }
+    },
+    "nonll-joint": {
+      "HLS_packet_hashes_PTS_DTS_timebases_identical_to_previous_joint_baseline": true,
+      "nominal_input_duration_differences_from_baseline": 0,
+      "counts": {
+        "factory": 1,
+        "input_demux": 1,
+        "decrypt_feed": 8840
+      },
+      "late_opus_refusal": null,
+      "complete_source_and_cleanup": true,
+      "rows": [
+        {
+          "hevc": 1783,
+          "aac": 1857
+        },
+        {
+          "hevc": 1783,
+          "aac": 1857
+        }
+      ],
+      "opus": {
+        "primary": {
+          "all_encoded_payloads_and_RTP_timestamps_identical_to_retained_strict_baseline": true,
+          "packets": 5943,
+          "current_converter_input_trace_claimed": false
+        },
+        "secondary": {
+          "all_encoded_payloads_and_RTP_timestamps_identical_to_retained_strict_baseline": true,
+          "packets": 5943,
+          "current_converter_input_trace_claimed": false
+        }
+      }
+    }
+  },
+  "RTCP_mapping": {
+    "ll": {
+      "shared_cross_track_and_lens_RTCP_mapping": true,
+      "spread_seconds": 2.0682113245129585e-05,
+      "reports": {
+        "primary_video": 26,
+        "primary_audio": 26,
+        "secondary_video": 26,
+        "secondary_audio": 26
+      },
+      "physical_AV_sync_claimed": false
+    },
+    "nonll": {
+      "shared_cross_track_and_lens_RTCP_mapping": true,
+      "spread_seconds": 2.0346371456980705e-05,
+      "reports": {
+        "primary_video": 23,
+        "primary_audio": 23,
+        "secondary_video": 23,
+        "secondary_audio": 23
+      },
+      "physical_AV_sync_claimed": false
+    }
+  },
+  "limitations": {
+    "current_policy_requesting_browser_playback_verified": false,
+    "earlier_explicit_HLS_only_Windows_picture_and_audio_human_pass": true,
+    "HEVC_WebRTC_supported_in_that_Edge_session": false,
+    "physical_AV_sync_measured": false,
+    "current_converter_input_byte_trace_claimed": false,
+    "nominal_demux_packet_duration_equal_to_previous_run_claimed": false,
+    "production_or_live_camera_changes": false,
+    "maintained_dependency_release_claimed": false
+  },
+  "retained_failures": {
+    "concurrent_selected_webrtc_expired_cache_control_failed": true,
+    "serial_exact_extracted_selected_race_rerun_all_pass": true,
+    "initial_HLS_test_fixture_empty_peer_assertion_and_missing_public_session_close_corrected": true,
+    "initial_HTTP_auditor_resubscription_fixture_inappropriate_for_cold_two_lens_group": true
+  },
+  "review_follow_up": {
+    "reviewed_head": "508b92515e95c63e18060ad18d4731de2b23303d",
+    "finding": "Cancellation while producer start waits for admission was not rechecked before HLS-only admission",
+    "severity": "P2",
+    "deterministic_before_probe_failed": true,
+    "correction": "Recheck cancellation under admission lock before freezing the media plan",
+    "focused_race_controls_pass": true,
+    "independent_or_human_approval_claimed": false,
+    "fresh_retained_topology_cases_passed": 4,
+    "fresh_extracted_scoped_race_checks_pass": true,
+    "hosted_paho_compatibility": {
+      "hosted_dependency": "paho-mqtt 2.2.0",
+      "earlier_local_dependency": "paho-mqtt 2.1.0",
+      "cold_mypy_reproduced_two_errors_before_correction": true,
+      "cold_mypy_after_correction_pass": true,
+      "immutable_payload_snapshot_after_unchanged_64KiB_limit": true,
+      "ping_test_constructor_clock_replaces_removed_private_incoming_time_assignment": true,
+      "focused_tests_each_dependency": 13,
+      "full_Paho22_suite_passed": 5058,
+      "Paho22_coverage_percent": 90.4,
+      "no_dependency_version_pin_or_type_ignore_added": true
+    },
+    "codeql_cleanup_control": {
+      "finding": "Async cleanup performed inside assertion",
+      "correction": "Await cleanup before asserting its result",
+      "preexisting_main_branch_alerts_outside_this_diff": 2,
+      "suppression_or_alert_dismissal_added": false,
+      "cleanup_awaited_outside_assertion": true
+    }
+  }
+}

@@ -120,7 +120,7 @@ jobs:
         working-directory: consumer-go
         run: >-
           go test -p 2 -race -vet=off
-          ./pkg/webrtc ./pkg/rtsp ./pkg/mpegts ./internal/streams ./pkg/h265
+          ./pkg/webrtc ./pkg/rtsp ./pkg/mpegts ./internal/streams ./internal/rtsp ./pkg/h265
           -run 'TestNative|TestRTX|TestSource|TestOwned|TestFinite|TestNoReconnect|TestAggregation|TestMalformedAggregation'
           -count=1
 

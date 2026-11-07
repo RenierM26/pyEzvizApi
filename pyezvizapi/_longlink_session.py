@@ -280,7 +280,9 @@ class Channel99Session:
     def _receive(self, client: mqtt.Client, message: mqtt.MQTTMessage, key: bytes) -> None:
         if len(message.payload) > 65536:
             return
-        event = wire.decode_event_envelope(message.topic, message.payload, key, self.serial)
+        # Paho accepts mutable payloads too; snapshot only after the size guard.
+        payload = bytes(message.payload)
+        event = wire.decode_event_envelope(message.topic, payload, key, self.serial)
         domain, command = event["domain"], event["command"]
         if domain == 1000 and command == 1:
             interval = wire.control_keepalive(event["body"])

@@ -19,7 +19,7 @@ SERIAL = b"MOBILE:ys7:synthetic-user:synthetic-phone"
 KEY = bytes(range(16))
 
 
-def make_message(topic: str, payload: bytes) -> mqtt.MQTTMessage:
+def make_message(topic: str, payload: bytes | bytearray) -> mqtt.MQTTMessage:
     result = mqtt.MQTTMessage(topic=topic.encode())
     result.payload = payload
     return result
@@ -64,14 +64,16 @@ def test_diagnostics_exclude_endpoint_identity_and_credentials() -> None:
     assert "endpoint" not in snapshot
 
 
-def test_direct_event_delivery_does_not_publish_application_reply() -> None:
+@pytest.mark.parametrize("mutable_payload", [False, True])
+def test_direct_event_delivery_does_not_publish_application_reply(mutable_payload: bool) -> None:
     callback = Mock()
     client = Mock()
     body = b'{"ext":"synthetic,1,2,3,4","alert":"test"}'
     metadata = b'{"Seq":42,"CmdVer":"1.0"}'
+    encrypted = wire.encrypt(KEY, len(metadata).to_bytes(2, "big") + metadata + body)
     message = make_message(
         topic=f"/{SERIAL.decode()}/9000/1",
-        payload=wire.encrypt(KEY, len(metadata).to_bytes(2, "big") + metadata + body),
+        payload=bytearray(encrypted) if mutable_payload else encrypted,
     )
     session(callback)._receive(client, message, KEY)
     callback.assert_called_once_with(body)
@@ -174,12 +176,10 @@ def test_auth_rejection_is_fatal_only_for_current_credentials(monkeypatch, super
 
 
 def test_paho_adapter_changes_actual_ping_deadline(monkeypatch) -> None:
-
-
+    monkeypatch.setattr(mqtt, "time_func", lambda: 100)
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client._state = _ConnectionState.MQTT_CS_CONNECTED
     client._sock = Mock()
-    client._last_msg_in = client._last_msg_out = 100
     ping = Mock()
     monkeypatch.setattr(client, "_send_pingreq", ping)
     monkeypatch.setattr(mqtt, "time_func", lambda: 145)
@@ -190,3 +190,14 @@ def test_paho_adapter_changes_actual_ping_deadline(monkeypatch) -> None:
     client._check_keepalive()
     ping.assert_called_once()
     client._sock = None
+
+
+def test_oversized_mutable_payload_is_rejected_before_snapshot() -> None:
+    class OversizedPayload(bytearray):
+        def __bytes__(self) -> bytes:
+            raise AssertionError("Oversized payload must not be copied")
+
+    callback = Mock()
+    message = make_message(f"/{SERIAL.decode()}/9000/1", OversizedPayload(65537))
+    session(callback)._receive(Mock(), message, KEY)
+    callback.assert_not_called()

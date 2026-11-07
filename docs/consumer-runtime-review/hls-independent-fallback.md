@@ -37,6 +37,17 @@ cancelled it. A deterministic offline control holds admission, observes the
 initial context check, cancels the source, then releases admission. It fails on
 the original PR head and passes after this correction under the race detector.
 
+## Hosted Paho compatibility follow-up
+
+Hosted checks install Paho 2.2, while the earlier local environment used 2.1.
+Snapshot a received MQTT payload to immutable bytes only after the existing
+64 KiB guard, so both documented payload types reach the envelope decoder with
+the same bounded contract. Initialize the ping-deadline test clock before
+constructing the Paho client instead of assigning a removed incoming-time field.
+Offline controls cover both dependency versions, bytearray event delivery and
+rejection of oversized mutable payloads before copying. Wire formats, negotiated
+keepalive values and the payload limit are unchanged.
+
 ## Opt-in and negotiation
 
 The example config data adds `relay_hls_fallback: true`, **default false**, only

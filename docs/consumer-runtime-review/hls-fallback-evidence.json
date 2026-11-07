@@ -27,8 +27,8 @@
     "full_upstream_CI_claimed": false
   },
   "python": {
-    "library_tests_passed": 5056,
-    "coverage_percent": 90.39,
+    "library_tests_passed": 5058,
+    "coverage_percent": 90.4,
     "example_tests_passed": 224,
     "optional_real_relay_tests_skipped": 8,
     "mypy_library_files": 243,
@@ -211,6 +211,18 @@
     "focused_race_controls_pass": true,
     "independent_or_human_approval_claimed": false,
     "fresh_retained_topology_cases_passed": 4,
-    "fresh_extracted_scoped_race_checks_pass": true
+    "fresh_extracted_scoped_race_checks_pass": true,
+    "hosted_paho_compatibility": {
+      "hosted_dependency": "paho-mqtt 2.2.0",
+      "earlier_local_dependency": "paho-mqtt 2.1.0",
+      "cold_mypy_reproduced_two_errors_before_correction": true,
+      "cold_mypy_after_correction_pass": true,
+      "immutable_payload_snapshot_after_unchanged_64KiB_limit": true,
+      "ping_test_constructor_clock_replaces_removed_private_incoming_time_assignment": true,
+      "focused_tests_each_dependency": 13,
+      "full_Paho22_suite_passed": 5058,
+      "Paho22_coverage_percent": 90.4,
+      "no_dependency_version_pin_or_type_ignore_added": true
+    }
   }
 }

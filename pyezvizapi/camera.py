@@ -203,7 +203,7 @@ class EzvizCamera:
     def _resource_route(
         self,
     ) -> tuple[str, str, str | None, str | None]:
-        """Return resource id, local index, stream token, and optional type."""
+        """Return feature resource identifier, local index, token, and type."""
         resource_infos = self._device.get("resourceInfos") or []
         info: dict[str, Any] | None = None
         if isinstance(resource_infos, list):
@@ -219,7 +219,13 @@ class EzvizCamera:
         lock_type: str | None = None
 
         if info:
-            if isinstance(info.get("resourceId"), str):
+            # Feature action URLs use the namespace (e.g. Video/DoorLock),
+            # not the opaque resourceId used by resource management APIs.
+            identifier = info.get("resourceIdentifier")
+            if isinstance(identifier, str) and identifier:
+                resource_id = identifier
+            elif isinstance(info.get("resourceId"), str):
+                # Preserve legacy callers supplying the namespace in resourceId.
                 resource_id = info["resourceId"]
             local_idx_value = info.get("localIndex")
             if isinstance(local_idx_value, (int, str)):

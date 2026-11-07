@@ -1,4 +1,5 @@
 """Malformed device/envelope regression probes; no network calls."""
+# ruff: noqa: SLF001 -- these tests exercise private API parsing boundaries.
 import logging
 from unittest.mock import Mock
 

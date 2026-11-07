@@ -23,7 +23,7 @@ import time
 from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
 
-from ._cli_arguments import _parse_args, _parse_duration_seconds  # noqa: F401 -- CLI compatibility hooks; codeql[py/unused-import] lgtm[py/unused-import]
+from . import _cli_arguments
 from ._token_store import save_private_token
 from .camera import EzvizCamera
 from .cas import CasDeviceSession, EzvizCAS
@@ -135,6 +135,11 @@ class StreamProxyHTTPServer(ThreadingHTTPServer):
 
     daemon_threads = True
     block_on_close = False
+
+
+# Historical CLI parsing hooks retain their original implementation objects.
+_parse_args = _cli_arguments._parse_args  # noqa: SLF001
+_parse_duration_seconds = _cli_arguments._parse_duration_seconds  # noqa: SLF001
 
 
 def _setup_logging(debug: bool) -> None:

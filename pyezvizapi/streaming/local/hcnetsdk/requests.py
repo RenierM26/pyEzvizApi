@@ -9,7 +9,9 @@ from datetime import date as _Staticdate, datetime as _Staticdatetime
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkTime as _StaticHcNetSdkTime
+from pyezvizapi.streaming.local.hcnetsdk.protocol_types.playback import (
+    HcNetSdkTime as _StaticHcNetSdkTime,
+)
 
 if TYPE_CHECKING:
     import pyezvizapi._typing.hcnetsdk as _owner_types

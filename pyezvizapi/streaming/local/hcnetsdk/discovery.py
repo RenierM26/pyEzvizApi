@@ -7,7 +7,7 @@ from collections.abc import Mapping as _StaticMapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
-from pyezvizapi.streaming.local.hcnetsdk.models_session import (
+from pyezvizapi.streaming.local.hcnetsdk.protocol_types.preview import (
     EzvizLocalSdkFrame as _StaticEzvizLocalSdkFrame,
 )
 

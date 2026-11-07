@@ -11,6 +11,7 @@
 | `protocol_types/controls.py`, `discovery.py` | Control and discovery request values, not network execution |
 
 Protocol leaves have an acyclic dependency graph and never import `api.py` or
-`protocol.py` back. Former `models_*` and `serialization.py` paths retain object
-aliases for compatibility. Mutable operational hooks still use explicit owner
-context; pure value definitions do not need that owner.
+`protocol.py` back. The original flat public modules and named private helpers
+retain their compatibility aliases; redundant interim facades are removed.
+Mutable operational hooks still use explicit owner context; pure value
+definitions do not need that owner.

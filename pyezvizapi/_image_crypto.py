@@ -7,8 +7,8 @@ import logging
 
 from Crypto.Cipher import AES
 
-from .constants import HIK_ENCRYPTION_HEADER
-from .exceptions import PyEzvizError
+from pyezvizapi.constants import HIK_ENCRYPTION_HEADER
+from pyezvizapi.exceptions import PyEzvizError
 
 _LOGGER = logging.getLogger("pyezvizapi.utils")
 

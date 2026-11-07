@@ -15,11 +15,11 @@ import subprocess
 from tempfile import TemporaryFile
 from typing import TYPE_CHECKING, Any, BinaryIO, cast
 
-from .clip import ClipOptions
-from .exceptions import PyEzvizError
+from pyezvizapi.clip import ClipOptions
+from pyezvizapi.exceptions import PyEzvizError
 
 if TYPE_CHECKING:
-    from .client import EzvizClient
+    from pyezvizapi.client import EzvizClient
 
 MAX_SAMPLE_BYTES = 16 * 1024 * 1024
 MAX_SAMPLE_PACKETS = 4096

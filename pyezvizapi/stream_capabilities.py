@@ -13,14 +13,10 @@ import math
 import ssl
 from typing import Any
 
-from .exceptions import PyEzvizError
-from .hcnetsdk import (
-    HcNetSdkLanEndpoint,
-    HcNetSdkLoginCandidate,
-    discover_hcnetsdk_stream_details_for_login,
-)
-from .hcnetsdk_parameters import normalize_hcnetsdk_parameters
-from .stream_sample import inspect_media_sample, validate_media_sample
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.hcnetsdk import HcNetSdkLanEndpoint, HcNetSdkLoginCandidate, discover_hcnetsdk_stream_details_for_login
+from pyezvizapi.hcnetsdk_parameters import normalize_hcnetsdk_parameters
+from pyezvizapi.stream_sample import inspect_media_sample, validate_media_sample
 
 MAX_FLEET_TARGETS = 64
 MAX_FLEET_SAMPLE_BYTES = 64 * 1024 * 1024

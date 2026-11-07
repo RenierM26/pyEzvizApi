@@ -19,9 +19,9 @@ from Crypto.Cipher import AES
 from cryptography import x509
 import xmltodict
 
-from ._token import validate_feature_code
-from .constants import FEATURE_CODE, XOR_KEY
-from .exceptions import InvalidHost, PyEzvizError
+from pyezvizapi._token import validate_feature_code
+from pyezvizapi.constants import FEATURE_CODE, XOR_KEY
+from pyezvizapi.exceptions import InvalidHost, PyEzvizError
 
 _LOGGER = logging.getLogger(__name__)
 

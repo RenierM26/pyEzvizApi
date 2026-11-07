@@ -19,20 +19,10 @@ from threading import Event, Lock
 import time
 from typing import Any
 
-from .exceptions import PyEzvizError
-from .native_access import self_contained_idr
-from .native_completion import NativeMediaCompletion
-from .native_stream import (
-    _POLL_SECONDS,
-    NativeMpegTsStream,
-    NativePacketStream,
-    NativeSourceClock,
-    NativeStreamClosed,
-    NativeStreamOptions,
-    _Cancelled,
-    _PsInput,
-    _TsOutput,
-)
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.native_access import self_contained_idr
+from pyezvizapi.native_completion import NativeMediaCompletion
+from pyezvizapi.native_stream import _POLL_SECONDS, NativeMpegTsStream, NativePacketStream, NativeSourceClock, NativeStreamClosed, NativeStreamOptions, _Cancelled, _PsInput, _TsOutput
 
 
 def _no_source() -> NativePacketStream:

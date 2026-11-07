@@ -22,14 +22,14 @@ from threading import BoundedSemaphore, Event, Lock, Thread, current_thread
 import time
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
-from .clip import AutoClipSource
-from .exceptions import PyEzvizError
-from .media import MediaPacket
-from .native_completion import NativeMediaCompletion, NativeTrackCompletion
-from .native_ps import MAX_PENDING_PS_BYTES, NativePsTransform
+from pyezvizapi.clip import AutoClipSource
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.media import MediaPacket
+from pyezvizapi.native_completion import NativeMediaCompletion, NativeTrackCompletion
+from pyezvizapi.native_ps import MAX_PENDING_PS_BYTES, NativePsTransform
 
 if TYPE_CHECKING:
-    from .client import EzvizClient
+    from pyezvizapi.client import EzvizClient
 
 IO_CHUNK_BYTES = 65536
 OUTPUT_QUEUE_CHUNKS = 4

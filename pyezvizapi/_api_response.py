@@ -9,7 +9,7 @@ from typing import Any
 
 import requests
 
-from .exceptions import PyEzvizError
+from pyezvizapi.exceptions import PyEzvizError
 
 JsonDict = dict[str, Any]
 

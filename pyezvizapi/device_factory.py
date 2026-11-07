@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from .camera import EzvizCamera
-from .light_bulb import EzvizLightBulb
-from .smart_plug import EzvizSmartPlug
+from pyezvizapi.camera import EzvizCamera
+from pyezvizapi.light_bulb import EzvizLightBulb
+from pyezvizapi.smart_plug import EzvizSmartPlug
 
 
 def camera_status(

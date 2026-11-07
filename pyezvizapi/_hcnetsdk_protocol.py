@@ -12,9 +12,9 @@ import ipaddress
 import json
 from typing import Any
 
-from .exceptions import PyEzvizError
-from .hcnetsdk_parameters import HcNetSdkConfiguredMedia, normalize_hcnetsdk_parameters
-from .stream_header import EzvizStreamHeader, stream_header_from_preview
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.hcnetsdk_parameters import HcNetSdkConfiguredMedia, normalize_hcnetsdk_parameters
+from pyezvizapi.stream_header import EzvizStreamHeader, stream_header_from_preview
 
 HCNETSDK_DEFAULT_SERVER_PORT = 8000
 

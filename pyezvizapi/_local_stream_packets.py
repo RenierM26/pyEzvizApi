@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from .exceptions import PyEzvizError
-from .rtp import RtpPacket, RtpRouteProfile, RtpStreamDescriptor, parse_rtp_packet
-from .stream_media import ANNEX_B_LONG_START_CODE, MPEG_START_CODE_PREFIX
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.rtp import RtpPacket, RtpRouteProfile, RtpStreamDescriptor, parse_rtp_packet
+from pyezvizapi.stream_media import ANNEX_B_LONG_START_CODE, MPEG_START_CODE_PREFIX
 
 
 @dataclass(frozen=True)

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from ._stream import _decrypt_hikvision_ps_video_packets, _MpegPsVideoDecryptState
-from .exceptions import PyEzvizError
-from .stream_media import mpeg_ps_complete_prefix_length
+from pyezvizapi._stream import _decrypt_hikvision_ps_video_packets, _MpegPsVideoDecryptState
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.stream_media import mpeg_ps_complete_prefix_length
 
 MAX_PENDING_PS_BYTES = 1024 * 1024
 _PS_START = b"\x00\x00\x01"

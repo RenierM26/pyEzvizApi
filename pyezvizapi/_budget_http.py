@@ -16,9 +16,9 @@ from typing import Any
 import requests
 from requests.cookies import RequestsCookieJar
 
-from ._http_transport import isolated_session
-from ._request_deadline import remaining_request_budget
-from .exceptions import PyEzvizError
+from pyezvizapi._http_transport import isolated_session
+from pyezvizapi._request_deadline import remaining_request_budget
+from pyezvizapi.exceptions import PyEzvizError
 
 MAX_BOOTSTRAP_BODY_BYTES = 8 * 1024 * 1024
 _IDLE_SECONDS = 0.25

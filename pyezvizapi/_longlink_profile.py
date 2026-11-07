@@ -5,11 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, MutableMapping
 from typing import Any, Literal
 
-from .constants import (
-    ANDROID_PROFILE,
-    WEB_PROFILE,
-    HttpProfile,
-)
+from pyezvizapi.constants import ANDROID_PROFILE, WEB_PROFILE, HttpProfile
 
 
 def profile_for_token(token: Mapping[str, Any]) -> HttpProfile:

@@ -18,7 +18,7 @@ import time
 from types import MappingProxyType
 from typing import Any, Literal, Protocol, TypedDict, cast, runtime_checkable
 
-from .exceptions import PyEzvizError
+from pyezvizapi.exceptions import PyEzvizError
 
 MediaOutputFormat = Literal["mpegps", "mpegts"]
 MediaMetadataValue = str | int | float | bool | None

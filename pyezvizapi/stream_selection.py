@@ -13,32 +13,17 @@ from threading import Lock
 import time
 from typing import Any
 
-from ._local_stream import _NonemptyLocalMediaStream
-from .clip import AutoClipSource, CloudClipSource, LocalSdkClipSource, LocalSdkEcdhClipSource
-from .cloud_stream import open_cloud_stream
-from .exceptions import (
-    EzvizLocalSdkDeadlineExpired,
-    EzvizLocalSdkStreamClosed,
-    EzvizNoMediaError,
-    EzvizUnsupportedMediaError,
-    PyEzvizError,
-)
-from .hcnetsdk import HcNetSdkLanEndpoint
-from .local_stream_ecdh import (
-    _BoundedEcdhMediaStream,
-    local_ecdh_media_packet_source,
-    open_local_sdk_ecdh_stream_from_client,
-)
-from .local_stream_transport import (
-    fresh_local_sdk_receiver_port as fresh_receiver_port,
-    get_local_sdk_stream_credentials_from_client,
-    local_media_packet_source,
-    open_local_sdk_stream_from_client,
-)
-from .media import CaptureLimits, MediaPacket, MediaPacketSource
-from .stream_discovery import LocalStreamDiscovery
-from .stream_header import EzvizStreamHeader
-from .stream_transport import vtm_media_packet_source
+from pyezvizapi._local_stream import _NonemptyLocalMediaStream
+from pyezvizapi.clip import AutoClipSource, CloudClipSource, LocalSdkClipSource, LocalSdkEcdhClipSource
+from pyezvizapi.cloud_stream import open_cloud_stream
+from pyezvizapi.exceptions import EzvizLocalSdkDeadlineExpired, EzvizLocalSdkStreamClosed, EzvizNoMediaError, EzvizUnsupportedMediaError, PyEzvizError
+from pyezvizapi.hcnetsdk import HcNetSdkLanEndpoint
+from pyezvizapi.local_stream_ecdh import _BoundedEcdhMediaStream, local_ecdh_media_packet_source, open_local_sdk_ecdh_stream_from_client
+from pyezvizapi.local_stream_transport import fresh_local_sdk_receiver_port as fresh_receiver_port, get_local_sdk_stream_credentials_from_client, local_media_packet_source, open_local_sdk_stream_from_client
+from pyezvizapi.media import CaptureLimits, MediaPacket, MediaPacketSource
+from pyezvizapi.stream_discovery import LocalStreamDiscovery
+from pyezvizapi.stream_header import EzvizStreamHeader
+from pyezvizapi.stream_transport import vtm_media_packet_source
 
 type SelectedClipSource = LocalSdkClipSource | LocalSdkEcdhClipSource | CloudClipSource
 

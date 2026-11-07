@@ -12,8 +12,8 @@ import hashlib
 import secrets
 from typing import Any, Protocol
 
-from . import _longlink as wire
-from .exceptions import EzvizPushFatalError
+from pyezvizapi import _longlink as wire
+from pyezvizapi.exceptions import EzvizPushFatalError
 
 
 class Exchange(Protocol):

@@ -9,8 +9,8 @@ import subprocess
 from threading import Event, Lock, Thread
 from typing import Any, BinaryIO, Literal, cast
 
-from .exceptions import PyEzvizError
-from .rtp import RtpAacStream
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.rtp import RtpAacStream
 
 FFMPEG_IO_CHUNK_SIZE = 65536
 FFMPEG_STOP_TIMEOUT_SECONDS = 2.0

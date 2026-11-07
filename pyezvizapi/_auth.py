@@ -10,14 +10,14 @@ from typing import Any
 
 import requests
 
-from . import _http_transport
-from ._api_response import meta_code, object_section, parse_json, response_summary
-from ._budget_http import budgeted_http_call
-from ._longlink_profile import profile_for_token, synchronize_http_headers
-from ._token import validate_feature_code
-from .api_endpoints import API_ENDPOINT_REFRESH_SESSION_ID, API_ENDPOINT_SERVER_INFO
-from .constants import FEATURE_CODE
-from .exceptions import EzvizAuthTokenExpired, HTTPError, PyEzvizError
+from pyezvizapi import _http_transport
+from pyezvizapi._api_response import meta_code, object_section, parse_json, response_summary
+from pyezvizapi._budget_http import budgeted_http_call
+from pyezvizapi._longlink_profile import profile_for_token, synchronize_http_headers
+from pyezvizapi._token import validate_feature_code
+from pyezvizapi.api_endpoints import API_ENDPOINT_REFRESH_SESSION_ID, API_ENDPOINT_SERVER_INFO
+from pyezvizapi.constants import FEATURE_CODE
+from pyezvizapi.exceptions import EzvizAuthTokenExpired, HTTPError, PyEzvizError
 
 # Older callers and MQTT retain this helper import as the same object.
 isolated_session = _http_transport.isolated_session

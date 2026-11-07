@@ -10,11 +10,7 @@ from typing import Literal
 
 from Crypto.Cipher import AES
 
-from .exceptions import (
-    EzvizUnsupportedMediaError,
-    PyEzvizError,
-    UnsupportedRtpVideoCodecError,
-)
+from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError, UnsupportedRtpVideoCodecError
 
 ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
 MPEG_VIDEO_START_CODE_PREFIX = b"\x00\x00\x01"

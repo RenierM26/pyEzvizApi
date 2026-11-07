@@ -7,10 +7,10 @@ from fractions import Fraction
 from heapq import merge
 from itertools import chain, groupby
 
-from .app_timing import AppPlaybackClock, AppTimedFrame
-from .exceptions import PyEzvizError
-from .rtp import ANNEX_B_START_CODE, RtpAacStream, rtp_nal_units_have_vcl
-from .rtp_timing import _audio_events, _pack_header, _pes, _program_stream_map
+from pyezvizapi.app_timing import AppPlaybackClock, AppTimedFrame
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.rtp import ANNEX_B_START_CODE, RtpAacStream, rtp_nal_units_have_vcl
+from pyezvizapi.rtp_timing import _audio_events, _pack_header, _pes, _program_stream_map
 
 _CHUNK_BYTES = 60_000
 _RTP_WRAP = 1 << 32

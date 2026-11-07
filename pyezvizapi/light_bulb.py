@@ -10,11 +10,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._device_payload import local_ip_address, switch_values
-from .constants import DeviceSwitchType
-from .exceptions import PyEzvizError
-from .models import EzvizDeviceRecord
-from .utils import fetch_nested_value
+from pyezvizapi._device_payload import local_ip_address, switch_values
+from pyezvizapi.constants import DeviceSwitchType
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.models import EzvizDeviceRecord
+from pyezvizapi.utils import fetch_nested_value
 
 
 class EzvizLightBulb:

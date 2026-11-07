@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from .exceptions import PyEzvizError
-from .rtp import parse_rtp_packet, rtp_payload
-from .stream_media import MPEG_START_CODE_PREFIX, _is_mpeg_ps_packet_start_id
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.rtp import parse_rtp_packet, rtp_payload
+from pyezvizapi.stream_media import MPEG_START_CODE_PREFIX, _is_mpeg_ps_packet_start_id
 
 _LEGACY_PS_EVIDENCE_PACKETS = 8
 

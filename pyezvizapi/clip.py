@@ -7,15 +7,11 @@ from dataclasses import dataclass, field
 import math
 from typing import Any, Literal
 
-from .constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, MAX_RETRIES
-from .exceptions import PyEzvizError
-from .local_stream_transport import (
-    EzvizLocalSdkCredentials,
-    HcNetSdkCommandPortGeneratedMultiSocketPlan,
-    HcNetSdkCommandPortMultiSocketPlan,
-)
-from .media import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
-from .stream_discovery import LocalStreamDiscoveryCache
+from pyezvizapi.constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, MAX_RETRIES
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.local_stream_transport import EzvizLocalSdkCredentials, HcNetSdkCommandPortGeneratedMultiSocketPlan, HcNetSdkCommandPortMultiSocketPlan
+from pyezvizapi.media import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
+from pyezvizapi.stream_discovery import LocalStreamDiscoveryCache
 
 ClipSource = Literal["auto", "local-sdk", "local-sdk-ecdh", "hcnetsdk-command-port", "cloud"]
 ClipOutputFormat = Literal["mpegps", "mpegts"]

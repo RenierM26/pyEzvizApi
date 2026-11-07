@@ -6,8 +6,8 @@ from hashlib import sha256
 import json
 from typing import Any
 
-from .exceptions import PyEzvizError
-from .utils import deep_merge
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.utils import deep_merge
 
 MAX_PAGELIST_PAGES = 1000
 

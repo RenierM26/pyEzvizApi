@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 import re
 
-from .native_ps import MAX_PENDING_PS_BYTES
+from pyezvizapi.native_ps import MAX_PENDING_PS_BYTES
 
 _START = re.compile(b"\x00\x00(?:\x00)?\x01")
 _PREFIX_BYTES = 256

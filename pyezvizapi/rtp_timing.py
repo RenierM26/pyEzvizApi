@@ -7,15 +7,8 @@ from dataclasses import dataclass, field
 from heapq import merge
 from itertools import chain, groupby, tee
 
-from .exceptions import EzvizUnsupportedMediaError, PyEzvizError
-from .rtp import (
-    ANNEX_B_START_CODE,
-    RtpAacStream,
-    RtpVideoCodec,
-    _aac_timestamp_delta_is_supported,
-    _rtp_nal_starts_picture,
-    rtp_nal_units_have_vcl,
-)
+from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
+from pyezvizapi.rtp import ANNEX_B_START_CODE, RtpAacStream, RtpVideoCodec, _aac_timestamp_delta_is_supported, _rtp_nal_starts_picture, rtp_nal_units_have_vcl
 
 _PES_CHUNK_BYTES = 60_000
 _RTP_VIDEO_CLOCK = 90_000

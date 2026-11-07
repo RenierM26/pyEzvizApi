@@ -7,8 +7,8 @@ import math
 import time
 from typing import Any, Literal
 
-from ._local_stream_protocol import LocalSdkProtocolDetector
-from .exceptions import EzvizLocalSdkDeadlineExpired
+from pyezvizapi._local_stream_protocol import LocalSdkProtocolDetector
+from pyezvizapi.exceptions import EzvizLocalSdkDeadlineExpired
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ def probe_local_sdk_stream_from_client(
     """
     # The probe opens an ECDH-requested session; the shared detector has no
     # dependency on the ECDH transport or public probe module.
-    from .local_stream_ecdh import open_local_sdk_ecdh_stream_from_client  # noqa: PLC0415
+    from pyezvizapi.local_stream_ecdh import open_local_sdk_ecdh_stream_from_client
 
     if not math.isfinite(duration_seconds) or duration_seconds <= 0:
         raise ValueError("duration_seconds must be positive and finite")

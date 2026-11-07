@@ -7,7 +7,7 @@ import logging
 from threading import Event, Lock, Thread, current_thread
 from typing import Any, Protocol
 
-from .exceptions import EzvizPushFatalError
+from pyezvizapi.exceptions import EzvizPushFatalError
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -1,9 +1,5 @@
 """Public read-only camera discovery exports; implementation lives with HCNetSDK."""
 
-from .hcnetsdk import (
-                       HcNetSdkStreamDetails,
-                       discover_hcnetsdk_stream_details,
-                       discover_hcnetsdk_stream_details_for_login,
-)
+from pyezvizapi.hcnetsdk import HcNetSdkStreamDetails, discover_hcnetsdk_stream_details, discover_hcnetsdk_stream_details_for_login
 
 __all__ = ["HcNetSdkStreamDetails", "discover_hcnetsdk_stream_details", "discover_hcnetsdk_stream_details_for_login"]

@@ -9,8 +9,8 @@ import ipaddress
 import re
 from typing import Any, NotRequired, TypedDict
 
-from .constants import FEATURE_CODE, PROFILE
-from .exceptions import EzvizAuthTokenExpired, PyEzvizError
+from pyezvizapi.constants import FEATURE_CODE, PROFILE
+from pyezvizapi.exceptions import EzvizAuthTokenExpired, PyEzvizError
 
 
 class ServiceUrls(TypedDict):

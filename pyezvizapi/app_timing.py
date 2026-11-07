@@ -12,9 +12,9 @@ from itertools import chain
 import subprocess
 from typing import BinaryIO, Literal
 
-from .exceptions import PyEzvizError
-from .remux import copy_remuxed_output, open_mpegts_remux_process
-from .rtp_timing import _mpeg_crc32, _pack_header, _pes
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.remux import copy_remuxed_output, open_mpegts_remux_process
+from pyezvizapi.rtp_timing import _mpeg_crc32, _pack_header, _pes
 
 _PES_CHUNK_BYTES = 60_000
 _TICKS_PER_MS = 90

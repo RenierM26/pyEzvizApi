@@ -24,193 +24,30 @@ import zlib
 
 import requests
 
-from . import _api_response, device_factory
-from ._auth import refresh_credentials
-from ._budget_http import budgeted_http_call
-from ._longlink_profile import (
-    current_session_header,
-    profile_for_token,
-    recreated_session_header_for_token,
-    session_header_for_token,
-    synchronize_http_headers,
-)
-from ._pagelist import collect_pagelist
-from ._request_deadline import bounded_request_timeout, request_budget_lock
-from ._token import (
-    ClientToken as ClientToken,  # noqa: PLC0414 - public type export
-    validate_feature_code,
-)
-from .api_endpoints import (
-    API_ENDPOINT_2FA_VALIDATE_POST_AUTH,
-    API_ENDPOINT_ALARM_DEVICE_CHIME,
-    API_ENDPOINT_ALARM_GET_WHISTLE_STATUS_BY_CHANNEL,
-    API_ENDPOINT_ALARM_GET_WHISTLE_STATUS_BY_DEVICE,
-    API_ENDPOINT_ALARM_SET_CHANNEL_WHISTLE,
-    API_ENDPOINT_ALARM_SET_DEVICE_WHISTLE,
-    API_ENDPOINT_ALARM_SOUND,
-    API_ENDPOINT_ALARM_STOP_WHISTLE,
-    API_ENDPOINT_ALARMINFO_GET,
-    API_ENDPOINT_AUTOUPGRADE_SWITCH,
-    API_ENDPOINT_CALLING_NOTIFY,
-    API_ENDPOINT_CAM_AUTH_CODE,
-    API_ENDPOINT_CAM_ENCRYPTKEY,
-    API_ENDPOINT_CAMERA_TICKET_INFO,
-    API_ENDPOINT_CANCEL_ALARM,
-    API_ENDPOINT_CHANGE_DEFENCE_STATUS,
-    API_ENDPOINT_CLOUD_VIDEO_DETAILS,
-    API_ENDPOINT_CLOUD_VIDEOS_LIST,
-    API_ENDPOINT_CREATE_PANORAMIC,
-    API_ENDPOINT_DETECTION_SENSIBILITY,
-    API_ENDPOINT_DETECTION_SENSIBILITY_GET,
-    API_ENDPOINT_DEVCONFIG_BASE,
-    API_ENDPOINT_DEVCONFIG_BY_KEY,
-    API_ENDPOINT_DEVCONFIG_MOTOR,
-    API_ENDPOINT_DEVCONFIG_OP,
-    API_ENDPOINT_DEVCONFIG_SECURITY_ACTIVATE,
-    API_ENDPOINT_DEVCONFIG_SECURITY_CHALLENGE,
-    API_ENDPOINT_DEVICE_ACCESSORY_LINK,
-    API_ENDPOINT_DEVICE_BASICS,
-    API_ENDPOINT_DEVICE_EMAIL_ALERT,
-    API_ENDPOINT_DEVICE_STORAGE_STATUS,
-    API_ENDPOINT_DEVICE_SWITCH_STATUS_LEGACY,
-    API_ENDPOINT_DEVICE_SYS_OPERATION,
-    API_ENDPOINT_DEVICE_UPDATE_NAME,
-    API_ENDPOINT_DEVICES,
-    API_ENDPOINT_DEVICES_ASSOCIATION_LINKED_IPC,
-    API_ENDPOINT_DEVICES_AUTHENTICATE,
-    API_ENDPOINT_DEVICES_ENCRYPTKEY_BATCH,
-    API_ENDPOINT_DEVICES_LOC,
-    API_ENDPOINT_DEVICES_P2P_INFO,
-    API_ENDPOINT_DEVICES_SET_SWITCH_ENABLE,
-    API_ENDPOINT_DO_NOT_DISTURB,
-    API_ENDPOINT_DOORLOCK_USERS,
-    API_ENDPOINT_FEEDBACK,
-    API_ENDPOINT_GROUP_DEFENCE_MODE,
-    API_ENDPOINT_INTELLIGENT_APP,
-    API_ENDPOINT_IOT_ACTION,
-    API_ENDPOINT_IOT_FEATURE,
-    API_ENDPOINT_IOT_FEATURE_PRODUCT_VOICE_CONFIG,
-    API_ENDPOINT_IOT_VIRTUAL_BIND,
-    API_ENDPOINT_LOGIN,
-    API_ENDPOINT_LOGOUT,
-    API_ENDPOINT_MANAGED_DEVICE_BASE,
-    API_ENDPOINT_OFFLINE_NOTIFY,
-    API_ENDPOINT_OSD,
-    API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
-    API_ENDPOINT_PAGELIST,
-    API_ENDPOINT_PTZCONTROL,
-    API_ENDPOINT_REMOTE_LOCK,
-    API_ENDPOINT_REMOTE_UNBIND_PROGRESS,
-    API_ENDPOINT_REMOTE_UNLOCK,
-    API_ENDPOINT_RETURN_PANORAMIC,
-    API_ENDPOINT_SCD_APP_DEVICE_ADD,
-    API_ENDPOINT_SDCARD_BLACK_LEVEL,
-    API_ENDPOINT_SEND_CODE,
-    API_ENDPOINT_SENSITIVITY,
-    API_ENDPOINT_SERVER_INFO,
-    API_ENDPOINT_SET_DEFENCE_SCHEDULE,
-    API_ENDPOINT_SET_LUMINANCE,
-    API_ENDPOINT_SHARE_ACCEPT,
-    API_ENDPOINT_SHARE_QUIT,
-    API_ENDPOINT_SMARTHOME_OUTLET_LOG,
-    API_ENDPOINT_SPECIAL_BIZS_A1S,
-    API_ENDPOINT_SPECIAL_BIZS_V1_BATTERY,
-    API_ENDPOINT_SPECIAL_BIZS_VOICES,
-    API_ENDPOINT_STREAMING_RECORDS,
-    API_ENDPOINT_STREAMING_RECORDS_COMMON,
-    API_ENDPOINT_STREAMING_RECORDS_INTELLIGENT,
-    API_ENDPOINT_STREAMING_RECORDS_V2,
-    API_ENDPOINT_SWITCH_DEFENCE_MODE,
-    API_ENDPOINT_SWITCH_OTHER,
-    API_ENDPOINT_SWITCH_SOUND_ALARM,
-    API_ENDPOINT_SWITCH_STATUS,
-    API_ENDPOINT_TERMINAL_INFO,
-    API_ENDPOINT_TIME_PLAN_INFOS,
-    API_ENDPOINT_UNIFIEDMSG_LIST_GET,
-    API_ENDPOINT_UPGRADE_DEVICE,
-    API_ENDPOINT_UPGRADE_RULE,
-    API_ENDPOINT_USER_ID,
-    API_ENDPOINT_USERDEVICES_KMS,
-    API_ENDPOINT_USERDEVICES_P2P_INFO,
-    API_ENDPOINT_USERDEVICES_SEARCH,
-    API_ENDPOINT_USERDEVICES_STATUS,
-    API_ENDPOINT_USERDEVICES_TOKEN,
-    API_ENDPOINT_USERDEVICES_V2,
-    API_ENDPOINT_USERS_LBS_SUB_DOMAIN,
-    API_ENDPOINT_V3_ALARMS,
-    API_ENDPOINT_VIDEO_ENCRYPT,
-)
-from .cas import EzvizCAS
-from .clip import (
-    AutoClipSource,
-    ClipOptions,
-    ClipOutputFormat,
-    ClipSource,
-    ClipSourceOptions,
-    CloudClipSource,
-    HcNetSdkCommandPortClipSource,
-    LocalSdkClipSource,
-    LocalSdkEcdhClipSource,
-    _LegacyClipOptions,
-)
-from .cloud_stream import copy_cloud_stream_to_mpegps, copy_cloud_stream_to_mpegts
-from .constants import (
-    ANDROID_PROFILE,
-    DEFAULT_TIMEOUT,
-    DEFAULT_UNIFIEDMSG_STYPE,
-    FEATURE_CODE,
-    HIK_ENCRYPTION_HEADER,
-    MAX_RETRIES,
-    PROFILE as PUSH_PROFILE,
-    DefenseModeType,
-    DeviceCatagories,
-    DeviceSwitchType,
-)
-from .exceptions import (
-    DeviceException,
-    EzvizAuthTokenExpired,
-    EzvizAuthVerificationCode,
-    EzvizNoMediaError,
-    HTTPError,
-    InvalidURL,
-    PyEzvizError,
-)
-from .feature import optionals_mapping
-from .hcnetsdk import HcNetSdkLanEndpoint
-from .local_stream_ecdh import (
-    LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
-    copy_local_sdk_ecdh_stream_from_client,
-)
-from .local_stream_media import (
-    copy_local_stream_to_decrypted_mpegts,
-    copy_local_stream_to_mpegts,
-    h264_clean_idr_capture_budgets,
-    summarize_idmx_h264_local_packets,
-)
-from .local_stream_transport import (
-    EzvizLocalSdkCredentials,
-    HcNetSdkCommandPortGeneratedMultiSocketPlan,
-    HcNetSdkCommandPortMultiSocketPlan,
-    copy_local_sdk_stream_from_client,
-    hcnetsdk_command_port_native_lan_live_view_plan,
-    open_hcnetsdk_command_port_generated_multi_socket_stream,
-    open_hcnetsdk_command_port_multi_socket_stream,
-    open_hcnetsdk_command_port_stream,
-)
-from .media import (
-    CaptureLimits,
-    MediaDecodeOptions,
-    MediaMuxOptions,
-    _hevc_parameter_options,
-    _native_timing_options,
-    has_positive_finite_capture_bound,
-    is_positive_capture_count_bound,
-    is_positive_finite_duration_bound,
-)
-from .models import EzvizDeviceRecord, build_device_records_map
-from .mqtt import MQTTClient
-from .stream_selection import AutoMediaStream, fallback_stream_source, select_stream_source
-from .utils import convert_to_dict, decrypt_image
+from pyezvizapi import _api_response
+from pyezvizapi import device_factory
+from pyezvizapi._auth import refresh_credentials
+from pyezvizapi._budget_http import budgeted_http_call
+from pyezvizapi._longlink_profile import current_session_header, profile_for_token, recreated_session_header_for_token, session_header_for_token, synchronize_http_headers
+from pyezvizapi._pagelist import collect_pagelist
+from pyezvizapi._request_deadline import bounded_request_timeout, request_budget_lock
+from pyezvizapi._token import ClientToken as ClientToken, validate_feature_code
+from pyezvizapi.api_endpoints import API_ENDPOINT_2FA_VALIDATE_POST_AUTH, API_ENDPOINT_ALARM_DEVICE_CHIME, API_ENDPOINT_ALARM_GET_WHISTLE_STATUS_BY_CHANNEL, API_ENDPOINT_ALARM_GET_WHISTLE_STATUS_BY_DEVICE, API_ENDPOINT_ALARM_SET_CHANNEL_WHISTLE, API_ENDPOINT_ALARM_SET_DEVICE_WHISTLE, API_ENDPOINT_ALARM_SOUND, API_ENDPOINT_ALARM_STOP_WHISTLE, API_ENDPOINT_ALARMINFO_GET, API_ENDPOINT_AUTOUPGRADE_SWITCH, API_ENDPOINT_CALLING_NOTIFY, API_ENDPOINT_CAM_AUTH_CODE, API_ENDPOINT_CAM_ENCRYPTKEY, API_ENDPOINT_CAMERA_TICKET_INFO, API_ENDPOINT_CANCEL_ALARM, API_ENDPOINT_CHANGE_DEFENCE_STATUS, API_ENDPOINT_CLOUD_VIDEO_DETAILS, API_ENDPOINT_CLOUD_VIDEOS_LIST, API_ENDPOINT_CREATE_PANORAMIC, API_ENDPOINT_DETECTION_SENSIBILITY, API_ENDPOINT_DETECTION_SENSIBILITY_GET, API_ENDPOINT_DEVCONFIG_BASE, API_ENDPOINT_DEVCONFIG_BY_KEY, API_ENDPOINT_DEVCONFIG_MOTOR, API_ENDPOINT_DEVCONFIG_OP, API_ENDPOINT_DEVCONFIG_SECURITY_ACTIVATE, API_ENDPOINT_DEVCONFIG_SECURITY_CHALLENGE, API_ENDPOINT_DEVICE_ACCESSORY_LINK, API_ENDPOINT_DEVICE_BASICS, API_ENDPOINT_DEVICE_EMAIL_ALERT, API_ENDPOINT_DEVICE_STORAGE_STATUS, API_ENDPOINT_DEVICE_SWITCH_STATUS_LEGACY, API_ENDPOINT_DEVICE_SYS_OPERATION, API_ENDPOINT_DEVICE_UPDATE_NAME, API_ENDPOINT_DEVICES, API_ENDPOINT_DEVICES_ASSOCIATION_LINKED_IPC, API_ENDPOINT_DEVICES_AUTHENTICATE, API_ENDPOINT_DEVICES_ENCRYPTKEY_BATCH, API_ENDPOINT_DEVICES_LOC, API_ENDPOINT_DEVICES_P2P_INFO, API_ENDPOINT_DEVICES_SET_SWITCH_ENABLE, API_ENDPOINT_DO_NOT_DISTURB, API_ENDPOINT_DOORLOCK_USERS, API_ENDPOINT_FEEDBACK, API_ENDPOINT_GROUP_DEFENCE_MODE, API_ENDPOINT_INTELLIGENT_APP, API_ENDPOINT_IOT_ACTION, API_ENDPOINT_IOT_FEATURE, API_ENDPOINT_IOT_FEATURE_PRODUCT_VOICE_CONFIG, API_ENDPOINT_IOT_VIRTUAL_BIND, API_ENDPOINT_LOGIN, API_ENDPOINT_LOGOUT, API_ENDPOINT_MANAGED_DEVICE_BASE, API_ENDPOINT_OFFLINE_NOTIFY, API_ENDPOINT_OSD, API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P, API_ENDPOINT_PAGELIST, API_ENDPOINT_PTZCONTROL, API_ENDPOINT_REMOTE_LOCK, API_ENDPOINT_REMOTE_UNBIND_PROGRESS, API_ENDPOINT_REMOTE_UNLOCK, API_ENDPOINT_RETURN_PANORAMIC, API_ENDPOINT_SCD_APP_DEVICE_ADD, API_ENDPOINT_SDCARD_BLACK_LEVEL, API_ENDPOINT_SEND_CODE, API_ENDPOINT_SENSITIVITY, API_ENDPOINT_SERVER_INFO, API_ENDPOINT_SET_DEFENCE_SCHEDULE, API_ENDPOINT_SET_LUMINANCE, API_ENDPOINT_SHARE_ACCEPT, API_ENDPOINT_SHARE_QUIT, API_ENDPOINT_SMARTHOME_OUTLET_LOG, API_ENDPOINT_SPECIAL_BIZS_A1S, API_ENDPOINT_SPECIAL_BIZS_V1_BATTERY, API_ENDPOINT_SPECIAL_BIZS_VOICES, API_ENDPOINT_STREAMING_RECORDS, API_ENDPOINT_STREAMING_RECORDS_COMMON, API_ENDPOINT_STREAMING_RECORDS_INTELLIGENT, API_ENDPOINT_STREAMING_RECORDS_V2, API_ENDPOINT_SWITCH_DEFENCE_MODE, API_ENDPOINT_SWITCH_OTHER, API_ENDPOINT_SWITCH_SOUND_ALARM, API_ENDPOINT_SWITCH_STATUS, API_ENDPOINT_TERMINAL_INFO, API_ENDPOINT_TIME_PLAN_INFOS, API_ENDPOINT_UNIFIEDMSG_LIST_GET, API_ENDPOINT_UPGRADE_DEVICE, API_ENDPOINT_UPGRADE_RULE, API_ENDPOINT_USER_ID, API_ENDPOINT_USERDEVICES_KMS, API_ENDPOINT_USERDEVICES_P2P_INFO, API_ENDPOINT_USERDEVICES_SEARCH, API_ENDPOINT_USERDEVICES_STATUS, API_ENDPOINT_USERDEVICES_TOKEN, API_ENDPOINT_USERDEVICES_V2, API_ENDPOINT_USERS_LBS_SUB_DOMAIN, API_ENDPOINT_V3_ALARMS, API_ENDPOINT_VIDEO_ENCRYPT
+from pyezvizapi.cas import EzvizCAS
+from pyezvizapi.clip import AutoClipSource, ClipOptions, ClipOutputFormat, ClipSource, ClipSourceOptions, CloudClipSource, HcNetSdkCommandPortClipSource, LocalSdkClipSource, LocalSdkEcdhClipSource, _LegacyClipOptions
+from pyezvizapi.cloud_stream import copy_cloud_stream_to_mpegps, copy_cloud_stream_to_mpegts
+from pyezvizapi.constants import ANDROID_PROFILE, DEFAULT_TIMEOUT, DEFAULT_UNIFIEDMSG_STYPE, FEATURE_CODE, HIK_ENCRYPTION_HEADER, MAX_RETRIES, PROFILE as PUSH_PROFILE, DefenseModeType, DeviceCatagories, DeviceSwitchType
+from pyezvizapi.exceptions import DeviceException, EzvizAuthTokenExpired, EzvizAuthVerificationCode, EzvizNoMediaError, HTTPError, InvalidURL, PyEzvizError
+from pyezvizapi.feature import optionals_mapping
+from pyezvizapi.hcnetsdk import HcNetSdkLanEndpoint
+from pyezvizapi.local_stream_ecdh import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, copy_local_sdk_ecdh_stream_from_client
+from pyezvizapi.local_stream_media import copy_local_stream_to_decrypted_mpegts, copy_local_stream_to_mpegts, h264_clean_idr_capture_budgets, summarize_idmx_h264_local_packets
+from pyezvizapi.local_stream_transport import EzvizLocalSdkCredentials, HcNetSdkCommandPortGeneratedMultiSocketPlan, HcNetSdkCommandPortMultiSocketPlan, copy_local_sdk_stream_from_client, hcnetsdk_command_port_native_lan_live_view_plan, open_hcnetsdk_command_port_generated_multi_socket_stream, open_hcnetsdk_command_port_multi_socket_stream, open_hcnetsdk_command_port_stream
+from pyezvizapi.media import CaptureLimits, MediaDecodeOptions, MediaMuxOptions, _hevc_parameter_options, _native_timing_options, has_positive_finite_capture_bound, is_positive_capture_count_bound, is_positive_finite_duration_bound
+from pyezvizapi.models import EzvizDeviceRecord, build_device_records_map
+from pyezvizapi.mqtt import MQTTClient
+from pyezvizapi.stream_selection import AutoMediaStream, fallback_stream_source, select_stream_source
+from pyezvizapi.utils import convert_to_dict, decrypt_image
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -3040,7 +2877,7 @@ class EzvizClient:
         """
         from dataclasses import asdict  # noqa: PLC0415
 
-        from .local_stream_probe import probe_local_sdk_stream_from_client  # noqa: PLC0415
+        from pyezvizapi.local_stream_probe import probe_local_sdk_stream_from_client
 
         return asdict(
             probe_local_sdk_stream_from_client(

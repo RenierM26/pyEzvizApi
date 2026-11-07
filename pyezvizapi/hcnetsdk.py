@@ -38,15 +38,11 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.asn1 import DerSequence
 
-from . import _hcnetsdk_protocol, _resolver
-from ._resolver import DEFAULT_RESOLVER, BoundedResolver, ResolverBusy
-from .exceptions import (
-    DeviceException,
-    EzvizLocalSdkDeadlineExpired,
-    EzvizLocalSdkStreamClosed,
-    PyEzvizError,
-)
-from .media import IterableMediaPacketSource, MediaPacket, MediaPacketMetadata
+from pyezvizapi import _hcnetsdk_protocol
+from pyezvizapi import _resolver
+from pyezvizapi._resolver import DEFAULT_RESOLVER, BoundedResolver, ResolverBusy
+from pyezvizapi.exceptions import DeviceException, EzvizLocalSdkDeadlineExpired, EzvizLocalSdkStreamClosed, PyEzvizError
+from pyezvizapi.media import IterableMediaPacketSource, MediaPacket, MediaPacketMetadata
 
 # Explicit aliases retain historical public/private module attributes.
 _AES_RCON = _hcnetsdk_protocol._AES_RCON  # noqa: SLF001 -- compatibility alias

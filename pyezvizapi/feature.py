@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from typing import Any, cast
 
-from .utils import WILDCARD_STEP, coerce_int, decode_json, first_nested
+from pyezvizapi.utils import WILDCARD_STEP, coerce_int, decode_json, first_nested
 
 
 def _feature_video_section(camera_data: Mapping[str, Any]) -> dict[str, Any]:

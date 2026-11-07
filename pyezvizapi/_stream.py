@@ -18,15 +18,9 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 
 from Crypto.Cipher import AES
 
-from .exceptions import DeviceException, PyEzvizError
-from .media import (
-    DeadlineLegacyPacketSource,
-    MediaPacket,
-    MediaPacketMetadata,
-    MediaPacketSourceAdapter,
-    is_positive_finite_duration_bound,
-)
-from .rtp import rtp_payload as _rtp_payload
+from pyezvizapi.exceptions import DeviceException, PyEzvizError
+from pyezvizapi.media import DeadlineLegacyPacketSource, MediaPacket, MediaPacketMetadata, MediaPacketSourceAdapter, is_positive_finite_duration_bound
+from pyezvizapi.rtp import rtp_payload as _rtp_payload
 
 VTM_MAGIC = 0x24
 VTM_HEADER_SIZE = 8

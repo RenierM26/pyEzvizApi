@@ -12,8 +12,8 @@ from typing import TypedDict
 
 from requests.utils import parse_dict_header
 
-from .exceptions import AuthTestResultFailed, InvalidHost
-from .media import is_positive_finite_duration_bound
+from pyezvizapi.exceptions import AuthTestResultFailed, InvalidHost
+from pyezvizapi.media import is_positive_finite_duration_bound
 
 _LOGGER = logging.getLogger(__name__)
 _HEADER_END = b"\r\n\r\n"

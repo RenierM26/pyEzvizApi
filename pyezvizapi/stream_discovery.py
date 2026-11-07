@@ -10,8 +10,8 @@ from threading import Lock
 import time
 from typing import Literal
 
-from .exceptions import PyEzvizError
-from .stream_header import EzvizStreamHeader
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.stream_header import EzvizStreamHeader
 
 
 @dataclass(frozen=True)

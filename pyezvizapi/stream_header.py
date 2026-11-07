@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import struct
 import xml.etree.ElementTree as ET
 
-from .exceptions import PyEzvizError
+from pyezvizapi.exceptions import PyEzvizError
 
 _STREAM_HEADER_MAGIC = b"IMKH"
 

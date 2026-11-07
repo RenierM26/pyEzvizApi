@@ -745,7 +745,7 @@ class EzvizClient:
         if push_enabled:
             payload.update(ANDROID_PROFILE.registration)
         try:
-            req = budgeted_http_call(self._session, "post", 
+            req = budgeted_http_call(self._session, "post",
                 url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGIN}",
                 allow_redirects=False,
                 data=payload,
@@ -848,7 +848,7 @@ class EzvizClient:
             )
         try:
             with request_budget_lock(self._token_lock):
-                req = budgeted_http_call(self._session, "request", 
+                req = budgeted_http_call(self._session, "request",
                     method=method,
                     url=url,
                     params=params,
@@ -4889,7 +4889,7 @@ class EzvizClient:
         """Close Ezviz session and remove login session from ezviz servers."""
         with request_budget_lock(self._token_lock):
             try:
-                req = budgeted_http_call(self._session, "delete", 
+                req = budgeted_http_call(self._session, "delete",
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGOUT}",
                     timeout=bounded_request_timeout(self._timeout),
                 )
@@ -5368,7 +5368,7 @@ class EzvizClient:
             raise PyEzvizError("Unproper sensibility for type 0 (should be within 1 to 6).")
         try:
             with request_budget_lock(self._token_lock):
-                req = budgeted_http_call(self._session, "post", 
+                req = budgeted_http_call(self._session, "post",
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_DETECTION_SENSIBILITY}",
                     data={
                         "subSerial": serial,

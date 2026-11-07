@@ -47,7 +47,7 @@ def refresh_credentials(
     """Rotate an existing login; account/password fallback belongs to the caller."""
     validate_feature_code(token)
     try:
-        response = budgeted_http_call(session, "put", 
+        response = budgeted_http_call(session, "put",
             url=f"https://{token['api_url']}{API_ENDPOINT_REFRESH_SESSION_ID}",
             data={"refreshSessionId": token["rf_session_id"], "featureCode": FEATURE_CODE,
                   **profile_for_token(token).registration},

@@ -1,9 +1,11 @@
 """Owned resolver cancellation, bounded close and queue behavior."""
 # ruff: noqa: SLF001 -- assert the owned worker has actually drained.
+from queue import Queue
 from threading import Event, Thread
 
 import pytest
 
+from pyezvizapi import _resolver
 from pyezvizapi._resolver import BoundedResolver, ResolverClosed
 
 
@@ -70,3 +72,40 @@ def test_invalid_resolver_timeout_does_not_acquire(timeout):
     finally:
         drained = owner.close()
         assert drained
+
+
+def test_close_notifies_a_request_dequeued_before_active_assignment():
+    dequeued, release = Event(), Event()
+    errors = []
+    calls = []
+    class PausedQueue(Queue):
+        def get(self, *args, **kwargs):
+            value = super().get(*args, **kwargs)
+            if isinstance(value, _resolver._Request):
+                dequeued.set()
+                release.wait(3)
+            return value
+    def resolve(*_args, **_kwargs):
+        calls.append(True)
+        return []
+    owner = BoundedResolver(resolve)
+    owner._jobs = PausedQueue(maxsize=1)
+    def wait_for_result():
+        try:
+            owner.resolve("unused.invalid", 9010, timeout=2)
+        except Exception as error:
+            errors.append(error)
+    caller = Thread(target=wait_for_result)
+    caller.start()
+    try:
+        assert dequeued.wait(1)
+        assert owner.close(wait_seconds=0) is False
+        release.set()
+        caller.join(timeout=1)
+        assert not caller.is_alive()
+        assert len(errors) == 1 and isinstance(errors[0], ResolverClosed)
+        assert not calls
+    finally:
+        release.set()
+        caller.join(timeout=3)
+        assert owner.close(wait_seconds=1)

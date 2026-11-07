@@ -101,7 +101,11 @@ class BoundedResolver:
                     return
                 job = cast(_Request, value)
                 with self._lock:
-                    if self._closed or job.cancelled.is_set():
+                    if self._closed:
+                        job.cancelled.set()
+                        job.finish(False, ResolverClosed("Hostname resolver is closed"))
+                        continue
+                    if job.cancelled.is_set():
                         continue
                     self._active = job
                 try:

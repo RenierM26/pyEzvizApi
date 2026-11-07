@@ -16,6 +16,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Bound RTSP authentication framing and I/O, close sockets deterministically, and retain the legacy import path.
+
 - Handle non-finite number/time values and invalid offsets, validate image padding, and honor empty diagnostic tails.
 - Extract coherent utility implementations while preserving legacy helper imports.
 

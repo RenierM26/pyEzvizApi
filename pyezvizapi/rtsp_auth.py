@@ -90,7 +90,7 @@ class TestRTSPAuth:
         # Legacy RTSP Digest requires MD5 on the wire (RFC 2069); this is not
         # password storage and cannot be replaced with a different KDF locally.
         m_1 = hashlib.md5(
-            f"{self._rtsp_details['defaultUsername']}:{realm.decode()}:{self._rtsp_details['defaultPassword']}".encode()  # codeql[py/weak-sensitive-data-hashing] lgtm[py/weak-sensitive-data-hashing] -- mandated Digest wire algorithm
+            f"{self._rtsp_details['defaultUsername']}:{realm.decode()}:{self._rtsp_details['defaultPassword']}".encode()
         ).hexdigest()
         m_2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
         response = hashlib.md5(f"{m_1}:{nonce.decode()}:{m_2}".encode()).hexdigest()

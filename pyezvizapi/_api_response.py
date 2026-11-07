@@ -15,15 +15,15 @@ JsonDict = dict[str, Any]
 
 
 def parse_json(resp: requests.Response) -> JsonDict:
-        """Parse an API object without echoing potentially secret response text."""
-        try:
-            payload = resp.json()
-        except ValueError:
-            # Parser exceptions may embed response text; keep tracebacks redacted too.
-            raise PyEzvizError("Impossible to decode response: invalid JSON") from None
-        if not isinstance(payload, dict):
-            raise PyEzvizError("Expected a JSON object in API response")
-        return payload
+    """Parse an API object without echoing potentially secret response text."""
+    try:
+        payload = resp.json()
+    except ValueError:
+        # Parser exceptions may embed response text; keep tracebacks redacted too.
+        raise PyEzvizError("Impossible to decode response: invalid JSON") from None
+    if not isinstance(payload, dict):
+        raise PyEzvizError("Expected a JSON object in API response")
+    return payload
 
 
 def object_section(payload: JsonDict, key: str, *, required: bool = False) -> JsonDict:
@@ -139,20 +139,20 @@ def body_debug_summary(payload: Any) -> str:
 
 
 def response_summary(payload: Any) -> str:
-        """Describe a response using numeric codes and shape, never raw values."""
-        if not isinstance(payload, Mapping):
-            return f"response type={type(payload).__name__}"
-        meta = payload.get("meta")
-        code = meta.get("code") if isinstance(meta, Mapping) else None
-        if code is None:
-            code = payload.get("resultCode", payload.get("status"))
-        if isinstance(code, bool) or not isinstance(code, (int, str)):
-            code = None
-        elif isinstance(code, str):
-            # Restrict both conversion cost and output; error messages are not
-            # a channel for arbitrary server-provided strings or credentials.
-            digits = code[1:] if code.startswith(("+", "-")) else code
-            code = int(code) if len(code) <= 12 and code.isascii() and digits.isdigit() else None
-        if isinstance(code, int) and not -10**12 < code < 10**12:
-            code = None
-        return f"response code={code}, fields={len(payload)}"
+    """Describe a response using numeric codes and shape, never raw values."""
+    if not isinstance(payload, Mapping):
+        return f"response type={type(payload).__name__}"
+    meta = payload.get("meta")
+    code = meta.get("code") if isinstance(meta, Mapping) else None
+    if code is None:
+        code = payload.get("resultCode", payload.get("status"))
+    if isinstance(code, bool) or not isinstance(code, (int, str)):
+        code = None
+    elif isinstance(code, str):
+        # Restrict both conversion cost and output; error messages are not
+        # a channel for arbitrary server-provided strings or credentials.
+        digits = code[1:] if code.startswith(("+", "-")) else code
+        code = int(code) if len(code) <= 12 and code.isascii() and digits.isdigit() else None
+    if isinstance(code, int) and not -(10**12) < code < 10**12:
+        code = None
+    return f"response code={code}, fields={len(payload)}"

@@ -1,0 +1,205 @@
+{
+  "status": "source-review-only-not-deployment",
+  "policy": {
+    "setting": "relay_hls_fallback",
+    "default": false,
+    "requires_native_opus": true,
+    "capability": "native-opus-hls-fallback-v1",
+    "source_profile": "opus-source-clock-hls-fallback-v1",
+    "strict_profile_unchanged": true,
+    "late_joint_admission_rejected_without_restart_or_alternative_transcoder": true
+  },
+  "regression": {
+    "original_readiness_failures": 2,
+    "unchanged_cancellation_pass": true,
+    "fallback_unit_cases": 5,
+    "scoped_RTSP_status_controls": 3,
+    "partial_admission_rollback_control": 1
+  },
+  "go": {
+    "extracted_paths_hash_verified": 55,
+    "selected_race_packages_passed": [
+      "pkg/mpegts",
+      "pkg/rtsp",
+      "pkg/webrtc",
+      "internal/streams"
+    ],
+    "full_upstream_CI_claimed": false
+  },
+  "python": {
+    "library_tests_passed": 5056,
+    "coverage_percent": 90.39,
+    "example_tests_passed": 224,
+    "optional_real_relay_tests_skipped": 8,
+    "mypy_library_files": 243,
+    "mypy_actual_HA_files": 15,
+    "ruff": true,
+    "codespell": true,
+    "pyright": true,
+    "pip_audit_known_vulnerabilities": 0,
+    "build_and_twine": true,
+    "pip_check": true
+  },
+  "retained_topology": {
+    "ll-hls-only": {
+      "HLS_packet_hashes_PTS_DTS_timebases_identical_to_previous_joint_baseline": true,
+      "nominal_input_duration_differences_from_baseline": 2,
+      "counts": {
+        "factory": 1,
+        "input_demux": 1,
+        "decrypt_feed": 8840
+      },
+      "late_opus_refusal": [
+        {
+          "type": "error",
+          "code": "go2rtc_webrtc_offer_failed"
+        }
+      ],
+      "complete_source_and_cleanup": true,
+      "rows": [
+        {
+          "hevc": 1783,
+          "aac": 1857
+        },
+        {
+          "hevc": 1783,
+          "aac": 1857
+        }
+      ],
+      "opus": {}
+    },
+    "nonll-hls-only": {
+      "HLS_packet_hashes_PTS_DTS_timebases_identical_to_previous_joint_baseline": true,
+      "nominal_input_duration_differences_from_baseline": 0,
+      "counts": {
+        "factory": 1,
+        "input_demux": 1,
+        "decrypt_feed": 8840
+      },
+      "late_opus_refusal": [
+        {
+          "type": "error",
+          "code": "go2rtc_webrtc_offer_failed"
+        }
+      ],
+      "complete_source_and_cleanup": true,
+      "rows": [
+        {
+          "hevc": 1783,
+          "aac": 1857
+        },
+        {
+          "hevc": 1783,
+          "aac": 1857
+        }
+      ],
+      "opus": {}
+    },
+    "ll-joint": {
+      "HLS_packet_hashes_PTS_DTS_timebases_identical_to_previous_joint_baseline": true,
+      "nominal_input_duration_differences_from_baseline": 2,
+      "counts": {
+        "factory": 1,
+        "input_demux": 1,
+        "decrypt_feed": 8840
+      },
+      "late_opus_refusal": null,
+      "complete_source_and_cleanup": true,
+      "rows": [
+        {
+          "hevc": 1783,
+          "aac": 1857
+        },
+        {
+          "hevc": 1783,
+          "aac": 1857
+        }
+      ],
+      "opus": {
+        "primary": {
+          "all_encoded_payloads_and_RTP_timestamps_identical_to_retained_strict_baseline": true,
+          "packets": 5943,
+          "current_converter_input_trace_claimed": false
+        },
+        "secondary": {
+          "all_encoded_payloads_and_RTP_timestamps_identical_to_retained_strict_baseline": true,
+          "packets": 5943,
+          "current_converter_input_trace_claimed": false
+        }
+      }
+    },
+    "nonll-joint": {
+      "HLS_packet_hashes_PTS_DTS_timebases_identical_to_previous_joint_baseline": true,
+      "nominal_input_duration_differences_from_baseline": 2,
+      "counts": {
+        "factory": 1,
+        "input_demux": 1,
+        "decrypt_feed": 8840
+      },
+      "late_opus_refusal": null,
+      "complete_source_and_cleanup": true,
+      "rows": [
+        {
+          "hevc": 1783,
+          "aac": 1857
+        },
+        {
+          "hevc": 1783,
+          "aac": 1857
+        }
+      ],
+      "opus": {
+        "primary": {
+          "all_encoded_payloads_and_RTP_timestamps_identical_to_retained_strict_baseline": true,
+          "packets": 5943,
+          "current_converter_input_trace_claimed": false
+        },
+        "secondary": {
+          "all_encoded_payloads_and_RTP_timestamps_identical_to_retained_strict_baseline": true,
+          "packets": 5943,
+          "current_converter_input_trace_claimed": false
+        }
+      }
+    }
+  },
+  "RTCP_mapping": {
+    "ll": {
+      "shared_cross_track_and_lens_RTCP_mapping": true,
+      "spread_seconds": 2.0127277821302414e-05,
+      "reports": {
+        "primary_video": 25,
+        "primary_audio": 25,
+        "secondary_video": 25,
+        "secondary_audio": 25
+      },
+      "physical_AV_sync_claimed": false
+    },
+    "nonll": {
+      "shared_cross_track_and_lens_RTCP_mapping": true,
+      "spread_seconds": 2.0583625882864e-05,
+      "reports": {
+        "primary_video": 23,
+        "primary_audio": 23,
+        "secondary_video": 23,
+        "secondary_audio": 23
+      },
+      "physical_AV_sync_claimed": false
+    }
+  },
+  "limitations": {
+    "current_policy_requesting_browser_playback_verified": false,
+    "earlier_explicit_HLS_only_Windows_picture_and_audio_human_pass": true,
+    "HEVC_WebRTC_supported_in_that_Edge_session": false,
+    "physical_AV_sync_measured": false,
+    "current_converter_input_byte_trace_claimed": false,
+    "nominal_demux_packet_duration_equal_to_previous_run_claimed": false,
+    "production_or_live_camera_changes": false,
+    "maintained_dependency_release_claimed": false
+  },
+  "retained_failures": {
+    "concurrent_selected_webrtc_expired_cache_control_failed": true,
+    "serial_exact_extracted_selected_race_rerun_all_pass": true,
+    "initial_HLS_test_fixture_empty_peer_assertion_and_missing_public_session_close_corrected": true,
+    "initial_HTTP_auditor_resubscription_fixture_inappropriate_for_cold_two_lens_group": true
+  }
+}

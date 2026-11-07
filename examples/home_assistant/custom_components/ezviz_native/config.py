@@ -38,6 +38,7 @@ class Settings:
     group_profile: str | None = None
     credential_revision: str | None = None
     relay_native_opus: bool = False
+    relay_hls_fallback: bool = False
 
 
 def integer(value: Any, low: int, high: int) -> int:
@@ -98,6 +99,9 @@ def load_settings(data: dict[str, Any]) -> Settings:
     lenses = load_lenses(data, primary)
     native_opus = data.get("relay_native_opus", False)
     finite_source = data.get("finite_source", False)
+    hls_fallback = data.get("relay_hls_fallback", False)
+    if not isinstance(hls_fallback, bool) or (hls_fallback and not native_opus):
+        raise ValueError("HLS fallback requires an explicit native Opus profile")
     if not isinstance(native_opus, bool) or not isinstance(finite_source, bool):
         raise ValueError("Finite audio profile requires explicit boolean settings")
     if finite_source and not lenses:
@@ -124,6 +128,7 @@ def load_settings(data: dict[str, Any]) -> Settings:
         text(data["group_profile"]) if lenses else None,
         text(data["credential_revision"]) if lenses else None,
         native_opus,
+        hls_fallback,
     )
 
 

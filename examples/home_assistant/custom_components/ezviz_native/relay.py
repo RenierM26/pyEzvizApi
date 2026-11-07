@@ -15,7 +15,10 @@ class SharedRelay:
     """Own only one random named upstream; no preload or acquisition at setup."""
 
     def __init__(self, session: ClientSession, api_port: int, rtsp_port: int,
-                 *, trusted_source_clock: bool = False, atomic_ownership: bool = False, native_opus: bool = False) -> None:
+                 *, trusted_source_clock: bool = False, atomic_ownership: bool = False, native_opus: bool = False, hls_fallback: bool = False) -> None:
+        if hls_fallback and not native_opus:
+            raise ValueError("HLS fallback requires native Opus negotiation")
+        self._hls_fallback = hls_fallback
         self._native_opus = native_opus
         self._trusted_source_clock = trusted_source_clock
         self._atomic_ownership = atomic_ownership
@@ -99,6 +102,8 @@ class SharedRelay:
     async def _require_contracts(self) -> None:
         """Reject unsupported experimental contracts before registration/acquisition."""
         required = set()
+        if self._hls_fallback:
+            required.add("native-opus-hls-fallback-v1")
         if self._native_opus:
             required.add("native-opus-source-clock-v1")
         if self._trusted_source_clock:

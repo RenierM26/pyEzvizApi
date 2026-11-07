@@ -40,9 +40,11 @@ class BoundedStderrTail:
     def text(self, *, max_chars: int = FFMPEG_STDERR_MAX_CHARS) -> str:
         """Return the decoded, stripped stderr tail."""
 
+        if max_chars <= 0:
+            return ""
         with self._lock:
             text = bytes(self._data).decode("utf-8", errors="replace").strip()
-        return text[-max(0, max_chars) :]
+        return text[-max_chars:]
 
 
 def ffmpeg_mpegts_command(

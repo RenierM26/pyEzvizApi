@@ -16,6 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Handle non-finite number/time values and invalid offsets, validate image padding, and honor empty diagnostic tails.
+- Extract coherent utility implementations while preserving legacy helper imports.
+
 - Preserve offline status and tolerate malformed device records; validate API objects and omit raw response values from client errors.
 
 - Require positive integer packet/byte counts and finite numeric durations in typed capture limits.

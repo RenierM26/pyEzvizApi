@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.local.details`.
 
@@ -12,10 +13,9 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.local import details as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.local.details import (
-    HcNetSdkStreamDetails as HcNetSdkStreamDetails,
-    discover_hcnetsdk_stream_details as discover_hcnetsdk_stream_details,
-    discover_hcnetsdk_stream_details_for_login as discover_hcnetsdk_stream_details_for_login,
-    )
+    import pyezvizapi.streaming.local.details as _compat_module_0
+    HcNetSdkStreamDetails = _compat_module_0.HcNetSdkStreamDetails
+    discover_hcnetsdk_stream_details = _compat_module_0.discover_hcnetsdk_stream_details
+    discover_hcnetsdk_stream_details_for_login = _compat_module_0.discover_hcnetsdk_stream_details_for_login
 
 sys.modules[__name__] = _implementation

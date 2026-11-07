@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.budget`.
 
@@ -12,33 +14,32 @@ from typing import TYPE_CHECKING
 from pyezvizapi.cloud import budget as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.cloud.budget import (
-        _IDLE_SECONDS as _IDLE_SECONDS,
-        _WORKER as _WORKER,
-        MAX_BOOTSTRAP_BODY_BYTES as MAX_BOOTSTRAP_BODY_BYTES,
-        Any as Any,
-        Empty as Empty,
-        Event as Event,
-        Full as Full,
-        Lock as Lock,
-        PyEzvizError as PyEzvizError,
-        Queue as Queue,
-        RequestsCookieJar as RequestsCookieJar,
-        Thread as Thread,
-        _commit_cookies as _commit_cookies,
-        _HttpJob as _HttpJob,
-        _HttpWorker as _HttpWorker,
-        _response_socket as _response_socket,
-        annotations as annotations,
-        budgeted_http_call as budgeted_http_call,
-        copy as copy,
-        dataclass as dataclass,
-        field as field,
-        isolated_session as isolated_session,
-        remaining_request_budget as remaining_request_budget,
-        requests as requests,
-        socket as socket,
-        suppress as suppress,
-    )
+    import pyezvizapi.cloud.budget as _compat_module_0
+    _IDLE_SECONDS = _compat_module_0._IDLE_SECONDS
+    _WORKER = _compat_module_0._WORKER
+    MAX_BOOTSTRAP_BODY_BYTES = _compat_module_0.MAX_BOOTSTRAP_BODY_BYTES
+    Any = _compat_module_0.Any
+    Empty = _compat_module_0.Empty
+    Event = _compat_module_0.Event
+    Full = _compat_module_0.Full
+    Lock = _compat_module_0.Lock
+    PyEzvizError = _compat_module_0.PyEzvizError
+    Queue = _compat_module_0.Queue
+    RequestsCookieJar = _compat_module_0.RequestsCookieJar
+    Thread = _compat_module_0.Thread
+    _commit_cookies = _compat_module_0._commit_cookies
+    _HttpJob = _compat_module_0._HttpJob
+    _HttpWorker = _compat_module_0._HttpWorker
+    _response_socket = _compat_module_0._response_socket
+    annotations = _compat_module_0.annotations
+    budgeted_http_call = _compat_module_0.budgeted_http_call
+    copy = _compat_module_0.copy
+    dataclass = _compat_module_0.dataclass
+    field = _compat_module_0.field
+    isolated_session = _compat_module_0.isolated_session
+    remaining_request_budget = _compat_module_0.remaining_request_budget
+    requests = _compat_module_0.requests
+    socket = _compat_module_0.socket
+    suppress = _compat_module_0.suppress
 
 sys.modules[__name__] = _implementation

@@ -40,8 +40,8 @@ actual runtime owner. `docs/module-map.json` lists every relocated module.
 ## Compatibility and hook ownership
 
 `EzvizClient` methods delegate without changing signatures. Extracted command
-and operation implementations read their existing runtime hooks through an
-explicit `_owner` module reference. This preserves late monkeypatches rather
+and operation implementations receive their existing runtime hooks through an
+explicit `_owner` context argument from the public wrapper. This preserves late monkeypatches rather
 than copying bindings into a second module. Do not replace this with a dynamic
 module proxy, silently copy hooks, or widen transport/media budgets during moves.
 

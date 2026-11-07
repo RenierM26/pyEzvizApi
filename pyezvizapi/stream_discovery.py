@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.discovery`.
 
@@ -12,19 +13,18 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming import discovery as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.discovery import (
-    Callable as Callable,
-    EzvizStreamHeader as EzvizStreamHeader,
-    Literal as Literal,
-    LocalStreamDiscovery as LocalStreamDiscovery,
-    LocalStreamDiscoveryCache as LocalStreamDiscoveryCache,
-    Lock as Lock,
-    OrderedDict as OrderedDict,
-    PyEzvizError as PyEzvizError,
-    annotations as annotations,
-    dataclass as dataclass,
-    math as math,
-    time as time,
-    )
+    import pyezvizapi.streaming.discovery as _compat_module_0
+    Callable = _compat_module_0.Callable
+    EzvizStreamHeader = _compat_module_0.EzvizStreamHeader
+    Literal = _compat_module_0.Literal
+    LocalStreamDiscovery = _compat_module_0.LocalStreamDiscovery
+    LocalStreamDiscoveryCache = _compat_module_0.LocalStreamDiscoveryCache
+    Lock = _compat_module_0.Lock
+    OrderedDict = _compat_module_0.OrderedDict
+    PyEzvizError = _compat_module_0.PyEzvizError
+    annotations = _compat_module_0.annotations
+    dataclass = _compat_module_0.dataclass
+    math = _compat_module_0.math
+    time = _compat_module_0.time
 
 sys.modules[__name__] = _implementation

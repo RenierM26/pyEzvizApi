@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.push.paho`.
 
@@ -12,10 +13,10 @@ from typing import TYPE_CHECKING
 from pyezvizapi.push import paho as _implementation
 
 if TYPE_CHECKING:
-    from paho.mqtt.client import Client as Client
+    import paho.mqtt.client as _compat_module_0
+    Client = _compat_module_0.Client
 
-    from pyezvizapi.push.paho import (
-        set_keepalive as set_keepalive,
-    )
+    import pyezvizapi.push.paho as _compat_module_1
+    set_keepalive = _compat_module_1.set_keepalive
 
 sys.modules[__name__] = _implementation

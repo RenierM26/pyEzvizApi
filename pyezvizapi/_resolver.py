@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi._shared.resolver`.
 
@@ -12,28 +14,27 @@ from typing import TYPE_CHECKING
 from pyezvizapi._shared import resolver as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi._shared.resolver import (
-        _STOP as _STOP,
-        DEFAULT_RESOLVER as DEFAULT_RESOLVER,
-        Any as Any,
-        BoundedResolver as BoundedResolver,
-        Callable as Callable,
-        Empty as Empty,
-        Event as Event,
-        Full as Full,
-        Lock as Lock,
-        Queue as Queue,
-        ResolverBusy as ResolverBusy,
-        ResolverClosed as ResolverClosed,
-        Thread as Thread,
-        _Request as _Request,
-        annotations as annotations,
-        cast as cast,
-        dataclass as dataclass,
-        field as field,
-        math as math,
-        socket as socket,
-        suppress as suppress,
-    )
+    import pyezvizapi._shared.resolver as _compat_module_0
+    _STOP = _compat_module_0._STOP
+    DEFAULT_RESOLVER = _compat_module_0.DEFAULT_RESOLVER
+    Any = _compat_module_0.Any
+    BoundedResolver = _compat_module_0.BoundedResolver
+    Callable = _compat_module_0.Callable
+    Empty = _compat_module_0.Empty
+    Event = _compat_module_0.Event
+    Full = _compat_module_0.Full
+    Lock = _compat_module_0.Lock
+    Queue = _compat_module_0.Queue
+    ResolverBusy = _compat_module_0.ResolverBusy
+    ResolverClosed = _compat_module_0.ResolverClosed
+    Thread = _compat_module_0.Thread
+    _Request = _compat_module_0._Request
+    annotations = _compat_module_0.annotations
+    cast = _compat_module_0.cast
+    dataclass = _compat_module_0.dataclass
+    field = _compat_module_0.field
+    math = _compat_module_0.math
+    socket = _compat_module_0.socket
+    suppress = _compat_module_0.suppress
 
 sys.modules[__name__] = _implementation

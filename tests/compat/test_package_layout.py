@@ -36,3 +36,34 @@ def test_historical_pickle_global_and_new_pickle_resolve_to_the_same_class(modul
     legacy_pickle = f"c{module}\n{name}\n.".encode("ascii")
     assert pickle.loads(legacy_pickle) is current
     assert pickle.loads(pickle.dumps(current)) is current
+
+
+COLD_IMPORTS = sorted(
+    ".".join(path.relative_to(ROOT).with_suffix("").parts)
+    for path in (ROOT / "pyezvizapi").rglob("*.py")
+    if "as _owner_types" in path.read_text()
+    or path.name.startswith("models_")
+    or path.as_posix().endswith("hcnetsdk/constants.py")
+)
+
+
+@pytest.mark.parametrize("module_name", COLD_IMPORTS)
+def test_implementation_can_be_imported_first_in_a_fresh_interpreter(tmp_path, module_name):
+    """No compatibility owner may depend on a half-defined implementation."""
+    import subprocess  # noqa: PLC0415 -- test-only subprocess control
+    import sys  # noqa: PLC0415 -- test-only interpreter selection
+
+    script = (
+        "import importlib, sys; "
+        f"sys.path.insert(0, {str(ROOT)!r}); "
+        f"importlib.import_module({module_name!r})"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

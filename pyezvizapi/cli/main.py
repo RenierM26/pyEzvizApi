@@ -5,6 +5,8 @@ Small utility CLI for testing and scripting Ezviz operations.
 
 from __future__ import annotations
 
+import sys as _sys
+
 import argparse
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
@@ -314,196 +316,334 @@ def _handle_devices(args: argparse.Namespace, client: EzvizClient) -> int:
     return 2
 
 
-from pyezvizapi.cli.commands.devices import _handle_devices_light as _handle_devices_light
+from pyezvizapi.cli.commands import devices as _impl_devices
 
+def _handle_devices_light(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle `devices_light` subcommands (status)."""
+    return _impl_devices._handle_devices_light(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.devices import _handle_pagelist as _handle_pagelist
 
+def _handle_pagelist(client: EzvizClient) -> int:
+    """Output full pagelist (raw JSON) for exploration in editors like Notepad++."""
+    return _impl_devices._handle_pagelist(client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.devices import _handle_device_infos as _handle_device_infos
 
+def _handle_device_infos(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Output device infos mapping (raw JSON), optionally filtered by serial."""
+    return _impl_devices._handle_device_infos(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.devices import _handle_unifiedmsg as _handle_unifiedmsg
 
+def _handle_unifiedmsg(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch unified message list and optionally dump media URLs."""
+    return _impl_devices._handle_unifiedmsg(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.recordings import _decode_compressed_record_list as _decode_compressed_record_list
 
+from pyezvizapi.cli.commands import recordings as _impl_recordings
 
-from pyezvizapi.cli.commands.recordings import _first_record_list as _first_record_list
+def _decode_compressed_record_list(value: str) -> list[Any]:
+    """Decode the app's base64+zlib JSON record-list payload when present."""
+    return _impl_recordings._decode_compressed_record_list(value, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.recordings import _handle_sdcard_videos as _handle_sdcard_videos
+def _first_record_list(payload: Any) -> list[Any]:
+    """Return the first plausible list of record dictionaries from an API response."""
+    return _impl_recordings._first_record_list(payload, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.recordings import _handle_cloud_videos as _handle_cloud_videos
+def _handle_sdcard_videos(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch SD-card playback record descriptors."""
+    return _impl_recordings._handle_sdcard_videos(args, client, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.recordings import _handle_cloud_video_download as _handle_cloud_video_download
+def _handle_cloud_videos(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch cloud video descriptors and optionally hydrate details."""
+    return _impl_recordings._handle_cloud_videos(args, client, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.recordings import _select_cloud_video_for_seq_id as _select_cloud_video_for_seq_id
+def _handle_cloud_video_download(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch cloud video details, then download the selected media bytes."""
+    return _impl_recordings._handle_cloud_video_download(args, client, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.recordings import _extract_ticket as _extract_ticket
+def _select_cloud_video_for_seq_id(client: EzvizClient, *, serial: str, channel: int, seq_id: str, limit: int, video_type: int, support_multi_channel_shared_service: int) -> dict[str, Any]:
+    """Return a hydrated cloud video descriptor for a selected seqId."""
+    return _impl_recordings._select_cloud_video_for_seq_id(client, serial=serial, channel=channel, seq_id=seq_id, limit=limit, video_type=video_type, support_multi_channel_shared_service=support_multi_channel_shared_service, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.recordings import _cloud_video_start_millis as _cloud_video_start_millis
+def _extract_ticket(ticket_response: dict[str, Any]) -> str:
+    """Extract the ticket string from known EZVIZ ticketInfo response shapes."""
+    return _impl_recordings._extract_ticket(ticket_response, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.recordings import _cas_time_from_millis as _cas_time_from_millis
+def _cloud_video_start_millis(video: dict[str, Any]) -> int:
+    """Return cloud clip start time in epoch milliseconds."""
+    return _impl_recordings._cloud_video_start_millis(video, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.recordings import _handle_cloud_video_decrypt as _handle_cloud_video_decrypt
+def _cas_time_from_millis(value: int) -> str:
+    """Format epoch milliseconds as the CAS timestamp string used by the app."""
+    return _impl_recordings._cas_time_from_millis(value, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.capture import _write_save_result as _write_save_result
+def _handle_cloud_video_decrypt(args: argparse.Namespace, client: EzvizClient | None) -> int:
+    """Decrypt a cloud download .tmp file using the Python PS/NAL transform."""
+    return _impl_recordings._handle_cloud_video_decrypt(args, client, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.capture import _validate_shared_clip_args as _validate_shared_clip_args
+from pyezvizapi.cli.commands import capture as _impl_capture
 
+def _write_save_result(args: argparse.Namespace, result: Mapping[str, Any]) -> None:
+    """Write a human or JSON result for save commands."""
+    return _impl_capture._write_save_result(args, result, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _handle_save_clip as _handle_save_clip
 
+def _validate_shared_clip_args(args: argparse.Namespace) -> None:
+    """Reject unsupported clock assertions before account or camera access."""
+    return _impl_capture._validate_shared_clip_args(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_from_args as _hcnetsdk_command_plan_from_args
 
+def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Save a short direct-local camera clip to disk."""
+    return _impl_capture._handle_save_clip(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_generated_plan_from_args as _hcnetsdk_command_generated_plan_from_args
 
+def _hcnetsdk_command_plan_from_args(args: argparse.Namespace) -> HcNetSdkCommandPortMultiSocketPlan | None:
+    """Load a native-style multi-socket command plan from CLI args."""
+    return _impl_capture._hcnetsdk_command_plan_from_args(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_from_json as _hcnetsdk_command_plan_from_json
 
+def _hcnetsdk_command_generated_plan_from_args(args: argparse.Namespace) -> HcNetSdkCommandPortGeneratedMultiSocketPlan | None:
+    """Load a generated multi-socket command plan from CLI args."""
+    return _impl_capture._hcnetsdk_command_generated_plan_from_args(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_generated_plan_from_json as _hcnetsdk_command_generated_plan_from_json
 
+def _hcnetsdk_command_plan_from_json(value: Any) -> HcNetSdkCommandPortMultiSocketPlan:
+    """Build a command-port socket plan from simple JSON shapes."""
+    return _impl_capture._hcnetsdk_command_plan_from_json(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_raw_steps as _hcnetsdk_command_plan_raw_steps
 
+def _hcnetsdk_command_generated_plan_from_json(value: Any) -> HcNetSdkCommandPortGeneratedMultiSocketPlan:
+    """Build a generated command-port socket plan from JSON."""
+    return _impl_capture._hcnetsdk_command_generated_plan_from_json(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_step_from_json as _hcnetsdk_command_plan_step_from_json
 
+def _hcnetsdk_command_plan_raw_steps(value: Any) -> list[Any]:
+    """Return raw socket step objects from concrete or generated JSON."""
+    return _impl_capture._hcnetsdk_command_plan_raw_steps(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_generated_plan_step_from_json as _hcnetsdk_command_generated_plan_step_from_json
 
+def _hcnetsdk_command_plan_step_from_json(value: Any) -> HcNetSdkCommandPortSocketStep:
+    """Build one socket step from a JSON object."""
+    return _impl_capture._hcnetsdk_command_plan_step_from_json(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_templates_from_json as _hcnetsdk_command_plan_templates_from_json
 
+def _hcnetsdk_command_generated_plan_step_from_json(value: Any) -> HcNetSdkCommandPortGeneratedSocketStep:
+    """Build one generated socket step from a JSON object."""
+    return _impl_capture._hcnetsdk_command_generated_plan_step_from_json(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _iter_hcnetsdk_command_template_values as _iter_hcnetsdk_command_template_values
 
+def _hcnetsdk_command_plan_templates_from_json(value: Mapping[str, Any], keys: tuple[str, ...], *, required: bool=True) -> tuple[HcNetSdkCommandPortControlTemplate, ...]:
+    """Read generated control templates from one command-plan JSON step."""
+    return _impl_capture._hcnetsdk_command_plan_templates_from_json(value, keys, required=required, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_template_from_json as _hcnetsdk_command_plan_template_from_json
 
+def _iter_hcnetsdk_command_template_values(value: Any) -> Iterator[Any]:
+    """Yield generated command template objects from JSON."""
+    return _impl_capture._iter_hcnetsdk_command_template_values(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_int_required as _hcnetsdk_int_required
 
+def _hcnetsdk_command_plan_template_from_json(value: Any) -> HcNetSdkCommandPortControlTemplate:
+    """Build one generated control template from a JSON object."""
+    return _impl_capture._hcnetsdk_command_plan_template_from_json(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_optional_int as _hcnetsdk_optional_int
 
+def _hcnetsdk_int_required(value: Mapping[str, Any], keys: tuple[str, ...], message: str) -> int:
+    """Read a required integer field from a JSON object."""
+    return _impl_capture._hcnetsdk_int_required(value, keys, message, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_bytes_from_json as _hcnetsdk_bytes_from_json
 
+def _hcnetsdk_optional_int(value: Mapping[str, Any], keys: tuple[str, ...]) -> int | None:
+    """Read an optional integer field from a JSON object."""
+    return _impl_capture._hcnetsdk_optional_int(value, keys, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_frames_from_json as _hcnetsdk_command_plan_frames_from_json
 
+def _hcnetsdk_bytes_from_json(value: Mapping[str, Any], keys: tuple[str, ...], *, default: bytes=b'') -> bytes:
+    """Read an optional hex byte field from a JSON object."""
+    return _impl_capture._hcnetsdk_bytes_from_json(value, keys, default=default, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_read_policy as _hcnetsdk_command_plan_read_policy
 
+def _hcnetsdk_command_plan_frames_from_json(value: Mapping[str, Any], keys: tuple[str, ...], *, required: bool=True) -> tuple[bytes, ...]:
+    """Read a frame list from one command-plan JSON step."""
+    return _impl_capture._hcnetsdk_command_plan_frames_from_json(value, keys, required=required, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_response_reads as _hcnetsdk_command_plan_response_reads
 
+def _hcnetsdk_command_plan_read_policy(value: Mapping[str, Any], *, default: bool=True) -> bool | tuple[bool, ...]:
+    """Read the response policy for one command-plan step."""
+    return _impl_capture._hcnetsdk_command_plan_read_policy(value, default=default, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_media_socket as _hcnetsdk_command_plan_media_socket
 
+def _hcnetsdk_command_plan_response_reads(value: Mapping[str, Any]) -> int | tuple[int, ...] | None:
+    """Read optional response-frame counts for one command-plan step."""
+    return _impl_capture._hcnetsdk_command_plan_response_reads(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_immediate_media_read as _hcnetsdk_command_plan_immediate_media_read
 
+def _hcnetsdk_command_plan_media_socket(value: Mapping[str, Any]) -> bool:
+    """Return whether a command-plan step is the media socket."""
+    return _impl_capture._hcnetsdk_command_plan_media_socket(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_delay_after_commands as _hcnetsdk_command_plan_delay_after_commands
 
+def _hcnetsdk_command_plan_immediate_media_read(value: Mapping[str, Any]) -> bool:
+    """Return whether a media step should read first media before later steps."""
+    return _impl_capture._hcnetsdk_command_plan_immediate_media_read(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_plan_drain_media_before_next as _hcnetsdk_command_plan_drain_media_before_next
 
+def _hcnetsdk_command_plan_delay_after_commands(value: Mapping[str, Any]) -> float:
+    """Return optional pacing delay after one command-plan step."""
+    return _impl_capture._hcnetsdk_command_plan_delay_after_commands(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_bool as _hcnetsdk_bool
 
+def _hcnetsdk_command_plan_drain_media_before_next(value: Mapping[str, Any]) -> float:
+    """Return optional media-drain duration before later command-plan steps."""
+    return _impl_capture._hcnetsdk_command_plan_drain_media_before_next(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_int as _hcnetsdk_int
 
+def _hcnetsdk_bool(value: Any) -> bool:
+    """Parse permissive boolean values from CLI JSON."""
+    return _impl_capture._hcnetsdk_bool(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_frames_from_args as _hcnetsdk_command_frames_from_args
 
+def _hcnetsdk_int(value: Any) -> int:
+    """Parse non-negative integer values from CLI JSON."""
+    return _impl_capture._hcnetsdk_int(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_command_frame_hex_values_from_file as _hcnetsdk_command_frame_hex_values_from_file
 
+def _hcnetsdk_command_frames_from_args(args: argparse.Namespace) -> tuple[bytes, ...]:
+    """Load complete command-port frames from CLI hex values or a file."""
+    return _impl_capture._hcnetsdk_command_frames_from_args(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _iter_hcnetsdk_command_frame_hex_values as _iter_hcnetsdk_command_frame_hex_values
 
+def _hcnetsdk_command_frame_hex_values_from_file(path: str) -> list[str]:
+    """Read command-frame hex values from JSON or text."""
+    return _impl_capture._hcnetsdk_command_frame_hex_values_from_file(path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _bytes_from_hex_value as _bytes_from_hex_value
 
+def _iter_hcnetsdk_command_frame_hex_values(value: Any) -> Iterator[str]:
+    """Yield command-frame hex strings from simple JSON shapes."""
+    return _impl_capture._iter_hcnetsdk_command_frame_hex_values(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _hcnetsdk_read_response_policy as _hcnetsdk_read_response_policy
 
+def _bytes_from_hex_value(value: str) -> bytes:
+    """Decode a user-supplied hex byte string."""
+    return _impl_capture._bytes_from_hex_value(value, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _handle_save_image as _handle_save_image
 
+def _hcnetsdk_read_response_policy(args: argparse.Namespace, frame_count: int) -> bool | tuple[bool, ...]:
+    """Return response-read policy for command-port bootstrapping."""
+    return _impl_capture._hcnetsdk_read_response_policy(args, frame_count, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.capture import _handle_save as _handle_save
 
+def _handle_save_image(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Save a camera image to disk, triggering capture when no URL is supplied."""
+    return _impl_capture._handle_save_image(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.devices import _handle_light as _handle_light
 
+def _handle_save(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle person-friendly local save commands."""
+    return _impl_capture._handle_save(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.devices import _handle_home_defence_mode as _handle_home_defence_mode
 
+def _handle_light(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle `light` subcommands (toggle/status)."""
+    return _impl_devices._handle_light(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.push import _handle_mqtt as _handle_mqtt
 
+def _handle_home_defence_mode(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle `home_defence_mode` subcommands (set mode)."""
+    return _impl_devices._handle_home_defence_mode(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _write_stream_payloads as _write_stream_payloads
 
+from pyezvizapi.cli.commands import push as _impl_push
 
-from pyezvizapi.cli.commands.cloud_stream import _start_cli_cloud_stream as _start_cli_cloud_stream
+def _handle_mqtt(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Migrate the login and listen with durable channel-99 token storage."""
+    return _impl_push._handle_mqtt(args, client, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _collect_stream_payloads as _collect_stream_payloads
+from pyezvizapi.cli.commands import cloud_stream as _impl_cloud_stream
 
+def _write_stream_payloads(stream: Any, output: BinaryIO, *, max_packets: int | None, duration_seconds: float | None=None, first_packet_deadline: float | None=None, allow_encrypted: bool, transform_payload: Callable[[bytes], bytes] | None=None, flush_each: bool=False, monotonic: Any=time.monotonic) -> None:
+    """Write VTM stream packet bodies to a binary file-like object."""
+    return _impl_cloud_stream._write_stream_payloads(stream, output, max_packets=max_packets, duration_seconds=duration_seconds, first_packet_deadline=first_packet_deadline, allow_encrypted=allow_encrypted, transform_payload=transform_payload, flush_each=flush_each, monotonic=monotonic, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _collect_stream_packets as _collect_stream_packets
 
+def _start_cli_cloud_stream(stream: Any, *, timeout: float | None, duration_seconds: float | None, monotonic: Callable[[], float]=time.monotonic) -> float | None:
+    """Start a CLI VTM stream with one bounded negotiation deadline."""
+    return _impl_cloud_stream._start_cli_cloud_stream(stream, timeout=timeout, duration_seconds=duration_seconds, monotonic=monotonic, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _detect_stream_packets_transport as _detect_stream_packets_transport
 
+def _collect_stream_payloads(stream: Any, *, max_packets: int | None, duration_seconds: float | None=None, allow_encrypted: bool, monotonic: Any=time.monotonic) -> bytes:
+    """Collect VTM stream packet bodies into memory."""
+    return _impl_cloud_stream._collect_stream_payloads(stream, max_packets=max_packets, duration_seconds=duration_seconds, allow_encrypted=allow_encrypted, monotonic=monotonic, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _rtp_payload_video_codec as _rtp_payload_video_codec
 
+def _collect_stream_packets(stream: Any, *, max_packets: int | None, duration_seconds: float | None=None, first_packet_deadline: float | None=None, allow_encrypted: bool, monotonic: Any=time.monotonic) -> list[Any]:
+    """Collect VTM stream packets while preserving packet boundaries."""
+    return _impl_cloud_stream._collect_stream_packets(stream, max_packets=max_packets, duration_seconds=duration_seconds, first_packet_deadline=first_packet_deadline, allow_encrypted=allow_encrypted, monotonic=monotonic, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _detect_rtp_video_codec as _detect_rtp_video_codec
 
+def _detect_stream_packets_transport(packets: list[Any]) -> StreamTransport:
+    """Return the first known media transport from collected VTM packets."""
+    return _impl_cloud_stream._detect_stream_packets_transport(packets, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _parse_rtp_packets as _parse_rtp_packets
 
+def _rtp_payload_video_codec(payload: bytes) -> str | None:
+    """Compatibility wrapper for the shared RTP codec detector."""
+    return _impl_cloud_stream._rtp_payload_video_codec(payload, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _rtp_packets_to_annexb as _rtp_packets_to_annexb
 
+def _detect_rtp_video_codec(packets: list[Any], *, media_key: str | bytes | None=None, decrypt_codec: str='auto') -> str:
+    """Detect RTP video codec through the shared parser and router."""
+    return _impl_cloud_stream._detect_rtp_video_codec(packets, media_key=media_key, decrypt_codec=decrypt_codec, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _rtp_packets_to_annexb_units as _rtp_packets_to_annexb_units
 
+def _parse_rtp_packets(packets: list[Any]) -> list[Any]:
+    """Parse valid RTP bodies while ignoring interleaved control data."""
+    return _impl_cloud_stream._parse_rtp_packets(packets, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _decrypt_annexb_video_bytes as _decrypt_annexb_video_bytes
 
+def _rtp_packets_to_annexb(packets: list[Any], *, codec: str) -> bytes:
+    """Convert RTP video through the shared continuity state machine."""
+    return _impl_cloud_stream._rtp_packets_to_annexb(packets, codec=codec, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _decrypt_rtp_annexb_units as _decrypt_rtp_annexb_units
 
+def _rtp_packets_to_annexb_units(packets: list[Any], *, codec: str, first_slice_key: str | bytes | None=None, decrypt_codec: str='auto') -> tuple[bytes, ...]:
+    """Return complete Annex-B units from the shared RTP continuity state machine."""
+    return _impl_cloud_stream._rtp_packets_to_annexb_units(packets, codec=codec, first_slice_key=first_slice_key, decrypt_codec=decrypt_codec, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _remux_elementary_video_bytes_to_mpegts as _remux_elementary_video_bytes_to_mpegts
 
+def _decrypt_annexb_video_bytes(client: EzvizClient, serial: str, data: bytes, *, codec: str) -> bytes:
+    """Decrypt Annex B video NAL payload bytes using the MPEG-PS transform."""
+    return _impl_cloud_stream._decrypt_annexb_video_bytes(client, serial, data, codec=codec, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _decrypt_stream_payload_bytes as _decrypt_stream_payload_bytes
 
+def _decrypt_rtp_annexb_units(client: EzvizClient, serial: str, units: tuple[bytes, ...], *, detected_codec: str, decrypt_codec: str, media_key: str | bytes | None=None) -> bytes:
+    """Decrypt RTP Annex-B units with one camera-key lookup."""
+    return _impl_cloud_stream._decrypt_rtp_annexb_units(client, serial, units, detected_codec=detected_codec, decrypt_codec=decrypt_codec, media_key=media_key, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.cloud_stream import _codec_nalu_header_size as _codec_nalu_header_size
+
+def _remux_elementary_video_bytes_to_mpegts(data: bytes, output: BinaryIO, *, ffmpeg_path: str, codec: str) -> None:
+    """Remux Annex B HEVC/H.264 elementary stream bytes to MPEG-TS."""
+    return _impl_cloud_stream._remux_elementary_video_bytes_to_mpegts(data, output, ffmpeg_path=ffmpeg_path, codec=codec, _owner=_sys.modules[__name__])
+
+
+def _decrypt_stream_payload_bytes(client: EzvizClient, serial: str, data: bytes, *, codec: str, media_key: str | bytes | None=None) -> bytes:
+    """Decrypt captured MPEG-PS stream bytes using the camera encrypt key."""
+    return _impl_cloud_stream._decrypt_stream_payload_bytes(client, serial, data, codec=codec, media_key=media_key, _owner=_sys.modules[__name__])
+
+
+def _codec_nalu_header_size(codec: str) -> int | None:
+    """Return the Annex B NAL header length preserved by the decrypt transform."""
+    return _impl_cloud_stream._codec_nalu_header_size(codec, _owner=_sys.modules[__name__])
 
 
 class _BufferedStreamPayloadDecryptor:
@@ -571,175 +711,293 @@ class _BufferedStreamPayloadDecryptor:
         return self._decrypt_chunk(chunk)
 
 
-from pyezvizapi.cli.commands.cloud_stream import _stream_payload_decryptor as _stream_payload_decryptor
+def _stream_payload_decryptor(client: EzvizClient, serial: str, *, codec: str) -> Callable[[bytes], bytes]:
+    """Return a buffered MPEG-PS decryptor using the camera encrypt key."""
+    return _impl_cloud_stream._stream_payload_decryptor(client, serial, codec=codec, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _stream_payload_decryptors as _stream_payload_decryptors
+def _stream_payload_decryptors(client: EzvizClient, serial: str, *, codec: str, media_key: str | bytes | None=None) -> tuple[Callable[[bytes], bytes], Callable[[bytes, str], bytes]]:
+    """Return MPEG-PS and RTP decryptors sharing one camera-key lookup."""
+    return _impl_cloud_stream._stream_payload_decryptors(client, serial, codec=codec, media_key=media_key, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _stream_payload_decryptors_with_key as _stream_payload_decryptors_with_key
+def _stream_payload_decryptors_with_key(client: EzvizClient, serial: str, *, codec: str, media_key: str | bytes | None=None) -> tuple[Callable[[bytes], bytes], Callable[[bytes, str], bytes], str | bytes]:
+    """Return streaming decryptors and their single fetched camera key."""
+    return _impl_cloud_stream._stream_payload_decryptors_with_key(client, serial, codec=codec, media_key=media_key, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _cloud_cli_media_key as _cloud_cli_media_key
+def _cloud_cli_media_key(args: argparse.Namespace, client: EzvizClient) -> str | bytes:
+    """Resolve an explicit or cloud camera key without exposing it."""
+    return _impl_cloud_stream._cloud_cli_media_key(args, client, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _explicit_cloud_cli_media_key as _explicit_cloud_cli_media_key
+def _explicit_cloud_cli_media_key(args: argparse.Namespace) -> str | bytes | None:
+    """Resolve only a supplied key; proxy cloud lookup happens per request."""
+    return _impl_cloud_stream._explicit_cloud_cli_media_key(args, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _remux_mpegps_bytes_to_mpegts as _remux_mpegps_bytes_to_mpegts
+def _remux_mpegps_bytes_to_mpegts(data: bytes, output: BinaryIO, *, ffmpeg_path: str) -> None:
+    """Remux in-memory MPEG-PS bytes to MPEG-TS."""
+    return _impl_cloud_stream._remux_mpegps_bytes_to_mpegts(data, output, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _remux_stream_payloads_to_mpegts as _remux_stream_payloads_to_mpegts
+def _remux_stream_payloads_to_mpegts(stream: Any, output: BinaryIO, *, ffmpeg_path: str, max_packets: int | None, duration_seconds: float | None=None, first_packet_deadline: float | None=None, allow_encrypted: bool) -> None:
+    """Route VTM media to MPEG-TS with optional encrypted-packet passthrough."""
+    return _impl_cloud_stream._remux_stream_payloads_to_mpegts(stream, output, ffmpeg_path=ffmpeg_path, max_packets=max_packets, duration_seconds=duration_seconds, first_packet_deadline=first_packet_deadline, allow_encrypted=allow_encrypted, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _open_mpegts_remux_process as _open_mpegts_remux_process
+def _open_mpegts_remux_process(ffmpeg_path: str, *, input_format: str='mpeg') -> subprocess.Popen[bytes]:
+    """Open an FFmpeg process ready to remux MPEG-PS stdin to MPEG-TS stdout."""
+    return _impl_cloud_stream._open_mpegts_remux_process(ffmpeg_path, input_format=input_format, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _copy_stream_payloads_to_mpegts as _copy_stream_payloads_to_mpegts
+def _copy_stream_payloads_to_mpegts(stream: Any, output: BinaryIO, *, process: subprocess.Popen[bytes], max_packets: int | None, duration_seconds: float | None=None, allow_encrypted: bool, transform_payload: Callable[[bytes], bytes] | None=None) -> None:
+    """Copy stream payloads through an already-started FFmpeg remuxer."""
+    return _impl_cloud_stream._copy_stream_payloads_to_mpegts(stream, output, process=process, max_packets=max_packets, duration_seconds=duration_seconds, allow_encrypted=allow_encrypted, transform_payload=transform_payload, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _default_stream_proxy_path as _default_stream_proxy_path
+def _default_stream_proxy_path(serial: str) -> str:
+    """Return the default HTTP path for a camera stream."""
+    return _impl_cloud_stream._default_stream_proxy_path(serial, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _normalize_stream_proxy_path as _normalize_stream_proxy_path
+def _normalize_stream_proxy_path(path: str | None, serial: str) -> str:
+    """Normalize a user-supplied proxy path."""
+    return _impl_cloud_stream._normalize_stream_proxy_path(path, serial, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _handle_stream_proxy_get as _handle_stream_proxy_get
+def _handle_stream_proxy_get(handler: BaseHTTPRequestHandler, config: StreamProxyConfig, client: EzvizClient) -> None:
+    """Handle one experimental VTM-to-MPEG-TS HTTP proxy request."""
+    return _impl_cloud_stream._handle_stream_proxy_get(handler, config, client, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.cloud_stream import _serve_stream_proxy as _serve_stream_proxy
+def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
+    """Serve the experimental VTM-to-MPEG-TS HTTP proxy until interrupted."""
+    return _impl_cloud_stream._serve_stream_proxy(args, client, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.cli.commands.local_stream import _env_or_arg as _env_or_arg
+from pyezvizapi.cli.commands import local_stream as _impl_local_stream
 
+def _env_or_arg(args: argparse.Namespace, attr: str, env_name: str) -> str | None:
+    """Return a CLI argument value or matching environment fallback."""
+    return _impl_local_stream._env_or_arg(args, attr, env_name, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import os_environ_get as os_environ_get
 
+def os_environ_get(name: str) -> str | None:
+    """Small wrapper to make environment fallback easy to patch in tests."""
+    return _impl_local_stream.os_environ_get(name, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _required_local_sdk_secret as _required_local_sdk_secret
 
+def _required_local_sdk_secret(args: argparse.Namespace, attr: str, env_name: str) -> str:
+    """Read a required local-SDK secret without logging or persisting it."""
+    return _impl_local_stream._required_local_sdk_secret(args, attr, env_name, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _local_sdk_credentials_file as _local_sdk_credentials_file
 
+def _local_sdk_credentials_file(args: argparse.Namespace) -> dict[str, Any]:
+    """Read a local-SDK credential bundle without logging secret values."""
+    return _impl_local_stream._local_sdk_credentials_file(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _local_sdk_credentials_value as _local_sdk_credentials_value
 
+def _local_sdk_credentials_value(args: argparse.Namespace, path: tuple[str, ...]) -> Any:
+    """Return a value from the optional local-SDK credential bundle."""
+    return _impl_local_stream._local_sdk_credentials_value(args, path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _local_sdk_arg_or_credentials as _local_sdk_arg_or_credentials
 
+def _local_sdk_arg_or_credentials(args: argparse.Namespace, attr: str, path: tuple[str, ...]) -> Any:
+    """Return an explicit CLI value or matching credential-bundle value."""
+    return _impl_local_stream._local_sdk_arg_or_credentials(args, attr, path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _required_local_sdk_arg_or_credentials as _required_local_sdk_arg_or_credentials
 
+def _required_local_sdk_arg_or_credentials(args: argparse.Namespace, attr: str, path: tuple[str, ...]) -> Any:
+    """Return a required direct-local field from args or credentials file."""
+    return _impl_local_stream._required_local_sdk_arg_or_credentials(args, attr, path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _local_sdk_media_key as _local_sdk_media_key
 
+def _local_sdk_media_key(args: argparse.Namespace, client: EzvizClient | None) -> str | bytes:
+    """Read the direct-local media decrypt key without logging or persisting it."""
+    return _impl_local_stream._local_sdk_media_key(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _local_sdk_has_static_media_key as _local_sdk_has_static_media_key
 
+def _local_sdk_has_static_media_key(args: argparse.Namespace) -> bool:
+    """Return True when local-sdk-dump can decrypt without cloud key lookup."""
+    return _impl_local_stream._local_sdk_has_static_media_key(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _read_optional_binary_file as _read_optional_binary_file
 
+def _read_optional_binary_file(path: str | None) -> bytes | None:
+    """Read an optional caller-owned binary body from disk."""
+    return _impl_local_stream._read_optional_binary_file(path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _local_sdk_cas_device_info as _local_sdk_cas_device_info
 
+def _local_sdk_cas_device_info(args: argparse.Namespace, client: EzvizClient | None) -> EzvizCasDeviceInfo:
+    """Build local CAS device info from explicit fields or cloud CAS."""
+    return _impl_local_stream._local_sdk_cas_device_info(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _build_local_sdk_cli_stream as _build_local_sdk_cli_stream
 
+def _build_local_sdk_cli_stream(args: argparse.Namespace, client: EzvizClient | None=None) -> Any:
+    """Build the direct-local SDK stream from explicit CLI/environment fields."""
+    return _impl_local_stream._build_local_sdk_cli_stream(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _build_local_sdk_ecdh_cli_stream as _build_local_sdk_ecdh_cli_stream
 
+def _build_local_sdk_ecdh_cli_stream(args: argparse.Namespace, client: EzvizClient | None=None) -> Any:
+    """Build an encrypted local SDK ECDH stream."""
+    return _impl_local_stream._build_local_sdk_ecdh_cli_stream(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _local_sdk_receiver_info_from_args as _local_sdk_receiver_info_from_args
 
+def _local_sdk_receiver_info_from_args(args: argparse.Namespace) -> EzvizLocalReceiverInfo | EzvizLocalReceiverInfoAttrs:
+    """Build the requested ReceiverInfo XML shape for local-SDK preview."""
+    return _impl_local_stream._local_sdk_receiver_info_from_args(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _local_sdk_receiver_info_ex_from_args as _local_sdk_receiver_info_ex_from_args
 
+def _local_sdk_receiver_info_ex_from_args(args: argparse.Namespace) -> EzvizLocalReceiverInfoEx | EzvizLocalReceiverInfoExAttrs:
+    """Build the requested ReceiverInfoEx XML shape for local-SDK preview."""
+    return _impl_local_stream._local_sdk_receiver_info_ex_from_args(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _local_sdk_authentication_from_args as _local_sdk_authentication_from_args
 
+def _local_sdk_authentication_from_args(args: argparse.Namespace) -> EzvizLocalAuthenticationAttrs | None:
+    """Return app-shaped Authentication only when that XML shape is requested."""
+    return _impl_local_stream._local_sdk_authentication_from_args(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _handle_local_sdk_stream_dump as _handle_local_sdk_stream_dump
 
+def _handle_local_sdk_stream_dump(args: argparse.Namespace, client: EzvizClient | None=None) -> int:
+    """Dump direct-local SDK media with caller-supplied local fields."""
+    return _impl_local_stream._handle_local_sdk_stream_dump(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _copy_local_sdk_ecdh_cli_stream as _copy_local_sdk_ecdh_cli_stream
 
+def _copy_local_sdk_ecdh_cli_stream(args: argparse.Namespace, client: EzvizClient | None, stream: Any, output: BinaryIO) -> None:
+    """Copy one CLI-selected ECDH stream to its requested container."""
+    return _impl_local_stream._copy_local_sdk_ecdh_cli_stream(args, client, stream, output, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _handle_local_sdk_keys as _handle_local_sdk_keys
 
+def _handle_local_sdk_keys(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch and print direct-local SDK credentials for explicit setup flows."""
+    return _impl_local_stream._handle_local_sdk_keys(args, client, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _handle_h264_annexb_summary as _handle_h264_annexb_summary
 
+def _handle_h264_annexb_summary(args: argparse.Namespace) -> int:
+    """Summarize a local H.264 Annex-B elementary stream."""
+    return _impl_local_stream._handle_h264_annexb_summary(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _handle_hcnetsdk_command_dump_summary as _handle_hcnetsdk_command_dump_summary
 
+def _handle_hcnetsdk_command_dump_summary(args: argparse.Namespace) -> int:
+    """Summarize offline HCNetSDK command-port dump artifacts."""
+    return _impl_local_stream._handle_hcnetsdk_command_dump_summary(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _hcnetsdk_command_frame_dump_summary as _hcnetsdk_command_frame_dump_summary
 
+def _hcnetsdk_command_frame_dump_summary(directory: Path, *, max_frames: int) -> dict[str, Any]:
+    """Return sanitized metadata for dumped outbound command frames."""
+    return _impl_local_stream._hcnetsdk_command_frame_dump_summary(directory, max_frames=max_frames, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _hcnetsdk_inbound_media_dump_summary as _hcnetsdk_inbound_media_dump_summary
 
+def _hcnetsdk_inbound_media_dump_summary(path: Path, *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> dict[str, Any]:
+    """Return sanitized metadata for raw dumped command-port inbound media bytes."""
+    return _impl_local_stream._hcnetsdk_inbound_media_dump_summary(path, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _hcnetsdk_playm4_input_dump_summary as _hcnetsdk_playm4_input_dump_summary
 
+def _hcnetsdk_playm4_input_dump_summary(directory: Path, *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> dict[str, Any]:
+    """Return sanitized metadata for PlayM4 input dump chunks."""
+    return _impl_local_stream._hcnetsdk_playm4_input_dump_summary(directory, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _hcnetsdk_native_annexb_dump_summary as _hcnetsdk_native_annexb_dump_summary
 
+def _hcnetsdk_native_annexb_dump_summary(directory: Path, *, label: str, codec: str, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> dict[str, Any]:
+    """Return sanitized metadata for native Annex-B Frida dump chunks."""
+    return _impl_local_stream._hcnetsdk_native_annexb_dump_summary(directory, label=label, codec=codec, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _decode_native_annexb_chunk_windows as _decode_native_annexb_chunk_windows
 
+def _decode_native_annexb_chunk_windows(paths: list[Path], *, codec: str, max_windows: int, ffmpeg_path: str) -> list[dict[str, Any]]:
+    """Decode sampled IDR/IRAP-bearing native dump chunks independently."""
+    return _impl_local_stream._decode_native_annexb_chunk_windows(paths, codec=codec, max_windows=max_windows, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _detect_native_annexb_codec as _detect_native_annexb_codec
 
+def _detect_native_annexb_codec(data: bytes, *, requested: str) -> str:
+    """Return the requested or likely codec for Annex-B dump bytes."""
+    return _impl_local_stream._detect_native_annexb_codec(data, requested=requested, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _iter_annexb_nal_prefixes as _iter_annexb_nal_prefixes
 
+def _iter_annexb_nal_prefixes(data: bytes) -> Iterator[bytes]:
+    """Yield the first bytes after Annex-B start codes."""
+    return _impl_local_stream._iter_annexb_nal_prefixes(data, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _add_hcnetsdk_annexb_dump_summary as _add_hcnetsdk_annexb_dump_summary
 
+def _add_hcnetsdk_annexb_dump_summary(summary: dict[str, Any], packets: list[bytes], *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> None:
+    """Attach sanitized reconstructed Annex-B metadata to a dump summary."""
+    return _impl_local_stream._add_hcnetsdk_annexb_dump_summary(summary, packets, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _scan_hcnetsdk_command_port_media_frames as _scan_hcnetsdk_command_port_media_frames
 
+def _scan_hcnetsdk_command_port_media_frames(data: bytes, *, max_frames: int) -> dict[str, Any]:
+    """Scan raw command-port bytes for little-endian ``$`` media frames."""
+    return _impl_local_stream._scan_hcnetsdk_command_port_media_frames(data, max_frames=max_frames, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _handle_hcnetsdk_command_plan_generate as _handle_hcnetsdk_command_plan_generate
 
+def _handle_hcnetsdk_command_plan_generate(args: argparse.Namespace) -> int:
+    """Convert concrete port-8000 control frames into generated templates."""
+    return _impl_local_stream._handle_hcnetsdk_command_plan_generate(args, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _hcnetsdk_generated_plan_to_json as _hcnetsdk_generated_plan_to_json
 
+def _hcnetsdk_generated_plan_to_json(plan: HcNetSdkCommandPortGeneratedMultiSocketPlan) -> dict[str, Any]:
+    """Return the public JSON shape for a generated command-port plan."""
+    return _impl_local_stream._hcnetsdk_generated_plan_to_json(plan, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _hcnetsdk_generated_plan_step_to_json as _hcnetsdk_generated_plan_step_to_json
 
+def _hcnetsdk_generated_plan_step_to_json(step: HcNetSdkCommandPortGeneratedSocketStep) -> dict[str, Any]:
+    """Return JSON for one generated command-port socket step."""
+    return _impl_local_stream._hcnetsdk_generated_plan_step_to_json(step, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _hcnetsdk_command_template_to_json as _hcnetsdk_command_template_to_json
 
+def _hcnetsdk_command_template_to_json(template: HcNetSdkCommandPortControlTemplate) -> dict[str, Any]:
+    """Return JSON for one generated command-port control template."""
+    return _impl_local_stream._hcnetsdk_command_template_to_json(template, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _decode_annexb_windows as _decode_annexb_windows
 
+def _decode_annexb_windows(data: bytes, window_summary: Mapping[str, Any], *, ffmpeg_path: str, input_format: str) -> list[dict[str, Any]]:
+    """Return bounded ffmpeg decode results for sampled Annex-B windows."""
+    return _impl_local_stream._decode_annexb_windows(data, window_summary, ffmpeg_path=ffmpeg_path, input_format=input_format, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _decode_h264_annexb_idr_windows as _decode_h264_annexb_idr_windows
 
+def _decode_h264_annexb_idr_windows(data: bytes, idr_summary: Mapping[str, Any], *, ffmpeg_path: str) -> list[dict[str, Any]]:
+    """Return bounded ffmpeg decode results for sampled H.264 IDR windows."""
+    return _impl_local_stream._decode_h264_annexb_idr_windows(data, idr_summary, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _write_local_sdk_metadata_output as _write_local_sdk_metadata_output
 
+def _write_local_sdk_metadata_output(path: str | None, stream: Any, *, packet_output_path: str | None=None) -> None:
+    """Write safe stream metadata and optional bounded packet samples."""
+    return _impl_local_stream._write_local_sdk_metadata_output(path, stream, packet_output_path=packet_output_path, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _write_hcnetsdk_sampled_packet_output as _write_hcnetsdk_sampled_packet_output
 
+def _write_hcnetsdk_sampled_packet_output(path: str, stream: Any) -> None:
+    """Write bounded sampled command-port packets as raw dump-compatible frames."""
+    return _impl_local_stream._write_hcnetsdk_sampled_packet_output(path, stream, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _local_sdk_stream_metadata as _local_sdk_stream_metadata
 
+def _local_sdk_stream_metadata(stream: Any) -> dict[str, Any]:
+    """Return non-secret direct-local SDK bootstrap and media metadata."""
+    return _impl_local_stream._local_sdk_stream_metadata(stream, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _hcnetsdk_command_port_exchange_metadata as _hcnetsdk_command_port_exchange_metadata
 
+def _hcnetsdk_command_port_exchange_metadata(exchange: Any) -> dict[str, Any]:
+    """Return non-secret metadata for one command-port request/response."""
+    return _impl_local_stream._hcnetsdk_command_port_exchange_metadata(exchange, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _hcnetsdk_command_port_body_word_samples as _hcnetsdk_command_port_body_word_samples
 
+def _hcnetsdk_command_port_body_word_samples(body: bytes, *, max_samples: int=16) -> list[dict[str, int]]:
+    """Return bounded nonzero 32-bit body words for diagnostics."""
+    return _impl_local_stream._hcnetsdk_command_port_body_word_samples(body, max_samples=max_samples, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.local_stream import _hcnetsdk_command_port_body_tail_word_samples as _hcnetsdk_command_port_body_tail_word_samples
 
+def _hcnetsdk_command_port_body_tail_word_samples(tail: bytes, *, max_samples: int=16) -> list[dict[str, int]]:
+    """Return bounded nonzero 32-bit request-tail words for diagnostics."""
+    return _impl_local_stream._hcnetsdk_command_port_body_tail_word_samples(tail, max_samples=max_samples, _owner=_sys.modules[__name__])
 
-from pyezvizapi.cli.commands.stream import _handle_stream as _handle_stream
 
+from pyezvizapi.cli.commands import stream as _impl_stream
 
-from pyezvizapi.cli.commands.devices import _handle_camera as _handle_camera
+def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle experimental stream helpers."""
+    return _impl_stream._handle_stream(args, client, _owner=_sys.modules[__name__])
+
+
+def _handle_camera(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle `camera` subcommands (status/move/unlock/switch/alarm/select)."""
+    return _impl_devices._handle_camera(args, client, _owner=_sys.modules[__name__])
 
 
 def _load_token_file(path: str | None) -> dict[str, Any] | None:

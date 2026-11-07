@@ -1,17 +1,15 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""windows implementation; legacy runtime hooks remain on the owner module.
-
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
+'windows implementation; legacy runtime hooks remain on the owner module.\n\nAccess through _owner is deliberate: callers that patch the compatibility\nmodule must still affect dependent operations. No copied hook snapshots.\n'
 from __future__ import annotations
 
-import pyezvizapi.streaming.local.session as _owner
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.local.session as _owner_types
 
-def collect_h264_idmx_annexb_after_first_clean_idr_window(packets: _owner.Iterable[bytes], *, duration_seconds: float | None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic, ffmpeg_path: str='ffmpeg', max_windows: int=32, wait_seconds: float=60.0) -> bytes:  # noqa: PLR0912, PLR0915
+def collect_h264_idmx_annexb_after_first_clean_idr_window(packets: _owner_types.Iterable[bytes], *, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], ffmpeg_path: str, max_windows: int, wait_seconds: float, _owner: _ModuleType) -> bytes:  # noqa: PLR0912, PLR0915 -- explicit runtime context plus retained signature
     """Collect IDMX packets from the first clean IDR window onward.
 
     This is a streaming-friendly variant of post-capture clean-IDR trimming:
@@ -65,7 +63,7 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(packets: _owner.Iterab
             if clean_start_offset is not None:
                 clean_idr_packet_index = _owner._h264_annexb_packet_index_for_offset(collected, offset=getattr(probe, 'idr_start_offset', None) or clean_start_offset)
                 clean_idr_time = packet_times[clean_idr_packet_index]
-                capture_deadline = clean_idr_time + duration_seconds
+                capture_deadline = _owner.cast(float, clean_idr_time) + _owner.cast(float, duration_seconds)
             continue
         if capture_deadline is not None and now >= capture_deadline and (len(collected) - last_suffix_probe_packet_count >= _owner._CLEAN_WINDOW_SUFFIX_PROBE_PACKET_INTERVAL):
             annexb = _owner._idmx_local_packets_to_h264_annexb(collected)
@@ -95,7 +93,7 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(packets: _owner.Iterab
             raise _owner.PyEzvizError(final_decode_error) from err
         raise
 
-def _hevc_prefixed_suffix_accept_start_offset(accept_start_offset: _owner.Callable[[int], bool], *, prefix_length: int) -> _owner.Callable[[int], bool]:
+def _hevc_prefixed_suffix_accept_start_offset(accept_start_offset: _owner_types.Callable[[int], bool], *, prefix_length: int, _owner: _ModuleType) -> _owner_types.Callable[[int], bool]:
     """Map offsets in a parameter-prefixed HEVC suffix back to the original suffix."""
     if prefix_length <= 0:
         return accept_start_offset
@@ -104,7 +102,7 @@ def _hevc_prefixed_suffix_accept_start_offset(accept_start_offset: _owner.Callab
         return accept_start_offset(max(0, offset - prefix_length))
     return accepts
 
-def collect_idmx_annexb_after_first_clean_video_window(packets: _owner.Iterable[bytes], *, duration_seconds: float | None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic, ffmpeg_path: str='ffmpeg', max_windows: int=32, wait_seconds: float=60.0) -> tuple[bytes, str]:  # noqa: PLR0912, PLR0915
+def collect_idmx_annexb_after_first_clean_video_window(packets: _owner_types.Iterable[bytes], *, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], ffmpeg_path: str, max_windows: int, wait_seconds: float, _owner: _ModuleType) -> tuple[bytes, str]:  # noqa: PLR0912, PLR0915 -- explicit runtime context plus retained signature
     """Collect clear IDMX video from the first clean H.264 IDR or HEVC IRAP."""
     if duration_seconds is None:
         raise _owner.PyEzvizError('duration_seconds is required when waiting for clean video')
@@ -164,7 +162,7 @@ def collect_idmx_annexb_after_first_clean_video_window(packets: _owner.Iterable[
                 clean_prefix = getattr(last_probe, 'prefix', b'') if probe_codec == 'hevc' else b''
                 clean_packet_index = _owner._idmx_annexb_packet_index_for_offset(collected, codec=probe_codec, offset=getattr(last_probe, 'idr_start_offset', None) or clean_start_offset)
                 clean_window_time = packet_times[clean_packet_index]
-                capture_deadline = clean_window_time + duration_seconds
+                capture_deadline = _owner.cast(float, clean_window_time) + _owner.cast(float, duration_seconds)
             continue
         if capture_deadline is not None and now >= capture_deadline and (len(collected) - last_suffix_probe_packet_count >= _owner._CLEAN_WINDOW_SUFFIX_PROBE_PACKET_INTERVAL):
             assert clean_codec is not None
@@ -213,14 +211,14 @@ def collect_idmx_annexb_after_first_clean_video_window(packets: _owner.Iterable[
             raise
     return (annexb, clean_codec)
 
-def _probe_first_clean_idmx_video_window(packets: list[bytes], *, ffmpeg_path: str, max_windows: int) -> tuple[int | None, str | None, str | None, _owner._H264CleanIdrProbeResult]:
+def _probe_first_clean_idmx_video_window(packets: list[bytes], *, ffmpeg_path: str, max_windows: int, _owner: _ModuleType) -> tuple[int | None, str | None, str | None, _owner_types._H264CleanIdrProbeResult]:
     h264_probe = _owner._try_first_clean_h264_annexb_idr_window_offset(packets, ffmpeg_path=ffmpeg_path, max_windows=max_windows)
     if h264_probe.start_offset is not None:
         return (h264_probe.start_offset, 'h264', h264_probe.first_decode_error, h264_probe)
     hevc_probe = _owner._try_first_clean_hevc_annexb_irap_window_offset(packets, ffmpeg_path=ffmpeg_path, max_windows=max_windows)
     return (hevc_probe.start_offset, 'hevc' if hevc_probe.start_offset is not None else None, h264_probe.first_decode_error or hevc_probe.first_decode_error, hevc_probe if hevc_probe.nal_count or hevc_probe.idr_count else h264_probe)
 
-def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(packets: _owner.Iterable[bytes], media_key: str | bytes, *, nalu_header_size: int | None=None, duration_seconds: float | None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic, ffmpeg_path: str='ffmpeg', max_windows: int=32, wait_seconds: float=60.0) -> bytes:  # noqa: PLR0912, PLR0915
+def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(packets: _owner_types.Iterable[bytes], media_key: str | bytes, *, nalu_header_size: int | None, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], ffmpeg_path: str, max_windows: int, wait_seconds: float, _owner: _ModuleType) -> bytes:  # noqa: PLR0912, PLR0915 -- explicit runtime context plus retained signature
     """Collect decrypted IDMX H.264 from the first clean IDR window onward."""
     if duration_seconds is None:
         raise _owner.PyEzvizError('duration_seconds is required when waiting for clean IDR')
@@ -278,7 +276,7 @@ def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(packets: _ow
             if clean_start_offset is not None:
                 clean_idr_packet_index = _owner._h264_annexb_packet_index_for_offset(collected, offset=probe.idr_start_offset or clean_start_offset) if clean_stream_is_clear else _owner._decrypted_h264_annexb_packet_index_for_offset(collected, media_key, nalu_header_size=nalu_header_size, offset=probe.idr_start_offset or clean_start_offset)
                 clean_idr_time = packet_times[clean_idr_packet_index]
-                capture_deadline = clean_idr_time + duration_seconds
+                capture_deadline = _owner.cast(float, clean_idr_time) + _owner.cast(float, duration_seconds)
             continue
         if capture_deadline is not None and now >= capture_deadline and (len(collected) - last_suffix_probe_packet_count >= _owner._CLEAN_WINDOW_SUFFIX_PROBE_PACKET_INTERVAL):
             if clean_stream_is_clear:
@@ -321,20 +319,20 @@ def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(packets: _ow
             raise _owner.PyEzvizError(final_decode_error) from err
         raise
 
-def _raise_if_clean_window_probe_exhausted(*, probe: _owner._H264CleanIdrProbeResult, max_windows: int, first_decode_error: str | None, message: str) -> None:
+def _raise_if_clean_window_probe_exhausted(*, probe: _owner_types._H264CleanIdrProbeResult, max_windows: int, first_decode_error: str | None, message: str, _owner: _ModuleType) -> None:
     """Stop streaming probes once the requested clean-window budget is spent."""
     if getattr(probe, 'start_offset', None) is not None or int(getattr(probe, 'complete_window_count', 0) or 0) < max_windows:
         return
     suffix = _owner._h264_clean_idr_timeout_suffix(first_decode_error=first_decode_error, probe=probe)
     raise _owner.PyEzvizError(message + suffix)
 
-def _should_probe_clean_window(*, packet_count: int, last_probe_packet_count: int) -> bool:
+def _should_probe_clean_window(*, packet_count: int, last_probe_packet_count: int, _owner: _ModuleType) -> bool:
     """Avoid rebuilding and decoding the growing packet buffer every packet."""
     if packet_count < _owner._CLEAN_WINDOW_PROBE_THROTTLE_AFTER_PACKETS:
         return True
     return packet_count - last_probe_packet_count >= _owner._CLEAN_WINDOW_PROBE_PACKET_INTERVAL
 
-def _requested_duration_h264_suffix_predicate(*, packets: list[bytes], packet_times: list[float], base_offset: int, now: float, duration_seconds: float) -> _owner.Callable[[int], bool]:
+def _requested_duration_h264_suffix_predicate(*, packets: list[bytes], packet_times: list[float], base_offset: int, now: float, duration_seconds: float, _owner: _ModuleType) -> _owner_types.Callable[[int], bool]:
     """Return a suffix-start guard that preserves useful post-IDR duration."""
     latest_start_time = now - duration_seconds
     packet_end_offsets = _owner._h264_annexb_packet_end_offsets(packets)
@@ -347,7 +345,7 @@ def _requested_duration_h264_suffix_predicate(*, packets: list[bytes], packet_ti
         return packet_times[packet_index] <= latest_start_time
     return accept_start_offset
 
-def _requested_duration_idmx_suffix_predicate(*, packets: list[bytes], packet_times: list[float], codec: str, base_offset: int, now: float, duration_seconds: float) -> _owner.Callable[[int], bool]:
+def _requested_duration_idmx_suffix_predicate(*, packets: list[bytes], packet_times: list[float], codec: str, base_offset: int, now: float, duration_seconds: float, _owner: _ModuleType) -> _owner_types.Callable[[int], bool]:
     """Return a suffix-start guard for clear H.264/HEVC IDMX Annex-B."""
     latest_start_time = now - duration_seconds
     if codec == 'h264':
@@ -365,7 +363,7 @@ def _requested_duration_idmx_suffix_predicate(*, packets: list[bytes], packet_ti
         return packet_times[packet_index] <= latest_start_time
     return accept_start_offset
 
-def _requested_duration_decrypted_h264_suffix_predicate(*, packets: list[bytes], packet_times: list[float], media_key: str | bytes, nalu_header_size: int | None, stream_is_clear: bool, base_offset: int, now: float, duration_seconds: float) -> _owner.Callable[[int], bool]:
+def _requested_duration_decrypted_h264_suffix_predicate(*, packets: list[bytes], packet_times: list[float], media_key: str | bytes, nalu_header_size: int | None, stream_is_clear: bool, base_offset: int, now: float, duration_seconds: float, _owner: _ModuleType) -> _owner_types.Callable[[int], bool]:
     """Return a suffix-start guard for clear-first or encrypted H.264 IDMX."""
     latest_start_time = now - duration_seconds
 
@@ -380,7 +378,7 @@ def _requested_duration_decrypted_h264_suffix_predicate(*, packets: list[bytes],
         return packet_times[packet_index] <= latest_start_time
     return accept_start_offset
 
-def trim_h264_annexb_to_first_clean_idr_window(data: bytes, *, ffmpeg_path: str='ffmpeg', max_windows: int=32) -> bytes:
+def trim_h264_annexb_to_first_clean_idr_window(data: bytes, *, ffmpeg_path: str, max_windows: int, _owner: _ModuleType) -> bytes:
     """Return Annex-B bytes from the first IDR window that decodes cleanly."""
     idr_summary = _owner.summarize_h264_annexb_idr_windows(data, max_windows=max_windows)
     samples = idr_summary.get('samples')
@@ -405,7 +403,7 @@ def trim_h264_annexb_to_first_clean_idr_window(data: bytes, *, ffmpeg_path: str=
     suffix = f': {first_error}' if first_error else ''
     raise _owner.PyEzvizError('H.264 stream did not contain a clean sampled IDR window' + suffix)
 
-def trim_h264_annexb_to_first_error_free_suffix(data: bytes, *, ffmpeg_path: str='ffmpeg', max_windows: int=32, accept_start_offset: _owner.Callable[[int], bool] | None=None) -> bytes:
+def trim_h264_annexb_to_first_error_free_suffix(data: bytes, *, ffmpeg_path: str, max_windows: int, accept_start_offset: _owner_types.Callable[[int], bool] | None, _owner: _ModuleType) -> bytes:
     """Return the earliest IDR-started suffix that decodes without errors."""
     if not data:
         return data
@@ -417,7 +415,7 @@ def trim_h264_annexb_to_first_error_free_suffix(data: bytes, *, ffmpeg_path: str
     if not isinstance(samples, list) or not samples:
         raise _owner.PyEzvizError('H.264 stream did not contain a clean decodable suffix: ' + (initial_errors[0] if initial_errors else 'clean suffix starts too late for requested duration'))
     first_error = initial_errors[0] if initial_errors else 'clean suffix starts too late for requested duration'
-    candidate_samples: list[tuple[dict[str, _owner.Any], int]] = []
+    candidate_samples: list[tuple[dict[str, _owner_types.Any], int]] = []
     for sample in samples[1:]:
         if not isinstance(sample, dict):
             continue
@@ -438,7 +436,7 @@ def trim_h264_annexb_to_first_error_free_suffix(data: bytes, *, ffmpeg_path: str
             first_error = decode_errors[0]
     raise _owner.PyEzvizError('H.264 stream did not contain a clean decodable suffix: ' + first_error)
 
-def trim_hevc_annexb_to_first_clean_irap_window(data: bytes, *, ffmpeg_path: str='ffmpeg', max_windows: int=32) -> bytes:
+def trim_hevc_annexb_to_first_clean_irap_window(data: bytes, *, ffmpeg_path: str, max_windows: int, _owner: _ModuleType) -> bytes:
     """Return Annex-B bytes from the first IRAP window that decodes cleanly."""
     irap_summary = _owner.summarize_hevc_annexb_irap_windows(data, max_windows=max_windows)
     samples = irap_summary.get('samples')
@@ -470,7 +468,7 @@ def trim_hevc_annexb_to_first_clean_irap_window(data: bytes, *, ffmpeg_path: str
     error_suffix = f': {first_error}' if first_error else ''
     raise _owner.PyEzvizError('HEVC stream did not contain a clean sampled IRAP window' + error_suffix)
 
-def trim_hevc_annexb_to_first_error_free_suffix(data: bytes, *, ffmpeg_path: str='ffmpeg', max_windows: int=32, accept_start_offset: _owner.Callable[[int], bool] | None=None) -> bytes:
+def trim_hevc_annexb_to_first_error_free_suffix(data: bytes, *, ffmpeg_path: str, max_windows: int, accept_start_offset: _owner_types.Callable[[int], bool] | None, _owner: _ModuleType) -> bytes:
     """Return the earliest IRAP-started suffix that decodes without errors."""
     if not data:
         return data
@@ -482,7 +480,7 @@ def trim_hevc_annexb_to_first_error_free_suffix(data: bytes, *, ffmpeg_path: str
     if not isinstance(samples, list) or not samples:
         raise _owner.PyEzvizError('HEVC stream did not contain a clean decodable suffix: ' + (initial_errors[0] if initial_errors else 'clean suffix starts too late for requested duration'))
     first_error = initial_errors[0] if initial_errors else 'clean suffix starts too late for requested duration'
-    candidate_samples: list[tuple[dict[str, _owner.Any], int]] = []
+    candidate_samples: list[tuple[dict[str, _owner_types.Any], int]] = []
     for sample in samples[1:]:
         if not isinstance(sample, dict):
             continue
@@ -504,7 +502,7 @@ def trim_hevc_annexb_to_first_error_free_suffix(data: bytes, *, ffmpeg_path: str
             first_error = decode_errors[0]
     raise _owner.PyEzvizError('HEVC stream did not contain a clean decodable suffix: ' + first_error)
 
-def _hevc_annexb_parameter_prefix_for_suffix(data: bytes, *, start_offset: int, leading_nal_types: object) -> bytes:
+def _hevc_annexb_parameter_prefix_for_suffix(data: bytes, *, start_offset: int, leading_nal_types: object, _owner: _ModuleType) -> bytes:
     """Return prior VPS/SPS/PPS when a recovered IRAP lacks local parameters."""
     required_types = {32, 33, 34}
     local_types = {item for item in leading_nal_types if isinstance(item, int)} if isinstance(leading_nal_types, list) else set()
@@ -520,7 +518,7 @@ def _hevc_annexb_parameter_prefix_for_suffix(data: bytes, *, start_offset: int, 
         return b''
     return b''.join(latest[nal_type] for nal_type in (32, 33, 34) if nal_type in latest)
 
-def _try_first_clean_h264_annexb_idr_window_offset(packets: list[bytes], *, ffmpeg_path: str, max_windows: int) -> _owner._H264CleanIdrProbeResult:
+def _try_first_clean_h264_annexb_idr_window_offset(packets: list[bytes], *, ffmpeg_path: str, max_windows: int, _owner: _ModuleType) -> _owner_types._H264CleanIdrProbeResult:
     """Return the first clean IDR window offset for partial IDMX packets."""
     try:
         annexb = _owner._idmx_local_packets_to_h264_annexb(packets)
@@ -528,7 +526,7 @@ def _try_first_clean_h264_annexb_idr_window_offset(packets: list[bytes], *, ffmp
         return _owner._H264CleanIdrProbeResult(start_offset=None)
     return _owner._try_first_clean_h264_annexb_idr_window_offset_from_annexb(annexb, ffmpeg_path=ffmpeg_path, max_windows=max_windows)
 
-def _try_first_clean_decrypted_h264_annexb_idr_window_offset(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, ffmpeg_path: str, max_windows: int) -> _owner._H264CleanIdrProbeResult:
+def _try_first_clean_decrypted_h264_annexb_idr_window_offset(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, ffmpeg_path: str, max_windows: int, _owner: _ModuleType) -> _owner_types._H264CleanIdrProbeResult:
     """Return the first clean IDR offset for partial encrypted IDMX packets."""
     try:
         annexb = _owner._decrypt_idmx_local_packets_to_annexb(packets, media_key, nalu_header_size=nalu_header_size)
@@ -536,7 +534,7 @@ def _try_first_clean_decrypted_h264_annexb_idr_window_offset(packets: list[bytes
         return _owner._H264CleanIdrProbeResult(start_offset=None)
     return _owner._try_first_clean_h264_annexb_idr_window_offset_from_annexb(annexb, ffmpeg_path=ffmpeg_path, max_windows=max_windows)
 
-def _try_first_clean_hevc_annexb_irap_window_offset(packets: list[bytes], *, ffmpeg_path: str, max_windows: int) -> _owner._H264CleanIdrProbeResult:
+def _try_first_clean_hevc_annexb_irap_window_offset(packets: list[bytes], *, ffmpeg_path: str, max_windows: int, _owner: _ModuleType) -> _owner_types._H264CleanIdrProbeResult:
     """Return the first clean HEVC IRAP window offset for partial IDMX packets."""
     try:
         annexb = _owner._idmx_local_packets_to_hevc_annexb(packets)
@@ -567,7 +565,7 @@ def _try_first_clean_hevc_annexb_irap_window_offset(packets: list[bytes], *, ffm
             first_decode_error = decode_errors[0]
     return _owner._H264CleanIdrProbeResult(start_offset=None, first_decode_error=first_decode_error, idr_count=int(irap_summary.get('irap_count', 0)), sampled_window_count=len(samples), complete_window_count=complete_window_count, nal_count=int(irap_summary.get('nal_count', 0)), codec_name='HEVC', window_name='IRAP')
 
-def _decrypted_h264_annexb_packet_index_for_offset(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, offset: int) -> int:
+def _decrypted_h264_annexb_packet_index_for_offset(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, offset: int, _owner: _ModuleType) -> int:
     """Return the packet index that first contributes the given Annex-B offset."""
     _annexb, spans = _owner._idmx_h264_annexb_packet_spans(packets, media_key, nalu_header_size=nalu_header_size, stream_is_clear=False)
     for span in spans:
@@ -575,7 +573,7 @@ def _decrypted_h264_annexb_packet_index_for_offset(packets: list[bytes], media_k
             return span[2]
     return max(len(packets) - 1, 0)
 
-def _decrypted_hevc_annexb_packet_index_for_offset(packets: list[bytes], media_key: str | bytes, *, offset: int) -> int:
+def _decrypted_hevc_annexb_packet_index_for_offset(packets: list[bytes], media_key: str | bytes, *, offset: int, _owner: _ModuleType) -> int:
     """Return the first packet contributing the HEVC NAL at ``offset``."""
     _annexb, spans = _owner._idmx_hevc_annexb_packet_spans(packets, media_key)
     for span in spans:
@@ -583,11 +581,11 @@ def _decrypted_hevc_annexb_packet_index_for_offset(packets: list[bytes], media_k
             return span[2]
     return max(len(packets) - 1, 0)
 
-def _idmx_h264_annexb_packet_spans(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, stream_is_clear: bool) -> tuple[bytes, list[tuple[int, int, int, int, int, int, int]]]:  # noqa: PLR0912, PLR0915
+def _idmx_h264_annexb_packet_spans(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, stream_is_clear: bool, _owner: _ModuleType) -> tuple[bytes, list[tuple[int, int, int, int, int, int, int]]]:  # noqa: PLR0912, PLR0915 -- explicit runtime context plus retained signature
     """Assemble H.264 while recording each NAL's contributing packet span."""
     output = bytearray()
     spans: list[tuple[int, int, int, int, int, int, int]] = []
-    active_fu: _owner._RtpFragmentedNal | None = None
+    active_fu: _owner_types._RtpFragmentedNal | None = None
     active_start_packet: int | None = None
     active_start_frame: int | None = None
     aes_key = _owner._local_media_aes_key(media_key)
@@ -644,11 +642,11 @@ def _idmx_h264_annexb_packet_spans(packets: list[bytes], media_key: str | bytes,
             spans.append((start_offset, len(output), packet_index, packet_index, nal_type, frame_index, frame_index))
     return (bytes(output), spans)
 
-def _idmx_hevc_annexb_packet_spans(packets: list[bytes], media_key: str | bytes, *, decrypt_hevc_parameter_sets: bool=False) -> tuple[bytes, list[tuple[int, int, int, int, int, int, int]]]:  # noqa: PLR0912, PLR0915
+def _idmx_hevc_annexb_packet_spans(packets: list[bytes], media_key: str | bytes, *, decrypt_hevc_parameter_sets: bool, _owner: _ModuleType) -> tuple[bytes, list[tuple[int, int, int, int, int, int, int]]]:  # noqa: PLR0912, PLR0915 -- explicit runtime context plus retained signature
     """Assemble decrypted HEVC while recording each NAL's packet span."""
     output = bytearray()
     spans: list[tuple[int, int, int, int, int, int, int]] = []
-    active_fu: _owner._RtpFragmentedNal | None = None
+    active_fu: _owner_types._RtpFragmentedNal | None = None
     active_start_packet: int | None = None
     active_start_frame: int | None = None
     active_end_packet: int | None = None
@@ -721,18 +719,18 @@ def _idmx_hevc_annexb_packet_spans(packets: list[bytes], media_key: str | bytes,
         spans.append((start_offset, len(output), active_start_packet if active_start_packet is not None else end_packet, end_packet, active_nal_type if active_nal_type is not None else _owner._hevc_nal_type(bytes(active_fu.data)), active_start_frame if active_start_frame is not None else end_frame, end_frame))
     return (bytes(output), spans)
 
-def _idmx_h264_packets_from_selected_annexb(packets: list[bytes], *, full_annexb: bytes, selected_annexb: bytes, media_key: str | bytes, nalu_header_size: int | None, stream_is_clear: bool) -> list[bytes]:
+def _idmx_h264_packets_from_selected_annexb(packets: list[bytes], *, full_annexb: bytes, selected_annexb: bytes, media_key: str | bytes, nalu_header_size: int | None, stream_is_clear: bool, _owner: _ModuleType) -> list[bytes]:
     """Return the packet interval contributing selected H.264 VCL NALs."""
     _annexb, spans = _owner._idmx_h264_annexb_packet_spans(packets, media_key, nalu_header_size=nalu_header_size, stream_is_clear=stream_is_clear)
     return _owner._idmx_packets_for_selected_vcl_spans(packets, spans=spans, full_annexb=full_annexb, selected_annexb=selected_annexb, video_input_format='h264')
 
-def _idmx_packet_frame_slice(packet: bytes, start: int, stop: int, *, video_payload_types: frozenset[int]) -> bytes:
+def _idmx_packet_frame_slice(packet: bytes, start: int, stop: int, *, video_payload_types: frozenset[int], _owner: _ModuleType) -> bytes:
     frames = list(_owner._iter_idmx_local_packet_frame(packet, video_payload_types=video_payload_types))
     if start == 0 and stop == len(frames):
         return packet
     return b''.join(len(frame).to_bytes(4, 'little') + frame for frame in frames[start:stop])
 
-def _idmx_packets_for_selected_vcl_spans(packets: list[bytes], *, spans: list[tuple[int, int, int, int, int, int, int]], full_annexb: bytes, selected_annexb: bytes, video_input_format: str) -> list[bytes]:
+def _idmx_packets_for_selected_vcl_spans(packets: list[bytes], *, spans: list[tuple[int, int, int, int, int, int, int]], full_annexb: bytes, selected_annexb: bytes, video_input_format: str, _owner: _ModuleType) -> list[bytes]:
     """Return packets and aggregate frames bounded by selected VCL NALs."""
     selected_bounds = _owner._annexb_vcl_bounds(selected_annexb, video_input_format=video_input_format)
     if selected_bounds is None:
@@ -756,13 +754,13 @@ def _idmx_packets_for_selected_vcl_spans(packets: list[bytes], *, spans: list[tu
     last_span = selected_spans[-1]
     start_packet = first_span[2]
     end_packet = last_span[3]
-    video_payload_types = _owner._idmx_local_video_payload_types(packets, codec=_owner.cast(_owner.RtpVideoCodec, video_input_format))
+    video_payload_types = _owner._idmx_local_video_payload_types(packets, codec=_owner.cast('_owner_types.RtpVideoCodec', video_input_format))
     if start_packet == end_packet:
         return [_owner._idmx_packet_frame_slice(packets[start_packet], first_span[5], last_span[6] + 1, video_payload_types=video_payload_types)]
     selected_packets = [_owner._idmx_packet_frame_slice(packets[start_packet], first_span[5], len(list(_owner._iter_idmx_local_packet_frame(packets[start_packet], video_payload_types=video_payload_types))), video_payload_types=video_payload_types), *packets[start_packet + 1:end_packet], _owner._idmx_packet_frame_slice(packets[end_packet], 0, last_span[6] + 1, video_payload_types=video_payload_types)]
     return [packet for packet in selected_packets if packet]
 
-def _idmx_packets_from_selected_annexb(packets: list[bytes], *, full_annexb: bytes, selected_annexb: bytes, media_key: str | bytes, nalu_header_size: int | None, video_input_format: str) -> list[bytes]:
+def _idmx_packets_from_selected_annexb(packets: list[bytes], *, full_annexb: bytes, selected_annexb: bytes, media_key: str | bytes, nalu_header_size: int | None, video_input_format: str, _owner: _ModuleType) -> list[bytes]:
     """Keep packets from the first selected VCL NAL for aligned audio muxing."""
     if video_input_format == 'h264':
         _annexb, spans = _owner._idmx_h264_annexb_packet_spans(packets, media_key, nalu_header_size=nalu_header_size, stream_is_clear=False)
@@ -770,26 +768,26 @@ def _idmx_packets_from_selected_annexb(packets: list[bytes], *, full_annexb: byt
         _annexb, spans = _owner._idmx_hevc_annexb_packet_spans(packets, media_key)
     return _owner._idmx_packets_for_selected_vcl_spans(packets, spans=spans, full_annexb=full_annexb, selected_annexb=selected_annexb, video_input_format=video_input_format)
 
-def _h264_annexb_packet_index_for_offset(packets: list[bytes], *, offset: int) -> int:
+def _h264_annexb_packet_index_for_offset(packets: list[bytes], *, offset: int, _owner: _ModuleType) -> int:
     """Return the packet index that first contributes the clear Annex-B offset."""
     end_offsets = _owner._h264_annexb_packet_end_offsets(packets)
     index = _owner.bisect.bisect_right(end_offsets, offset)
     return min(index, max(len(packets) - 1, 0))
 
-def _hevc_annexb_packet_index_for_offset(packets: list[bytes], *, offset: int) -> int:
+def _hevc_annexb_packet_index_for_offset(packets: list[bytes], *, offset: int, _owner: _ModuleType) -> int:
     """Return the packet index that first contributes the clear HEVC Annex-B offset."""
     end_offsets = _owner._hevc_annexb_packet_end_offsets(packets)
     index = _owner.bisect.bisect_right(end_offsets, offset)
     return min(index, max(len(packets) - 1, 0))
 
-def _idmx_annexb_packet_index_for_offset(packets: list[bytes], *, codec: str, offset: int) -> int:
+def _idmx_annexb_packet_index_for_offset(packets: list[bytes], *, codec: str, offset: int, _owner: _ModuleType) -> int:
     if codec == 'h264':
         return _owner._h264_annexb_packet_index_for_offset(packets, offset=offset)
     if codec == 'hevc':
         return _owner._hevc_annexb_packet_index_for_offset(packets, offset=offset)
     return max(len(packets) - 1, 0)
 
-def _try_first_clean_h264_annexb_idr_window_offset_from_annexb(annexb: bytes, *, ffmpeg_path: str, max_windows: int) -> _owner._H264CleanIdrProbeResult:
+def _try_first_clean_h264_annexb_idr_window_offset_from_annexb(annexb: bytes, *, ffmpeg_path: str, max_windows: int, _owner: _ModuleType) -> _owner_types._H264CleanIdrProbeResult:
     """Return the first clean IDR window offset for Annex-B H.264 bytes."""
     idr_summary = _owner.summarize_h264_annexb_idr_windows(annexb, max_windows=max_windows)
     samples = idr_summary.get('samples')
@@ -815,17 +813,17 @@ def _try_first_clean_h264_annexb_idr_window_offset_from_annexb(annexb: bytes, *,
             first_decode_error = decode_errors[0]
     return _owner._H264CleanIdrProbeResult(start_offset=None, first_decode_error=first_decode_error, idr_count=int(idr_summary.get('idr_count', 0)), sampled_window_count=len(samples), complete_window_count=complete_window_count, nal_count=int(idr_summary.get('nal_count', 0)))
 
-def _ffmpeg_h264_decode_errors(data: bytes, *, ffmpeg_path: str, accept_success_with_stderr: bool=True) -> list[str]:
+def _ffmpeg_h264_decode_errors(data: bytes, *, ffmpeg_path: str, accept_success_with_stderr: bool, _owner: _ModuleType) -> list[str]:
     lines = _owner._ffmpeg_video_decode_errors(data, ffmpeg_path=ffmpeg_path, input_format='h264', accept_success_with_stderr=accept_success_with_stderr)
     if accept_success_with_stderr:
         return lines
     saw_missing_picture_probe = any('missing picture in access unit' in line or 'no frame!' in line for line in lines)
     return [line for line in lines if 'missing picture in access unit' not in line and 'no frame!' not in line and (not (saw_missing_picture_probe and 'Decoding error: Invalid data found when processing input' in line))]
 
-def _ffmpeg_hevc_decode_errors(data: bytes, *, ffmpeg_path: str, accept_success_with_stderr: bool=True) -> list[str]:
+def _ffmpeg_hevc_decode_errors(data: bytes, *, ffmpeg_path: str, accept_success_with_stderr: bool, _owner: _ModuleType) -> list[str]:
     return _owner._ffmpeg_video_decode_errors(data, ffmpeg_path=ffmpeg_path, input_format='hevc', accept_success_with_stderr=accept_success_with_stderr)
 
-def _ffmpeg_video_decode_errors(data: bytes, *, ffmpeg_path: str, input_format: str, accept_success_with_stderr: bool=False) -> list[str]:
+def _ffmpeg_video_decode_errors(data: bytes, *, ffmpeg_path: str, input_format: str, accept_success_with_stderr: bool, _owner: _ModuleType) -> list[str]:
     timeout_seconds = _owner._ffmpeg_video_decode_probe_timeout_seconds(data)
     try:
         completed = _owner.subprocess.run([ffmpeg_path, '-v', 'error', '-f', input_format, '-i', 'pipe:0', '-f', 'null', '-'], input=data, stdout=_owner.subprocess.DEVNULL, stderr=_owner.subprocess.PIPE, check=False, timeout=timeout_seconds)
@@ -841,12 +839,12 @@ def _ffmpeg_video_decode_errors(data: bytes, *, ffmpeg_path: str, input_format: 
         lines.append(f'ffmpeg exited with status {completed.returncode}')
     return lines[:8]
 
-def _ffmpeg_video_decode_probe_timeout_seconds(data: bytes) -> int:
+def _ffmpeg_video_decode_probe_timeout_seconds(data: bytes, *, _owner: _ModuleType) -> int:
     """Keep tiny decode probes quick while allowing full suffix checks to finish."""
     extra_seconds = len(data) // _owner._FFMPEG_VIDEO_DECODE_PROBE_BYTES_PER_EXTRA_SECOND
     return min(_owner._FFMPEG_VIDEO_DECODE_PROBE_MAX_TIMEOUT_SECONDS, _owner._FFMPEG_VIDEO_DECODE_PROBE_TIMEOUT_SECONDS + extra_seconds)
 
-def _hevc_annexb_irap_window_start_index(nal_types: list[int], irap_nal_index: int) -> int:
+def _hevc_annexb_irap_window_start_index(nal_types: list[int], irap_nal_index: int, *, _owner: _ModuleType) -> int:
     start = irap_nal_index
     while start > 0 and nal_types[start - 1] in {32, 33, 34, 35, 39, 40}:
         start -= 1

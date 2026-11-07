@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.token_store`.
 
@@ -12,13 +13,12 @@ from typing import TYPE_CHECKING
 from pyezvizapi.cloud import token_store as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.cloud.token_store import (
-    Any as Any,
-    Path as Path,
-    json as json,
-    os as os,
-    save_private_token as save_private_token,
-    tempfile as tempfile,
-    )
+    import pyezvizapi.cloud.token_store as _compat_module_0
+    Any = _compat_module_0.Any
+    Path = _compat_module_0.Path
+    json = _compat_module_0.json
+    os = _compat_module_0.os
+    save_private_token = _compat_module_0.save_private_token
+    tempfile = _compat_module_0.tempfile
 
 sys.modules[__name__] = _implementation

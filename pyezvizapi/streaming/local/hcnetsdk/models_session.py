@@ -1,33 +1,32 @@
 # Runtime hooks deliberately resolve through their legacy owner.
 # ruff: noqa: SLF001
-
+# Model defaults depend only on the SDK constants leaf.
+# ruff: noqa: E402, I001, SLF001
+from __future__ import annotations
+from pyezvizapi.streaming.local.hcnetsdk import constants as _constants
 """models session implementation; legacy runtime hooks remain on the owner module.
 
 Access through _owner is deliberate: callers that patch the compatibility
 module must still affect dependent operations. No copied hook snapshots.
 """
-from __future__ import annotations
 
-import pyezvizapi.streaming.local.hcnetsdk.protocol as _owner
-
-
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkLoginCandidate:
     """One LAN login mode observed in the EZVIZ Android app."""
     username: str
-    password: str = _owner.field(repr=False)
+    password: str = _constants.field(repr=False)
     port: int
     api: str
     https: bool = False
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkSetSdkLocalCfgRequest:
     """Native ``NET_DVR_SetSDKLocalCfg`` request shape."""
     cfg_type: int
     structure: str
     field_updates: _owner.Mapping[str, _owner.Any] | None = None
     field_order: tuple[str, ...] | None = None
-    api: str = _owner.HCNETSDK_SET_SDK_LOCAL_CFG
+    api: str = _constants.HCNETSDK_SET_SDK_LOCAL_CFG
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for SDK-process local config."""
@@ -42,7 +41,7 @@ class HcNetSdkSetSdkLocalCfgRequest:
             hint['fieldOrder'] = self.field_order
         return hint
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkTcpPayloadShape:
     """Secret-safe classification for raw HCNetSDK command-port bytes."""
     kind: str
@@ -66,7 +65,7 @@ class HcNetSdkTcpPayloadShape:
     xml_offset: int | None = None
     xml_tags: tuple[str, ...] = ()
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkTcpFrameHeader:
     """Observed 16-byte HCNetSDK command-port packet header.
 
@@ -89,7 +88,7 @@ class HcNetSdkTcpFrameHeader:
         """Serialize the non-secret header fields using observed endianness."""
         return b''.join((self.total_length.to_bytes(4, 'big'), self.field_4.to_bytes(4, 'big'), self.field_8.to_bytes(4, 'big'), self.field_12.to_bytes(4, 'big')))
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkTcpFrame:
     """One complete HCNetSDK command-port frame."""
     header: HcNetSdkTcpFrameHeader
@@ -101,26 +100,26 @@ class HcNetSdkTcpFrame:
             raise _owner.PyEzvizError('HCNetSDK TCP frame header/body length mismatch')
         return self.header.to_bytes() + self.body
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkCommandPortExchange:
     """One command-port request and its optional response."""
     request: bytes
     response: HcNetSdkTcpFrame | None = None
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkCommandPortStreamBootstrap:
     """Result of a command-port stream bootstrap."""
     exchanges: tuple[HcNetSdkCommandPortExchange, ...]
     first_media: EzvizInterleavedRtpFrameWithPrefix | None = None
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkCommandPortLoginChallenge:
     """Decoded first-stage command-port login challenge."""
     response: HcNetSdkTcpFrame
     challenge: bytes
     password_seed: bytes
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkCommandPortLoginSession:
     """Successful generated port-8000 login session."""
     session_id: bytes
@@ -131,7 +130,7 @@ class HcNetSdkCommandPortLoginSession:
     challenge: bytes = b''
     password_seed: bytes = b''
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkCommandPortControlResponse:
     """Pure-Python response from one generated command-port control request."""
     login_session: HcNetSdkCommandPortLoginSession
@@ -148,14 +147,14 @@ class HcNetSdkCommandPortControlResponse:
         """Decode the textual response payload as UTF-8."""
         return self.output.decode('utf-8')
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkCommandPortControlTemplate:
     """Reusable post-login command-port control frame template."""
     command_id: int
     body_tail: bytes = b''
     addend: int | None = None
     addend_delta: int | None = None
-    mask_seed: bytes = b'\x00' * _owner.HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH
+    mask_seed: bytes = b'\x00' * _constants.HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH
     body_tail_transform: str | None = None
     name: str | None = None
 
@@ -175,7 +174,7 @@ class HcNetSdkCommandPortControlTemplate:
             body_tail = _owner.hcnetsdk_command_port_play_login_body_tail_for_today(body_tail)
         return _owner.hcnetsdk_command_port_control_frame(session_id=session_id, auth_seed=auth_seed, command_id=self.command_id, key=key, local_ip=local_ip, body_tail=body_tail, addend=template_addend if addend is None else addend, mask_seed=self.mask_seed)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkTcpFrameShape:
     """One HCNetSDK command-port frame reconstructed from redacted log shapes."""
     direction: str
@@ -210,26 +209,26 @@ class HcNetSdkTcpFrameShape:
         """Return the current semantic label for an observed write candidate."""
         return _owner.hcnetsdk_command_candidate_role(self.write_command_candidate)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanPlayDeviceLogin:
     """Player-owned HCNetSDK login step used before LAN native preview starts."""
     endpoint: _owner.HcNetSdkLanEndpoint
     check_last_login_status: bool = False
-    api: str = _owner.EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE
-    facade_api: str = _owner.EZVIZ_PLAY_DATA_INFO_LOGIN_PLAY_DEVICE
+    api: str = _constants.EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE
+    facade_api: str = _constants.EZVIZ_PLAY_DATA_INFO_LOGIN_PLAY_DEVICE
 
     def to_device_param_hint(self) -> dict[str, int | str]:
         """Return the non-secret DeviceParam fields relevant to this login."""
         return {'serial': self.endpoint.serial, 'deviceLocalIp': self.endpoint.host, 'localCmdPort': self.endpoint.command_port, 'localStreamPort': self.endpoint.stream_port or 0}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanPreviewPlan:
     """APK-observed LAN preview flow around HCNetSDK login and EZ stream start."""
     login_candidates: tuple[HcNetSdkLoginCandidate, ...]
     live_view: _owner.EzvizLanLiveViewParams
     play_device_login: EzvizLanPlayDeviceLogin | None = None
-    create_client_api: str = _owner.EZVIZ_NATIVE_CREATE_CLIENT
-    start_preview_api: str = _owner.EZVIZ_NATIVE_START_PREVIEW
+    create_client_api: str = _constants.EZVIZ_NATIVE_CREATE_CLIENT
+    start_preview_api: str = _constants.EZVIZ_NATIVE_START_PREVIEW
 
     @property
     def real_play_request(self) -> _owner.HcNetSdkRealPlayRequest | None:
@@ -268,7 +267,7 @@ class EzvizLanPreviewPlan:
             calls.append(self.post_start_keyframe_request.api)
         return tuple(calls)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalDeviceContent:
     """Decoded ``deviceContent`` for app-managed EZVIZ LAN devices."""
     device_ip: str | None = None
@@ -280,7 +279,7 @@ class EzvizLocalDeviceContent:
     device_rand: str | None = None
     device_role_type: int | None = None
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalDevice:
     """Local-device record shape used by the EZVIZ app and cloud API."""
     serial: str
@@ -299,7 +298,7 @@ class EzvizLocalDevice:
             return None
         return _owner.HcNetSdkLanEndpoint(serial=self.serial, host=self.content.device_ip)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizCasDeviceInfo:
     """CAS device-info tuple used by the EZVIZ native direct-local path.
 
@@ -325,7 +324,7 @@ class EzvizCasDeviceInfo:
         """Return the local-control AES IV bytes derived from CAS metadata."""
         return _owner.ezviz_local_sdk_iv(self.serial, self.operation_code)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkPortProbe:
     """Non-authenticated classification result for one LAN port."""
     port: int
@@ -335,7 +334,7 @@ class HcNetSdkPortProbe:
     error: str | None = None
     tls_error: str | None = None
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalSdkFrameHeader:
     """Header for EZVIZ local SDK XML/framed control messages."""
     magic: bytes
@@ -347,14 +346,14 @@ class EzvizLocalSdkFrameHeader:
     body_length: int
     reserved: int
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalSdkFrame:
     """One EZVIZ local SDK control frame with an optional XML body."""
     header: EzvizLocalSdkFrameHeader
     body: bytes = b''
     trailer: bytes = b''
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalSdkBodyShape:
     """Secret-safe body classification for EZVIZ local SDK frames."""
     kind: str
@@ -366,31 +365,31 @@ class EzvizLocalSdkBodyShape:
     xml_offset: int | None = None
     xml_tags: tuple[str, ...] = ()
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizInterleavedRtpFrameHeader:
     """RTSP-style interleaved RTP frame prefix used on the EZVIZ stream port."""
     channel: int
     payload_length: int
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizInterleavedRtpFrame:
     """One interleaved RTP frame read from an EZVIZ local stream socket."""
     header: EzvizInterleavedRtpFrameHeader
     payload: bytes
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizInterleavedRtpFrameWithPrefix:
     """First RTP frame plus any binary preface emitted before it."""
     prefix: bytes
     frame: EzvizInterleavedRtpFrame
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalSdkExchange:
     """One encrypted local SDK request and parsed response frame."""
     request: bytes
     response: EzvizLocalSdkFrame
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalSdkStreamBootstrap:
     """Result of the direct-local preview setup sequence."""
     preview: EzvizLocalSdkExchange
@@ -403,7 +402,7 @@ class EzvizLocalSdkStreamBootstrap:
         """Return camera-negotiated media fields without session/auth data."""
         return _owner.stream_header_from_preview(self.preview.response.body)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalReceiverInfo:
     """Structured receiver fields for the native local preview setup request."""
     nat_address: str = ''
@@ -426,7 +425,7 @@ class EzvizLocalReceiverInfo:
         lines.append(f'{indent}</ReceiverInfo>')
         return tuple(lines)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalReceiverInfoEx:
     """Structured extended receiver-auth fields for the local preview request."""
     uuid: str | None = None
@@ -444,7 +443,7 @@ class EzvizLocalReceiverInfoEx:
         lines.append(f'{indent}</ReceiverInfoEx>')
         return tuple(lines)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalReceiverInfoAttrs:
     """App-shaped ``ReceiverInfo`` attributes for direct-local preview setup."""
     address: str = ''
@@ -461,7 +460,7 @@ class EzvizLocalReceiverInfoAttrs:
         attrs = (('Address', self.address), ('Port', self.port), ('ServerType', self.server_type), ('StreamType', self.stream_type), ('NewStreamType', self.new_stream_type), ('TransProto', self.trans_proto))
         return (f'{indent}<ReceiverInfo {_owner._xml_attrs(attrs)} />',)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalReceiverInfoExAttrs:
     """App-shaped ``ReceiverInfoEx`` attributes for direct-local preview setup."""
     session_id: str = ''
@@ -473,7 +472,7 @@ class EzvizLocalReceiverInfoExAttrs:
             raise _owner.PyEzvizError('EZVIZ local receiver ex port must be non-negative')
         return (f"{indent}<ReceiverInfoEx {_owner._xml_attrs((('SessionID', self.session_id), ('Port', self.port)))} />",)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalAuthenticationAttrs:
     """App-shaped authentication attributes for direct-local preview setup."""
     ticket: str = ''
@@ -487,7 +486,7 @@ class EzvizLocalAuthenticationAttrs:
         attrs = (('Ticket', self.ticket), ('BizCode', self.biz_code), ('Interval', self.interval))
         return (f'{indent}<Authentication {_owner._xml_attrs(attrs)} />',)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLocalPreviewRequest:
     """Plaintext field set for the observed 0x2011 preview request."""
     operation_code: str
@@ -510,7 +509,7 @@ class EzvizLocalPreviewRequest:
         """Build a caller-owned XML body for the encrypted preview request."""
         return _owner.build_ezviz_local_preview_request_body(operation_code=self.operation_code, channel=self.channel, receiver_info=self.receiver_info, receiver_info_ex=self.receiver_info_ex, identifier=self.identifier, is_encrypt=self.is_encrypt, udt=self.udt, nat=self.nat, port_guess_type=self.port_guess_type, timeout=self.timeout, heartbeat_interval=self.heartbeat_interval, authentication=self.authentication, uuid=self.uuid, timestamp=self.timestamp, public_key=self.public_key)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class SadpDeviceInfo:
     """Parsed SADP response fields."""
     fields: _owner.Mapping[str, str]
@@ -530,3 +529,6 @@ class SadpDeviceInfo:
         """Return the SDK command/server port if SADP reported one."""
         value = self.fields.get('CommandPort') or self.fields.get('DevicePort') or self.fields.get('Port')
         return int(value) if value and value.isdigit() else None
+
+# Late owner reference preserves legacy model hook and annotation resolution.
+import pyezvizapi.streaming.local.hcnetsdk.protocol as _owner

@@ -1,13 +1,15 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""push command handlers; legacy hooks resolve through cli.main."""
+'push command handlers; cli.main passes the retained runtime hooks explicitly.'
 from __future__ import annotations
 
-import pyezvizapi.cli.main as _owner
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pyezvizapi.cli.main as _owner_types
 
-def _handle_mqtt(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_mqtt(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Migrate the login and listen with durable channel-99 token storage."""
     try:
         client.enable_channel99()

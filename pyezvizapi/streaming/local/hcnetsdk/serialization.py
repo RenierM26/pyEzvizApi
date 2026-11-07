@@ -1,19 +1,27 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""serialization implementation; legacy runtime hooks remain on the owner module.
-
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
+'serialization implementation; legacy runtime hooks remain on the owner module.\n\nAccess through _owner is deliberate: callers that patch the compatibility\nmodule must still affect dependent operations. No copied hook snapshots.\n'
 from __future__ import annotations
 
-import pyezvizapi.streaming.local.hcnetsdk.protocol as _owner
+from collections.abc import Mapping as _StaticMapping
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+from pyezvizapi.streaming.local.hcnetsdk.models_session import (
+    EzvizLocalAuthenticationAttrs as _StaticEzvizLocalAuthenticationAttrs,
+    EzvizLocalReceiverInfo as _StaticEzvizLocalReceiverInfo,
+    EzvizLocalReceiverInfoAttrs as _StaticEzvizLocalReceiverInfoAttrs,
+    EzvizLocalReceiverInfoEx as _StaticEzvizLocalReceiverInfoEx,
+    EzvizLocalReceiverInfoExAttrs as _StaticEzvizLocalReceiverInfoExAttrs,
+    HcNetSdkTcpFrame as _StaticHcNetSdkTcpFrame,
+)
 
-def hcnetsdk_stdxml_response_json(response: _owner.Mapping[str, _owner.Any] | str | bytes) -> dict[str, _owner.Any]:
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.local.hcnetsdk.protocol as _owner_types
+
+def hcnetsdk_stdxml_response_json(response: _owner_types.Mapping[str, _owner_types.Any] | str | bytes, *, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Parse a JSON response returned by EZVIZ local STDXML helpers."""
-    if isinstance(response, _owner.Mapping):
+    if isinstance(response, _StaticMapping):
         return dict(response)
     try:
         if isinstance(response, bytes):
@@ -28,21 +36,21 @@ def hcnetsdk_stdxml_response_json(response: _owner.Mapping[str, _owner.Any] | st
         raise _owner.PyEzvizError('HCNetSDK STDXML response JSON must be an object')
     return parsed
 
-def _hcnetsdk_compression_info_v30(raw: bytes, offset: int) -> _owner.EzvizLanCompressionInfoV30 | None:
+def _hcnetsdk_compression_info_v30(raw: bytes, offset: int, *, _owner: _ModuleType) -> _owner_types.EzvizLanCompressionInfoV30 | None:
     if len(raw) < offset + _owner.HCNETSDK_COMPRESSION_INFO_V30_SIZE:
         return None
     block = raw[offset:offset + _owner.HCNETSDK_COMPRESSION_INFO_V30_SIZE]
     return _owner.EzvizLanCompressionInfoV30(stream_type=block[0], resolution=block[1], bitrate_type=block[2], picture_quality=block[3], video_bitrate=int.from_bytes(block[4:8], 'big'), video_frame_rate=int.from_bytes(block[8:12], 'big'), i_frame_interval=int.from_bytes(block[12:14], 'big'), interval_bp_frame=block[14], reserved1=block[15], video_encoding_type=block[16], audio_encoding_type=block[17], video_encoding_complexity=block[18], svc_enabled=block[19], format_type=block[20], audio_bitrate=block[21], stream_smoothing=block[22], audio_sampling_rate=block[23], smart_codec=block[24], depth_map_enabled=block[25], average_video_bitrate=int.from_bytes(block[26:28], 'big'), raw=block)
 
-def hcnetsdk_real_data_type_is_media(data_type: int) -> bool:
+def hcnetsdk_real_data_type_is_media(data_type: int, *, _owner: _ModuleType) -> bool:
     """Return whether a real-play callback type can carry media payloads."""
     return data_type in (_owner.HcNetSdkRealDataType.STREAM_DATA, _owner.HcNetSdkRealDataType.AUDIO_STREAM_DATA, _owner.HcNetSdkRealDataType.PRIVATE_DATA)
 
-def hcnetsdk_real_play_request(login_id: int, *, channel_number: int=1, link_mode: int=0, blocked: bool=False, multicast_ip: str='') -> _owner.HcNetSdkRealPlayRequest:
+def hcnetsdk_real_play_request(login_id: int, *, channel_number: int, link_mode: int, blocked: bool, multicast_ip: str, _owner: _ModuleType) -> _owner_types.HcNetSdkRealPlayRequest:
     """Build the APK-observed ``EZ_NET_DVR_RealPlay_V30`` argument model."""
     return _owner.HcNetSdkRealPlayRequest(login_id=login_id, client_info=_owner.HcNetSdkClientInfo(channel=channel_number, link_mode=link_mode, multicast_ip=multicast_ip), blocked=blocked)
 
-def classify_hcnetsdk_real_data_payload(data: bytes) -> str:
+def classify_hcnetsdk_real_data_payload(data: bytes, *, _owner: _ModuleType) -> str:
     """Classify HCNetSDK callback bytes without decoding or exposing content."""
     if not data:
         return 'empty'
@@ -52,12 +60,12 @@ def classify_hcnetsdk_real_data_payload(data: bytes) -> str:
             return kind
     return 'unknown'
 
-def build_hcnetsdk_tcp_frame(body: bytes=b'', *, field_4: int=0, field_8: int=0, field_12: int=0) -> bytes:
+def build_hcnetsdk_tcp_frame(body: bytes, *, field_4: int, field_8: int, field_12: int, _owner: _ModuleType) -> bytes:
     """Build the generic observed HCNetSDK command-port frame wrapper."""
     header = _owner.HcNetSdkTcpFrameHeader(total_length=_owner.HCNETSDK_TCP_HEADER_LENGTH + len(body), field_4=field_4, field_8=field_8, field_12=field_12)
     return _owner.HcNetSdkTcpFrame(header=header, body=body).to_bytes()
 
-def hcnetsdk_command_port_auth_word(*, session_id: bytes, auth_seed: int, command_id: int, key: bytes, addend: int | None=None, mask_seed: bytes=b'\x00' * _owner.HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH) -> int:
+def hcnetsdk_command_port_auth_word(*, session_id: bytes, auth_seed: int, command_id: int, key: bytes, addend: int | None, mask_seed: bytes, _owner: _ModuleType) -> int:
     """Return the native HCNetSDK port-8000 post-login command auth word.
 
     ``session_id`` is the network-order four-byte id returned in the login
@@ -79,7 +87,7 @@ def hcnetsdk_command_port_auth_word(*, session_id: bytes, auth_seed: int, comman
     folded = bytes(transformed[index] ^ transformed[index + 4] ^ transformed[index + 8] ^ transformed[index + 12] for index in range(4))
     return int.from_bytes(folded, 'little') + (session_word if addend is None else addend) & 4294967295
 
-def hcnetsdk_command_port_control_frame(*, session_id: bytes, auth_seed: int, command_id: int, key: bytes, local_ip: str, body_tail: bytes=b'', addend: int | None=None, mask_seed: bytes=b'\x00' * _owner.HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH) -> bytes:
+def hcnetsdk_command_port_control_frame(*, session_id: bytes, auth_seed: int, command_id: int, key: bytes, local_ip: str, body_tail: bytes, addend: int | None, mask_seed: bytes, _owner: _ModuleType) -> bytes:
     """Build one generated post-login HCNetSDK port-8000 control frame.
 
     The frame body format observed in native traces is the client LAN IPv4 word
@@ -92,7 +100,7 @@ def hcnetsdk_command_port_control_frame(*, session_id: bytes, auth_seed: int, co
     body = _owner._hcnetsdk_command_port_local_ip_word(local_ip) + session_id + b'\x00' * 8 + body_tail
     return _owner.build_hcnetsdk_tcp_frame(body, field_4=_owner.HCNETSDK_COMMAND_PORT_CONTROL_FAMILY, field_8=_owner.hcnetsdk_command_port_auth_word(session_id=session_id, auth_seed=auth_seed, command_id=command_id, key=key, addend=addend, mask_seed=mask_seed), field_12=command_id)
 
-def hcnetsdk_command_port_play_login_body_tail_for_today(body_tail: bytes, *, today: _owner.date | None=None) -> bytes:
+def hcnetsdk_command_port_play_login_body_tail_for_today(body_tail: bytes, *, today: _owner_types.date | None, _owner: _ModuleType) -> bytes:
     """Refresh native play-login date words in a captured ``0x111040`` tail."""
     if len(body_tail) != 148:
         raise _owner.PyEzvizError('HCNetSDK play-login body tail transform requires a 148-byte tail')
@@ -103,7 +111,7 @@ def hcnetsdk_command_port_play_login_body_tail_for_today(body_tail: bytes, *, to
         patched[offset:offset + 4] = value.to_bytes(4, 'big')
     return bytes(patched)
 
-def hcnetsdk_command_candidate_role(candidate: int | None) -> str | None:
+def hcnetsdk_command_candidate_role(candidate: int | None, *, _owner: _ModuleType) -> str | None:
     """Return the current role label for an observed command candidate.
 
     The names are trace-derived labels, not a complete HCNetSDK command table.
@@ -116,7 +124,7 @@ def hcnetsdk_command_candidate_role(candidate: int | None) -> str | None:
         return 'control'
     return None
 
-def ezviz_native_video_level(video_level: int) -> int:
+def ezviz_native_video_level(video_level: int, *, _owner: _ModuleType) -> int:
     """Mirror ``Utils.convertVideoLevel()`` before writing ``iVideoLevel``."""
     if video_level == -1:
         return 3
@@ -130,7 +138,7 @@ def ezviz_native_video_level(video_level: int) -> int:
         return 4
     return 5
 
-def build_ezviz_local_preview_request_body(*, operation_code: str, channel: int, receiver_info: str | _owner.EzvizLocalReceiverInfo | _owner.EzvizLocalReceiverInfoAttrs, receiver_info_ex: str | _owner.EzvizLocalReceiverInfoEx | _owner.EzvizLocalReceiverInfoExAttrs, identifier: str | None=None, is_encrypt: str | int='TRUE', udt: int | None=None, nat: int | None=None, port_guess_type: int | None=None, timeout: int | None=None, heartbeat_interval: int | None=None, authentication: str | _owner.EzvizLocalAuthenticationAttrs | None=None, uuid: str | None=None, timestamp: str | int | None=None, public_key: str | None=None) -> bytes:  # noqa: PLR0913
+def build_ezviz_local_preview_request_body(*, operation_code: str, channel: int, receiver_info: str | _owner_types.EzvizLocalReceiverInfo | _owner_types.EzvizLocalReceiverInfoAttrs, receiver_info_ex: str | _owner_types.EzvizLocalReceiverInfoEx | _owner_types.EzvizLocalReceiverInfoExAttrs, identifier: str | None, is_encrypt: str | int, udt: int | None, nat: int | None, port_guess_type: int | None, timeout: int | None, heartbeat_interval: int | None, authentication: str | _owner_types.EzvizLocalAuthenticationAttrs | None, uuid: str | None, timestamp: str | int | None, public_key: str | None, _owner: _ModuleType) -> bytes:  # noqa: PLR0913 -- explicit runtime context plus retained signature
     """Build the plaintext XML body for the observed 0x2011 request.
 
     The caller must supply values obtained through their own credential/source
@@ -140,21 +148,21 @@ def build_ezviz_local_preview_request_body(*, operation_code: str, channel: int,
         raise _owner.PyEzvizError('EZVIZ local preview channel must be non-negative')
     return _owner._build_local_sdk_request_xml((('OperationCode', operation_code), ('Channel', channel), ('Identifier', identifier), ('ReceiverInfo', receiver_info), ('IsEncrypt', is_encrypt), ('Udt', udt), ('Nat', nat), ('PortGuessType', port_guess_type), ('Timeout', timeout), ('HeartbeatInterval', heartbeat_interval), ('ReceiverInfoEx', receiver_info_ex), ('Authentication', authentication), ('Uuid', uuid), ('Timestamp', timestamp), ('PublicKey', public_key)))
 
-def ezviz_local_sdk_iv(serial: str, operation_code: str) -> bytes:
+def ezviz_local_sdk_iv(serial: str, operation_code: str, *, _owner: _ModuleType) -> bytes:
     """Build the AES-CBC IV used by EZVIZ local-control CAS frames."""
     iv = f'{serial}{operation_code}'.encode('latin1')
     if len(iv) != _owner.EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE:
         raise _owner.PyEzvizError('EZVIZ local SDK IV must be 16 bytes from serial + operation code')
     return iv
 
-def hcnetsdk_command_port_response_payload(response: _owner.HcNetSdkTcpFrame | bytes) -> bytes:
+def hcnetsdk_command_port_response_payload(response: _owner_types.HcNetSdkTcpFrame | bytes, *, _owner: _ModuleType) -> bytes:
     """Return a textual JSON/XML payload from a command-port response.
 
     Native command-port responses may include leading binary or NUL padding
     before the string output buffer. Keep the rule intentionally narrow so
     binary command responses remain available to lower-level callers.
     """
-    body = response.body if isinstance(response, _owner.HcNetSdkTcpFrame) else response
+    body = response.body if isinstance(response, _StaticHcNetSdkTcpFrame) else response
     if not body:
         return b''
     candidates: list[tuple[int, bytes]] = []
@@ -175,13 +183,13 @@ def hcnetsdk_command_port_response_payload(response: _owner.HcNetSdkTcpFrame | b
             return candidate
     return body.split(b'\x00', 1)[0].strip()
 
-def _mapping_str(data: _owner.Mapping[str, _owner.Any], key: str) -> str | None:
+def _mapping_str(data: _owner_types.Mapping[str, _owner_types.Any], key: str, *, _owner: _ModuleType) -> str | None:
     value = data.get(key)
     if isinstance(value, str) and value:
         return value
     return None
 
-def _mapping_int(data: _owner.Mapping[str, _owner.Any], key: str, *, default: int | None, zero_is_missing: bool=False) -> int | None:
+def _mapping_int(data: _owner_types.Mapping[str, _owner_types.Any], key: str, *, default: int | None, zero_is_missing: bool, _owner: _ModuleType) -> int | None:
     value = data.get(key)
     if value is None:
         return default
@@ -195,14 +203,14 @@ def _mapping_int(data: _owner.Mapping[str, _owner.Any], key: str, *, default: in
         return default if zero_is_missing and int_value == 0 else int_value
     return default
 
-def _stdxml_bytes(label: str, value: str | bytes) -> bytes:
+def _stdxml_bytes(label: str, value: str | bytes, *, _owner: _ModuleType) -> bytes:
     if isinstance(value, bytes):
         return value
     if not isinstance(value, str):
         raise _owner.PyEzvizError(f'HCNetSDK STDXML {label} must be bytes or string')
     return value.encode('utf-8')
 
-def _optional_native_bytes(label: str, value: str | bytes | None) -> bytes:
+def _optional_native_bytes(label: str, value: str | bytes | None, *, _owner: _ModuleType) -> bytes:
     if value is None:
         return b''
     if isinstance(value, bytes):
@@ -211,7 +219,7 @@ def _optional_native_bytes(label: str, value: str | bytes | None) -> bytes:
         return value.encode('utf-8')
     raise _owner.PyEzvizError(f'{label} must be bytes or string')
 
-def _native_secret_key_bytes(label: str, value: str | bytes) -> bytes:
+def _native_secret_key_bytes(label: str, value: str | bytes, *, _owner: _ModuleType) -> bytes:
     raw = _owner._optional_native_bytes(label, value)
     if not raw:
         raise _owner.PyEzvizError(f'{label} cannot be empty')
@@ -219,7 +227,7 @@ def _native_secret_key_bytes(label: str, value: str | bytes) -> bytes:
         raise _owner.PyEzvizError(f'{label} must be at most 4096 bytes')
     return raw
 
-def _native_path_value(label: str, value: str | bytes, *, include_buffers: bool=False) -> str | bytes:
+def _native_path_value(label: str, value: str | bytes, *, include_buffers: bool, _owner: _ModuleType) -> str | bytes:
     raw = _owner._optional_native_bytes(f'HCNetSDK {label}', value)
     if not raw:
         raise _owner.PyEzvizError(f'HCNetSDK {label} cannot be empty')
@@ -232,7 +240,7 @@ def _native_path_value(label: str, value: str | bytes, *, include_buffers: bool=
     except UnicodeDecodeError as err:
         raise _owner.PyEzvizError(f'HCNetSDK {label} must be UTF-8') from err
 
-def _bounded_bytes(label: str, value: str | bytes, limit: int, *, truncate: bool=False) -> bytes:
+def _bounded_bytes(label: str, value: str | bytes, limit: int, *, truncate: bool, _owner: _ModuleType) -> bytes:
     if isinstance(value, bytes):
         raw = value
     elif isinstance(value, str):
@@ -245,7 +253,7 @@ def _bounded_bytes(label: str, value: str | bytes, limit: int, *, truncate: bool
         return raw[:limit]
     raise _owner.PyEzvizError(f'EZVIZ LAN {label} must be at most {limit} bytes')
 
-def _sadp_string_bytes(label: str, value: str | bytes, limit: int, *, allow_empty: bool=False) -> bytes:
+def _sadp_string_bytes(label: str, value: str | bytes, limit: int, *, allow_empty: bool, _owner: _ModuleType) -> bytes:
     if isinstance(value, bytes):
         raw = value
     elif isinstance(value, str):
@@ -258,75 +266,75 @@ def _sadp_string_bytes(label: str, value: str | bytes, limit: int, *, allow_empt
         raise _owner.PyEzvizError(f'SADP {label} must be at most {limit} bytes')
     return raw
 
-def _optional_raw_byte(raw: bytes, offset: int) -> int | None:
+def _optional_raw_byte(raw: bytes, offset: int, *, _owner: _ModuleType) -> int | None:
     return raw[offset] if len(raw) > offset else None
 
-def _optional_raw_u16_be(raw: bytes, offset: int) -> int | None:
+def _optional_raw_u16_be(raw: bytes, offset: int, *, _owner: _ModuleType) -> int | None:
     if len(raw) < offset + 2:
         return None
     return int.from_bytes(raw[offset:offset + 2], 'big')
 
-def _optional_raw_u32_be(raw: bytes, offset: int) -> int | None:
+def _optional_raw_u32_be(raw: bytes, offset: int, *, _owner: _ModuleType) -> int | None:
     if len(raw) < offset + 4:
         return None
     return int.from_bytes(raw[offset:offset + 4], 'big')
 
-def _optional_raw_u16_be_pair(raw: bytes, first_offset: int, second_offset: int) -> tuple[int, int] | None:
+def _optional_raw_u16_be_pair(raw: bytes, first_offset: int, second_offset: int, *, _owner: _ModuleType) -> tuple[int, int] | None:
     first = _owner._optional_raw_u16_be(raw, first_offset)
     second = _owner._optional_raw_u16_be(raw, second_offset)
     if first is None or second is None:
         return None
     return (first, second)
 
-def _optional_raw_byte_triplet(raw: bytes, first_offset: int, second_offset: int, third_offset: int) -> tuple[int, int, int] | None:
+def _optional_raw_byte_triplet(raw: bytes, first_offset: int, second_offset: int, third_offset: int, *, _owner: _ModuleType) -> tuple[int, int, int] | None:
     if len(raw) <= max(first_offset, second_offset, third_offset):
         return None
     return (raw[first_offset], raw[second_offset], raw[third_offset])
 
-def _byte_value(label: str, value: int) -> int:
+def _byte_value(label: str, value: int, *, _owner: _ModuleType) -> int:
     if not 0 <= value <= 255:
         raise _owner.PyEzvizError(f'EZVIZ LAN {label} must fit in one byte')
     return value
 
-def _word_value(label: str, value: int) -> int:
+def _word_value(label: str, value: int, *, _owner: _ModuleType) -> int:
     if not 0 <= value <= 65535:
         raise _owner.PyEzvizError(f'EZVIZ LAN {label} must fit in one unsigned word')
     return value
 
-def _port_value(label: str, value: int) -> int:
+def _port_value(label: str, value: int, *, _owner: _ModuleType) -> int:
     if not 0 <= value <= 65535:
         raise _owner.PyEzvizError(f'{label} must be between 0 and 65535')
     return value
 
-def _nul_stripped_text(value: str | bytes | None) -> str:
+def _nul_stripped_text(value: str | bytes | None, *, _owner: _ModuleType) -> str:
     if value is None:
         return ''
     text = value.decode('utf-8') if isinstance(value, bytes) else value
     return text.replace('\x00', '').strip()
 
-def _device_ability_bytes(label: str, value: str | bytes) -> bytes:
+def _device_ability_bytes(label: str, value: str | bytes, *, _owner: _ModuleType) -> bytes:
     if isinstance(value, bytes):
         return value
     if not isinstance(value, str):
         raise _owner.PyEzvizError(f'HCNetSDK device ability {label} must be bytes or string')
     return value.encode('utf-8')
 
-def _ability_option_tuple(value: str | None) -> tuple[str, ...]:
+def _ability_option_tuple(value: str | None, *, _owner: _ModuleType) -> tuple[str, ...]:
     if value is None:
         return ()
     return tuple(option.strip() for option in value.split(',') if option.strip())
 
-def _hcnetsdk_command_port_local_ip_word(local_ip: str) -> bytes:
+def _hcnetsdk_command_port_local_ip_word(local_ip: str, *, _owner: _ModuleType) -> bytes:
     try:
         return _owner.ipaddress.IPv4Address(local_ip).packed[::-1]
     except _owner.ipaddress.AddressValueError as err:
         raise _owner.PyEzvizError('HCNetSDK command-port local IP must be an IPv4 address') from err
 
-def _hcnetsdk_command_port_auth_mask(session_word: int, mask_seed: bytes) -> int:
+def _hcnetsdk_command_port_auth_mask(session_word: int, mask_seed: bytes, *, _owner: _ModuleType) -> int:
     """Return the small native mask term mixed into command auth input."""
     return sum(mask_seed[index] & (session_word >> 5 * index & 255) for index in range(_owner.HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH))
 
-def _hcnetsdk_command_port_four_round_aes(block: bytes, key: bytes) -> bytes:
+def _hcnetsdk_command_port_four_round_aes(block: bytes, key: bytes, *, _owner: _ModuleType) -> bytes:
     """Encrypt one 16-byte block with the SDK's four-round AES-128 variant."""
     if len(block) != 16:
         raise _owner.PyEzvizError('HCNetSDK command-port auth block must be 16 bytes')
@@ -343,7 +351,7 @@ def _hcnetsdk_command_port_four_round_aes(block: bytes, key: bytes) -> bytes:
     state = _owner._hcnetsdk_aes_shift_rows(state)
     return _owner._hcnetsdk_aes_add_round_key(state, round_keys[4])
 
-def _hcnetsdk_aes128_round_keys(key: bytes, *, rounds: int) -> tuple[bytes, ...]:
+def _hcnetsdk_aes128_round_keys(key: bytes, *, rounds: int, _owner: _ModuleType) -> tuple[bytes, ...]:
     """Return AES-128 round keys, truncated to the native command-auth rounds."""
     words = [list(key[index:index + 4]) for index in range(0, 16, 4)]
     while len(words) < 4 * (rounds + 1):
@@ -356,22 +364,22 @@ def _hcnetsdk_aes128_round_keys(key: bytes, *, rounds: int) -> tuple[bytes, ...]
     expanded = bytes(item for word in words for item in word)
     return tuple(expanded[index:index + 16] for index in range(0, 16 * (rounds + 1), 16))
 
-def _hcnetsdk_aes_add_round_key(state: bytes, round_key: bytes) -> bytes:
+def _hcnetsdk_aes_add_round_key(state: bytes, round_key: bytes, *, _owner: _ModuleType) -> bytes:
     return bytes((left ^ right for left, right in zip(state, round_key, strict=True)))
 
-def _hcnetsdk_aes_sub_bytes(state: bytes) -> bytes:
+def _hcnetsdk_aes_sub_bytes(state: bytes, *, _owner: _ModuleType) -> bytes:
     return bytes(_owner._AES_SBOX[item] for item in state)
 
-def _hcnetsdk_aes_shift_rows(state: bytes) -> bytes:
+def _hcnetsdk_aes_shift_rows(state: bytes, *, _owner: _ModuleType) -> bytes:
     return bytes((state[0], state[5], state[10], state[15], state[4], state[9], state[14], state[3], state[8], state[13], state[2], state[7], state[12], state[1], state[6], state[11]))
 
-def _hcnetsdk_aes_xtime(value: int) -> int:
+def _hcnetsdk_aes_xtime(value: int, *, _owner: _ModuleType) -> int:
     shifted = value << 1
     if value & 128:
         shifted ^= 27
     return shifted & 255
 
-def _hcnetsdk_aes_mix_columns(state: bytes) -> bytes:
+def _hcnetsdk_aes_mix_columns(state: bytes, *, _owner: _ModuleType) -> bytes:
     mixed = bytearray()
     for column_index in range(0, 16, 4):
         column = state[column_index:column_index + 4]
@@ -379,22 +387,22 @@ def _hcnetsdk_aes_mix_columns(state: bytes) -> bytes:
         mixed.extend((doubled[0] ^ column[3] ^ column[2] ^ doubled[1] ^ column[1], doubled[1] ^ column[0] ^ column[3] ^ doubled[2] ^ column[2], doubled[2] ^ column[1] ^ column[0] ^ doubled[3] ^ column[3], doubled[3] ^ column[2] ^ column[1] ^ doubled[0] ^ column[0]))
     return bytes(mixed)
 
-def _build_local_sdk_request_xml(fields: tuple[tuple[str, str | int | _owner.EzvizLocalReceiverInfo | _owner.EzvizLocalReceiverInfoAttrs | _owner.EzvizLocalReceiverInfoEx | _owner.EzvizLocalReceiverInfoExAttrs | _owner.EzvizLocalAuthenticationAttrs | None], ...]) -> bytes:
+def _build_local_sdk_request_xml(fields: tuple[tuple[str, str | int | _owner_types.EzvizLocalReceiverInfo | _owner_types.EzvizLocalReceiverInfoAttrs | _owner_types.EzvizLocalReceiverInfoEx | _owner_types.EzvizLocalReceiverInfoExAttrs | _owner_types.EzvizLocalAuthenticationAttrs | None], ...], *, _owner: _ModuleType) -> bytes:
     lines = ['<?xml version="1.0" encoding="utf-8"?>', '<Request>']
     for tag, value in fields:
         if value is None:
             continue
-        if isinstance(value, (_owner.EzvizLocalReceiverInfo, _owner.EzvizLocalReceiverInfoAttrs)):
+        if isinstance(value, (_StaticEzvizLocalReceiverInfo, _StaticEzvizLocalReceiverInfoAttrs)):
             if tag != 'ReceiverInfo':
                 raise _owner.PyEzvizError('Structured receiver info must use ReceiverInfo tag')
             lines.extend(value.xml_lines())
             continue
-        if isinstance(value, (_owner.EzvizLocalReceiverInfoEx, _owner.EzvizLocalReceiverInfoExAttrs)):
+        if isinstance(value, (_StaticEzvizLocalReceiverInfoEx, _StaticEzvizLocalReceiverInfoExAttrs)):
             if tag != 'ReceiverInfoEx':
                 raise _owner.PyEzvizError('Structured receiver info ex must use ReceiverInfoEx tag')
             lines.extend(value.xml_lines())
             continue
-        if isinstance(value, _owner.EzvizLocalAuthenticationAttrs):
+        if isinstance(value, _StaticEzvizLocalAuthenticationAttrs):
             if tag != 'Authentication':
                 raise _owner.PyEzvizError('Structured authentication must use Authentication tag')
             lines.extend(value.xml_lines())
@@ -403,13 +411,13 @@ def _build_local_sdk_request_xml(fields: tuple[tuple[str, str | int | _owner.Ezv
     lines.append('</Request>')
     return ('\n'.join(lines) + '\n').encode('utf-8')
 
-def _xml_escape(value: str) -> str:
+def _xml_escape(value: str, *, _owner: _ModuleType) -> str:
     return value.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&apos;')
 
-def _xml_attrs(fields: _owner.Iterable[tuple[str, str | int]]) -> str:
+def _xml_attrs(fields: _owner_types.Iterable[tuple[str, str | int]], *, _owner: _ModuleType) -> str:
     return ' '.join((f'{tag}="{_owner._xml_escape(str(value))}"' for tag, value in fields))
 
-def _local_sdk_aes_bytes(label: str, value: bytes | str) -> bytes:
+def _local_sdk_aes_bytes(label: str, value: bytes | str, *, _owner: _ModuleType) -> bytes:
     data = value.encode('utf-8') if isinstance(value, str) else value
     if len(data) == _owner.EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE:
         return data

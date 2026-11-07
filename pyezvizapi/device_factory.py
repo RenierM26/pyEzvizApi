@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.devices.factory`.
 
@@ -12,16 +13,15 @@ from typing import TYPE_CHECKING
 from pyezvizapi.devices import factory as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.devices.factory import (
-    Any as Any,
-    EzvizCamera as EzvizCamera,
-    EzvizLightBulb as EzvizLightBulb,
-    EzvizSmartPlug as EzvizSmartPlug,
-    annotations as annotations,
-    camera_status as camera_status,
-    cast as cast,
-    light_bulb_status as light_bulb_status,
-    smart_plug_status as smart_plug_status,
-    )
+    import pyezvizapi.devices.factory as _compat_module_0
+    Any = _compat_module_0.Any
+    EzvizCamera = _compat_module_0.EzvizCamera
+    EzvizLightBulb = _compat_module_0.EzvizLightBulb
+    EzvizSmartPlug = _compat_module_0.EzvizSmartPlug
+    annotations = _compat_module_0.annotations
+    camera_status = _compat_module_0.camera_status
+    cast = _compat_module_0.cast
+    light_bulb_status = _compat_module_0.light_bulb_status
+    smart_plug_status = _compat_module_0.smart_plug_status
 
 sys.modules[__name__] = _implementation

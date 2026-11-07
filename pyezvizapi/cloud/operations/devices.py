@@ -1,17 +1,15 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""devices implementation; legacy runtime hooks remain on the owner module.
-
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
+'devices implementation; runtime hooks arrive through an explicit owner context.\n\nAccess through _owner is deliberate: callers that patch the compatibility\nmodule must still affect dependent operations. No copied hook snapshots.\n'
 from __future__ import annotations
 
-import pyezvizapi.client as _owner
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pyezvizapi.client as _owner_types
 
-def load_devices(self: _owner.EzvizClient, refresh: bool=True) -> _owner.JsonDict:
+def load_devices(self: _owner_types.EzvizClient, refresh: bool, *, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Build status maps for cameras and light bulbs.
 
         refresh: if True, camera.status() may perform network fetches (e.g. alarms).
@@ -21,17 +19,17 @@ def load_devices(self: _owner.EzvizClient, refresh: bool=True) -> _owner.JsonDic
         have disappeared. Users who intentionally remove a device can restart
         the integration to flush stale entries.
         """
-    records = _owner.cast(dict[str, _owner.EzvizDeviceRecord], self.get_device_records(None))
+    records = _owner.cast('dict[str, _owner_types.EzvizDeviceRecord]', self.get_device_records(None))
     supported_categories = self.SUPPORTED_CATEGORIES
 
-    def _is_supported_camera(rec: _owner.EzvizDeviceRecord) -> bool:
+    def _is_supported_camera(rec: _owner_types.EzvizDeviceRecord) -> bool:
         """Return True if record should be treated as a camera."""
         if rec.device_category not in supported_categories:
             return False
         if rec.device_category in (_owner.DeviceCatagories.LIGHTING.value, _owner.DeviceCatagories.SOCKET.value):
             return False
         return not (rec.device_category == _owner.DeviceCatagories.COMMON_DEVICE_CATEGORY.value and (not (rec.raw.get('deviceInfos') or {}).get('hik')))
-    latest_alarms: dict[str, dict[str, _owner.Any]] = {}
+    latest_alarms: dict[str, dict[str, _owner_types.Any]] = {}
     if refresh:
         camera_serials = [serial for serial, record in records.items() if _is_supported_camera(record)]
         latest_alarms = self._prefetch_latest_camera_alarms(camera_serials)
@@ -56,12 +54,12 @@ def load_devices(self: _owner.EzvizClient, refresh: bool=True) -> _owner.JsonDic
                     _owner._LOGGER.warning('Load_device_failed: serial=%s code=%s stage=%s error_type=%s', device, 'load_error', 'camera_status', type(err).__name__)
     return {**self._cameras, **self._light_bulbs, **self._smart_plugs}
 
-def _prefetch_latest_camera_alarms(self: _owner.EzvizClient, serials: _owner.Iterable[str], *, chunk_size: int=20) -> dict[str, dict[str, _owner.Any]]:
+def _prefetch_latest_camera_alarms(self: _owner_types.EzvizClient, serials: _owner_types.Iterable[str], *, chunk_size: int, _owner: _ModuleType) -> dict[str, dict[str, _owner_types.Any]]:
     """Attempt to fetch the most recent unified message per camera serial."""
     serial_list = [serial for serial in serials if serial]
     if not serial_list:
         return {}
-    latest: dict[str, dict[str, _owner.Any]] = {}
+    latest: dict[str, dict[str, _owner_types.Any]] = {}
 
     def _query_chunk(missing: set[str], limit: int, *, filtered: bool) -> None:
         """Populate latest alarms for a given chunk, retrying a few times."""
@@ -112,7 +110,7 @@ def _prefetch_latest_camera_alarms(self: _owner.EzvizClient, serials: _owner.Ite
             _owner._LOGGER.debug('alarm_prefetch_incomplete: serials=%s missing=%s', chunk_key, ','.join(sorted(remaining)))
     return latest
 
-def load_cameras(self: _owner.EzvizClient, refresh: bool=True) -> _owner.JsonDict:
+def load_cameras(self: _owner_types.EzvizClient, refresh: bool, *, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Load and return all camera status mappings.
 
         refresh: pass-through to load_devices() to control network fetches.
@@ -120,7 +118,7 @@ def load_cameras(self: _owner.EzvizClient, refresh: bool=True) -> _owner.JsonDic
     self.load_devices(refresh=refresh)
     return self._cameras
 
-def load_light_bulbs(self: _owner.EzvizClient, refresh: bool=True) -> _owner.JsonDict:
+def load_light_bulbs(self: _owner_types.EzvizClient, refresh: bool, *, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Load and return all light bulb status mappings.
 
         refresh: pass-through to load_devices().
@@ -128,7 +126,7 @@ def load_light_bulbs(self: _owner.EzvizClient, refresh: bool=True) -> _owner.Jso
     self.load_devices(refresh=refresh)
     return self._light_bulbs
 
-def load_smart_plugs(self: _owner.EzvizClient, refresh: bool=True) -> _owner.JsonDict:
+def load_smart_plugs(self: _owner_types.EzvizClient, refresh: bool, *, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Load and return all smart plugs status mappings.
 
         refresh: pass-through to load_devices().
@@ -136,10 +134,10 @@ def load_smart_plugs(self: _owner.EzvizClient, refresh: bool=True) -> _owner.Jso
     self.load_devices(refresh=refresh)
     return self._smart_plugs
 
-def get_device_infos(self: _owner.EzvizClient, serial: str | None=None) -> _owner.JsonDict:
+def get_device_infos(self: _owner_types.EzvizClient, serial: str | None, *, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Load all devices and build dict per device serial."""
     devices = self._get_page_list()
-    result: dict[str, _owner.Any] = {}
+    result: dict[str, _owner_types.Any] = {}
     for device in devices.get('deviceInfos', []) or []:
         _serial = device['deviceSerial']
         _res_id_list = {item for item in devices.get('CLOUD', {}) if devices['CLOUD'][item].get('deviceSerial') == _serial}
@@ -154,9 +152,9 @@ def get_device_infos(self: _owner.EzvizClient, serial: str | None=None) -> _owne
         _owner.convert_to_dict(result[_serial]['STATUS'].get('optionals'))
     if not serial:
         return result
-    return _owner.cast(dict[_owner.Any, _owner.Any], result.get(serial, {}))
+    return _owner.cast('dict[_owner_types.Any, _owner_types.Any]', result.get(serial, {}))
 
-def get_device_records(self: _owner.EzvizClient, serial: str | None=None) -> dict[str, _owner.EzvizDeviceRecord] | _owner.EzvizDeviceRecord | _owner.JsonDict:
+def get_device_records(self: _owner_types.EzvizClient, serial: str | None, *, _owner: _ModuleType) -> dict[str, _owner_types.EzvizDeviceRecord] | _owner_types.EzvizDeviceRecord | _owner_types.JsonDict:
     """Return devices as EzvizDeviceRecord mapping (or single record).
 
         Falls back to raw when a specific serial is requested but not found.
@@ -167,21 +165,21 @@ def get_device_records(self: _owner.EzvizClient, serial: str | None=None) -> dic
         return records
     return records.get(serial) or devices.get(serial, {})
 
-def get_accessory(self: _owner.EzvizClient, serial: str, local_index: str, *, max_retries: int=0) -> _owner.JsonDict:
+def get_accessory(self: _owner_types.EzvizClient, serial: str, local_index: str, *, max_retries: int, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Retrieve accessory information linked to a device."""
     path = f'{_owner.API_ENDPOINT_DEVICE_ACCESSORY_LINK}{serial}/{local_index}/1/linked/info'
     json_output = self._request_json('GET', path, retry_401=True, max_retries=max_retries)
     self._ensure_ok(json_output, 'Could not get accessory info')
     return json_output
 
-def get_dev_config(self: _owner.EzvizClient, serial: str, channel: int, key: str, *, max_retries: int=0) -> _owner.JsonDict:
+def get_dev_config(self: _owner_types.EzvizClient, serial: str, channel: int, key: str, *, max_retries: int, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Retrieve a devconfig value by key."""
     params = {'key': key}
     json_output = self._request_json('GET', f'{_owner.API_ENDPOINT_DEVCONFIG_BY_KEY}{serial}/{channel}/op', params=params, retry_401=True, max_retries=max_retries)
     self._ensure_ok(json_output, 'Could not get devconfig value')
     return json_output
 
-def ptz_control(self: _owner.EzvizClient, command: str, serial: str, action: str, speed: int=5) -> _owner.Any:
+def ptz_control(self: _owner_types.EzvizClient, command: str, serial: str, action: str, speed: int, *, _owner: _ModuleType) -> _owner_types.Any:
     """PTZ Control by API."""
     if command is None:
         raise _owner.PyEzvizError('Trying to call ptzControl without command')
@@ -192,14 +190,14 @@ def ptz_control(self: _owner.EzvizClient, command: str, serial: str, action: str
     self._ensure_ok(json_output, 'Could not control PTZ')
     return True
 
-def capture_picture(self: _owner.EzvizClient, serial: str, channel: int, *, max_retries: int=0) -> _owner.JsonDict:
+def capture_picture(self: _owner_types.EzvizClient, serial: str, channel: int, *, max_retries: int, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Trigger a snapshot capture on the device."""
     path = f'/v3/devconfig/v1/{serial}/{channel}/capture'
     json_output = self._request_json('PUT', path, retry_401=True, max_retries=max_retries)
     self._ensure_ok(json_output, 'Could not capture picture')
     return json_output
 
-def get_cam_key(self: _owner.EzvizClient, serial: str, smscode: str | int | None=None, max_retries: int=0) -> _owner.Any:
+def get_cam_key(self: _owner_types.EzvizClient, serial: str, smscode: str | int | None, max_retries: int, *, _owner: _ModuleType) -> _owner_types.Any:
     """Get Camera encryption key. The key that is set after the camera is added to the account.
 
         Args:
@@ -236,7 +234,7 @@ def get_cam_key(self: _owner.EzvizClient, serial: str, smscode: str | int | None
         raise _owner.PyEzvizError(f'Could not get camera encryption key: Got {self._response_summary(json_output)})')
     raise _owner.PyEzvizError('Could not get camera encryption key: exceeded retries')
 
-def download_alarm_image(self: _owner.EzvizClient, image_url: str, serial: str | None=None, *, encryption_key: str | None=None, smscode: str | int | None=None, decrypt: bool=True, max_retries: int=0) -> bytes:
+def download_alarm_image(self: _owner_types.EzvizClient, image_url: str, serial: str | None, *, encryption_key: str | None, smscode: str | int | None, decrypt: bool, max_retries: int, _owner: _ModuleType) -> bytes:
     """Download an alarm image and decrypt EZVIZ/Hik encrypted payloads.
 
         Encrypted alarm snapshots contain the ``hikencodepicture`` header. When

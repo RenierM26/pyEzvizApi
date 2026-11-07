@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.cloud.transport`.
 
@@ -12,42 +13,41 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.cloud import transport as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.cloud.transport import (
-    CLOUD_REPLAY_HEADER_SIZE as CLOUD_REPLAY_HEADER_SIZE,
-    CLOUD_REPLAY_HEARTBEAT_CMD as CLOUD_REPLAY_HEARTBEAT_CMD,
-    CLOUD_REPLAY_MAGIC as CLOUD_REPLAY_MAGIC,
-    CLOUD_REPLAY_OPEN_CMD as CLOUD_REPLAY_OPEN_CMD,
-    SocketFactory as SocketFactory,
-    StopStreamResponse as StopStreamResponse,
-    StreamInfoResponse as StreamInfoResponse,
-    StreamTransport as StreamTransport,
-    VtduInfoResponse as VtduInfoResponse,
-    VtduStreamResponse as VtduStreamResponse,
-    VtmChannel as VtmChannel,
-    VtmMessageCode as VtmMessageCode,
-    VtmPacket as VtmPacket,
-    VtmStreamClient as VtmStreamClient,
-    VtmTraceEvent as VtmTraceEvent,
-    build_get_vtdu_info_request as build_get_vtdu_info_request,
-    build_peer_stream_request as build_peer_stream_request,
-    build_start_stream_request as build_start_stream_request,
-    build_stop_stream_request as build_stop_stream_request,
-    build_stream_info_request as build_stream_info_request,
-    build_stream_keepalive_request as build_stream_keepalive_request,
-    build_vtm_url as build_vtm_url,
-    decode_vtm_header as decode_vtm_header,
-    decode_vtm_packet as decode_vtm_packet,
-    download_ezviz_cloud_replay as download_ezviz_cloud_replay,
-    encode_vtm_packet as encode_vtm_packet,
-    parse_get_vtdu_info_response as parse_get_vtdu_info_response,
-    parse_peer_stream_response as parse_peer_stream_response,
-    parse_start_stream_response as parse_start_stream_response,
-    parse_stop_stream_response as parse_stop_stream_response,
-    parse_stream_info_response as parse_stream_info_response,
-    parse_vtm_url as parse_vtm_url,
-    summarize_vtm_packet as summarize_vtm_packet,
-    vtm_media_packet_source as vtm_media_packet_source,
-    vtm_packet_to_media_packet as vtm_packet_to_media_packet,
-    )
+    import pyezvizapi.streaming.cloud.transport as _compat_module_0
+    CLOUD_REPLAY_HEADER_SIZE = _compat_module_0.CLOUD_REPLAY_HEADER_SIZE
+    CLOUD_REPLAY_HEARTBEAT_CMD = _compat_module_0.CLOUD_REPLAY_HEARTBEAT_CMD
+    CLOUD_REPLAY_MAGIC = _compat_module_0.CLOUD_REPLAY_MAGIC
+    CLOUD_REPLAY_OPEN_CMD = _compat_module_0.CLOUD_REPLAY_OPEN_CMD
+    SocketFactory = _compat_module_0.SocketFactory
+    StopStreamResponse = _compat_module_0.StopStreamResponse
+    StreamInfoResponse = _compat_module_0.StreamInfoResponse
+    StreamTransport = _compat_module_0.StreamTransport
+    VtduInfoResponse = _compat_module_0.VtduInfoResponse
+    VtduStreamResponse = _compat_module_0.VtduStreamResponse
+    VtmChannel = _compat_module_0.VtmChannel
+    VtmMessageCode = _compat_module_0.VtmMessageCode
+    VtmPacket = _compat_module_0.VtmPacket
+    VtmStreamClient = _compat_module_0.VtmStreamClient
+    VtmTraceEvent = _compat_module_0.VtmTraceEvent
+    build_get_vtdu_info_request = _compat_module_0.build_get_vtdu_info_request
+    build_peer_stream_request = _compat_module_0.build_peer_stream_request
+    build_start_stream_request = _compat_module_0.build_start_stream_request
+    build_stop_stream_request = _compat_module_0.build_stop_stream_request
+    build_stream_info_request = _compat_module_0.build_stream_info_request
+    build_stream_keepalive_request = _compat_module_0.build_stream_keepalive_request
+    build_vtm_url = _compat_module_0.build_vtm_url
+    decode_vtm_header = _compat_module_0.decode_vtm_header
+    decode_vtm_packet = _compat_module_0.decode_vtm_packet
+    download_ezviz_cloud_replay = _compat_module_0.download_ezviz_cloud_replay
+    encode_vtm_packet = _compat_module_0.encode_vtm_packet
+    parse_get_vtdu_info_response = _compat_module_0.parse_get_vtdu_info_response
+    parse_peer_stream_response = _compat_module_0.parse_peer_stream_response
+    parse_start_stream_response = _compat_module_0.parse_start_stream_response
+    parse_stop_stream_response = _compat_module_0.parse_stop_stream_response
+    parse_stream_info_response = _compat_module_0.parse_stream_info_response
+    parse_vtm_url = _compat_module_0.parse_vtm_url
+    summarize_vtm_packet = _compat_module_0.summarize_vtm_packet
+    vtm_media_packet_source = _compat_module_0.vtm_media_packet_source
+    vtm_packet_to_media_packet = _compat_module_0.vtm_packet_to_media_packet
 
 sys.modules[__name__] = _implementation

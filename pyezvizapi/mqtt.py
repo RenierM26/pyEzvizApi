@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.push.mqtt`.
 
@@ -12,46 +14,45 @@ from typing import TYPE_CHECKING
 from pyezvizapi.push import mqtt as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.push.mqtt import (
-        _LOGGER as _LOGGER,
-        ANDROID_PROFILE as ANDROID_PROFILE,
-        DEFAULT_TIMEOUT as DEFAULT_TIMEOUT,
-        EXT_FIELD_NAMES as EXT_FIELD_NAMES,
-        EXT_INT_FIELDS as EXT_INT_FIELDS,
-        PUSH_PROFILE as PUSH_PROFILE,
-        PUSH_REGISTER as PUSH_REGISTER,
-        Any as Any,
-        Callable as Callable,
-        Channel99Session as Channel99Session,
-        EzvizAuthTokenExpired as EzvizAuthTokenExpired,
-        EzvizPushFatalError as EzvizPushFatalError,
-        EzvizToken as EzvizToken,
-        EzvizTokenPersistenceError as EzvizTokenPersistenceError,
-        Final as Final,
-        HTTPError as HTTPError,
-        MQTTClient as MQTTClient,
-        MqttData as MqttData,
-        OrderedDict as OrderedDict,
-        PushWorker as PushWorker,
-        PyEzvizError as PyEzvizError,
-        RLock as RLock,
-        ServiceUrls as ServiceUrls,
-        TypedDict as TypedDict,
-        _push_endpoint as _push_endpoint,
-        _push_serial as _push_serial,
-        annotations as annotations,
-        cast as cast,
-        deepcopy as deepcopy,
-        discover_services as discover_services,
-        isolated_session as isolated_session,
-        json as json,
-        logging as logging,
-        profile_for_token as profile_for_token,
-        refresh_credentials as refresh_credentials,
-        requests as requests,
-        suppress as suppress,
-        synchronize_http_headers as synchronize_http_headers,
-        validate_push_token as validate_push_token,
-    )
+    import pyezvizapi.push.mqtt as _compat_module_0
+    _LOGGER = _compat_module_0._LOGGER
+    ANDROID_PROFILE = _compat_module_0.ANDROID_PROFILE
+    DEFAULT_TIMEOUT = _compat_module_0.DEFAULT_TIMEOUT
+    EXT_FIELD_NAMES = _compat_module_0.EXT_FIELD_NAMES
+    EXT_INT_FIELDS = _compat_module_0.EXT_INT_FIELDS
+    PUSH_PROFILE = _compat_module_0.PUSH_PROFILE
+    PUSH_REGISTER = _compat_module_0.PUSH_REGISTER
+    Any = _compat_module_0.Any
+    Callable = _compat_module_0.Callable
+    Channel99Session = _compat_module_0.Channel99Session
+    EzvizAuthTokenExpired = _compat_module_0.EzvizAuthTokenExpired
+    EzvizPushFatalError = _compat_module_0.EzvizPushFatalError
+    EzvizToken = _compat_module_0.EzvizToken
+    EzvizTokenPersistenceError = _compat_module_0.EzvizTokenPersistenceError
+    Final = _compat_module_0.Final
+    HTTPError = _compat_module_0.HTTPError
+    MQTTClient = _compat_module_0.MQTTClient
+    MqttData = _compat_module_0.MqttData
+    OrderedDict = _compat_module_0.OrderedDict
+    PushWorker = _compat_module_0.PushWorker
+    PyEzvizError = _compat_module_0.PyEzvizError
+    RLock = _compat_module_0.RLock
+    ServiceUrls = _compat_module_0.ServiceUrls
+    TypedDict = _compat_module_0.TypedDict
+    _push_endpoint = _compat_module_0._push_endpoint
+    _push_serial = _compat_module_0._push_serial
+    annotations = _compat_module_0.annotations
+    cast = _compat_module_0.cast
+    deepcopy = _compat_module_0.deepcopy
+    discover_services = _compat_module_0.discover_services
+    isolated_session = _compat_module_0.isolated_session
+    json = _compat_module_0.json
+    logging = _compat_module_0.logging
+    profile_for_token = _compat_module_0.profile_for_token
+    refresh_credentials = _compat_module_0.refresh_credentials
+    requests = _compat_module_0.requests
+    suppress = _compat_module_0.suppress
+    synchronize_http_headers = _compat_module_0.synchronize_http_headers
+    validate_push_token = _compat_module_0.validate_push_token
 
 sys.modules[__name__] = _implementation

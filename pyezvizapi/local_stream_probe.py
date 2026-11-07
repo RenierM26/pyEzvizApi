@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.local.probe`.
 
@@ -12,17 +13,16 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.local import probe as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.local.probe import (
-    Any as Any,
-    EzvizLocalSdkDeadlineExpired as EzvizLocalSdkDeadlineExpired,
-    Literal as Literal,
-    LocalSdkProtocolDetector as LocalSdkProtocolDetector,
-    LocalSdkProtocolProbeResult as LocalSdkProtocolProbeResult,
-    annotations as annotations,
-    dataclass as dataclass,
-    math as math,
-    probe_local_sdk_stream_from_client as probe_local_sdk_stream_from_client,
-    time as time,
-    )
+    import pyezvizapi.streaming.local.probe as _compat_module_0
+    Any = _compat_module_0.Any
+    EzvizLocalSdkDeadlineExpired = _compat_module_0.EzvizLocalSdkDeadlineExpired
+    Literal = _compat_module_0.Literal
+    LocalSdkProtocolDetector = _compat_module_0.LocalSdkProtocolDetector
+    LocalSdkProtocolProbeResult = _compat_module_0.LocalSdkProtocolProbeResult
+    annotations = _compat_module_0.annotations
+    dataclass = _compat_module_0.dataclass
+    math = _compat_module_0.math
+    probe_local_sdk_stream_from_client = _compat_module_0.probe_local_sdk_stream_from_client
+    time = _compat_module_0.time
 
 sys.modules[__name__] = _implementation

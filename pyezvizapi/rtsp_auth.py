@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.rtsp_auth`.
 
@@ -12,26 +14,25 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming import rtsp_auth as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.rtsp_auth import (
-        _HEADER_END as _HEADER_END,
-        _LOGGER as _LOGGER,
-        AuthTestResultFailed as AuthTestResultFailed,
-        InvalidHost as InvalidHost,
-        RTSPDetails as RTSPDetails,
-        TestRTSPAuth as TestRTSPAuth,
-        TypedDict as TypedDict,
-        _decode_response as _decode_response,
-        _unfold_header_lines as _unfold_header_lines,
-        annotations as annotations,
-        base64 as base64,
-        genmsg_describe as genmsg_describe,
-        hashlib as hashlib,
-        is_positive_finite_duration_bound as is_positive_finite_duration_bound,
-        logging as logging,
-        parse_dict_header as parse_dict_header,
-        re as re,
-        socket as socket,
-        time as time,
-    )
+    import pyezvizapi.streaming.rtsp_auth as _compat_module_0
+    _HEADER_END = _compat_module_0._HEADER_END
+    _LOGGER = _compat_module_0._LOGGER
+    AuthTestResultFailed = _compat_module_0.AuthTestResultFailed
+    InvalidHost = _compat_module_0.InvalidHost
+    RTSPDetails = _compat_module_0.RTSPDetails
+    TestRTSPAuth = _compat_module_0.TestRTSPAuth
+    TypedDict = _compat_module_0.TypedDict
+    _decode_response = _compat_module_0._decode_response
+    _unfold_header_lines = _compat_module_0._unfold_header_lines
+    annotations = _compat_module_0.annotations
+    base64 = _compat_module_0.base64
+    genmsg_describe = _compat_module_0.genmsg_describe
+    hashlib = _compat_module_0.hashlib
+    is_positive_finite_duration_bound = _compat_module_0.is_positive_finite_duration_bound
+    logging = _compat_module_0.logging
+    parse_dict_header = _compat_module_0.parse_dict_header
+    re = _compat_module_0.re
+    socket = _compat_module_0.socket
+    time = _compat_module_0.time
 
 sys.modules[__name__] = _implementation

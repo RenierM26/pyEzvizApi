@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.pagination`.
 
@@ -12,17 +13,16 @@ from typing import TYPE_CHECKING
 from pyezvizapi.cloud import pagination as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.cloud.pagination import (
-        MAX_PAGELIST_PAGES as MAX_PAGELIST_PAGES,
-        Any as Any,
-        Callable as Callable,
-        Mapping as Mapping,
-        PyEzvizError as PyEzvizError,
-        annotations as annotations,
-        collect_pagelist as collect_pagelist,
-        deep_merge as deep_merge,
-        json as json,
-        sha256 as sha256,
-    )
+    import pyezvizapi.cloud.pagination as _compat_module_0
+    MAX_PAGELIST_PAGES = _compat_module_0.MAX_PAGELIST_PAGES
+    Any = _compat_module_0.Any
+    Callable = _compat_module_0.Callable
+    Mapping = _compat_module_0.Mapping
+    PyEzvizError = _compat_module_0.PyEzvizError
+    annotations = _compat_module_0.annotations
+    collect_pagelist = _compat_module_0.collect_pagelist
+    deep_merge = _compat_module_0.deep_merge
+    json = _compat_module_0.json
+    sha256 = _compat_module_0.sha256
 
 sys.modules[__name__] = _implementation

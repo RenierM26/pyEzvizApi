@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.rtsp_compat`.
 
@@ -12,11 +13,10 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming import rtsp_compat as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.rtsp_compat import (
-    RTSPDetails as RTSPDetails,
-    TestRTSPAuth as TestRTSPAuth,
-    _decode_response as _decode_response,
-    genmsg_describe as genmsg_describe,
-    )
+    import pyezvizapi.streaming.rtsp_compat as _compat_module_0
+    RTSPDetails = _compat_module_0.RTSPDetails
+    TestRTSPAuth = _compat_module_0.TestRTSPAuth
+    _decode_response = _compat_module_0._decode_response
+    genmsg_describe = _compat_module_0.genmsg_describe
 
 sys.modules[__name__] = _implementation

@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.cli.capabilities`.
 
@@ -12,24 +13,23 @@ from typing import TYPE_CHECKING
 from pyezvizapi.cli import capabilities as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.cli.capabilities import (
-        MAX_FLEET_SAMPLE_BYTES as MAX_FLEET_SAMPLE_BYTES,
-        MAX_FLEET_TARGETS as MAX_FLEET_TARGETS,
-        MAX_SAMPLE_BYTES as MAX_SAMPLE_BYTES,
-        HcNetSdkLanEndpoint as HcNetSdkLanEndpoint,
-        HcNetSdkLoginCandidate as HcNetSdkLoginCandidate,
-        Path as Path,
-        StreamCapabilityTarget as StreamCapabilityTarget,
-        StreamSampleEvidence as StreamSampleEvidence,
-        annotations as annotations,
-        argparse as argparse,
-        json as json,
-        load_inventory as load_inventory,
-        main as main,
-        os as os,
-        probe_stream_capabilities as probe_stream_capabilities,
-        sys as sys,
-    )
+    import pyezvizapi.cli.capabilities as _compat_module_0
+    MAX_FLEET_SAMPLE_BYTES = _compat_module_0.MAX_FLEET_SAMPLE_BYTES
+    MAX_FLEET_TARGETS = _compat_module_0.MAX_FLEET_TARGETS
+    MAX_SAMPLE_BYTES = _compat_module_0.MAX_SAMPLE_BYTES
+    HcNetSdkLanEndpoint = _compat_module_0.HcNetSdkLanEndpoint
+    HcNetSdkLoginCandidate = _compat_module_0.HcNetSdkLoginCandidate
+    Path = _compat_module_0.Path
+    StreamCapabilityTarget = _compat_module_0.StreamCapabilityTarget
+    StreamSampleEvidence = _compat_module_0.StreamSampleEvidence
+    annotations = _compat_module_0.annotations
+    argparse = _compat_module_0.argparse
+    json = _compat_module_0.json
+    load_inventory = _compat_module_0.load_inventory
+    main = _compat_module_0.main
+    os = _compat_module_0.os
+    probe_stream_capabilities = _compat_module_0.probe_stream_capabilities
+    sys = _compat_module_0.sys
 
 if __name__ == "__main__":
     sys.exit(_implementation.main())

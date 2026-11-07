@@ -21,9 +21,9 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from test_local_av_timeline import encode_three_track_ps
 from test_native_integration import data as data, runtime as runtime  # noqa: PLC0414
-from test_native_stream import Source, options
+from tests.streaming.test_native_stream import Source, options
+from tests.tools.test_local_av_timeline import encode_three_track_ps
 
 from pyezvizapi.native_stream import NativeMpegTsStream
 from pyezvizapi.stream_selection import select_stream_source

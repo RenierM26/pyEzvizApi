@@ -1,32 +1,35 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""local stream command handlers; legacy hooks resolve through cli.main."""
+'local stream command handlers; cli.main passes the retained runtime hooks explicitly.'
 from __future__ import annotations
 
-import pyezvizapi.cli.main as _owner
+from collections.abc import Mapping as _StaticMapping
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pyezvizapi.cli.main as _owner_types
 
-def _env_or_arg(args: _owner.argparse.Namespace, attr: str, env_name: str) -> str | None:
+def _env_or_arg(args: _owner_types.argparse.Namespace, attr: str, env_name: str, *, _owner: _ModuleType) -> str | None:
     """Return a CLI argument value or matching environment fallback."""
     value = getattr(args, attr, None)
     if value:
-        return _owner.cast(str, value)
+        return _owner.cast('str', value)
     env_value = _owner.os_environ_get(env_name)
     return env_value if env_value else None
 
-def os_environ_get(name: str) -> str | None:
+def os_environ_get(name: str, *, _owner: _ModuleType) -> str | None:
     """Small wrapper to make environment fallback easy to patch in tests."""
     return _owner.os.environ.get(name)
 
-def _required_local_sdk_secret(args: _owner.argparse.Namespace, attr: str, env_name: str) -> str:
+def _required_local_sdk_secret(args: _owner_types.argparse.Namespace, attr: str, env_name: str, *, _owner: _ModuleType) -> str:
     """Read a required local-SDK secret without logging or persisting it."""
     value = _owner._env_or_arg(args, attr, env_name)
     if not value:
         raise _owner.PyEzvizError(f"Missing --{attr.replace('_', '-')} or {env_name}")
     return value
 
-def _local_sdk_credentials_file(args: _owner.argparse.Namespace) -> dict[str, _owner.Any]:
+def _local_sdk_credentials_file(args: _owner_types.argparse.Namespace, *, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Read a local-SDK credential bundle without logging secret values."""
     cached = getattr(args, '_local_sdk_credentials_file_data', None)
     if isinstance(cached, dict):
@@ -45,23 +48,23 @@ def _local_sdk_credentials_file(args: _owner.argparse.Namespace) -> dict[str, _o
     vars(args)['_local_sdk_credentials_file_data'] = data
     return data
 
-def _local_sdk_credentials_value(args: _owner.argparse.Namespace, path: tuple[str, ...]) -> _owner.Any:
+def _local_sdk_credentials_value(args: _owner_types.argparse.Namespace, path: tuple[str, ...], *, _owner: _ModuleType) -> _owner_types.Any:
     """Return a value from the optional local-SDK credential bundle."""
-    current: _owner.Any = _owner._local_sdk_credentials_file(args)
+    current: _owner_types.Any = _owner._local_sdk_credentials_file(args)
     for part in path:
         if not isinstance(current, dict) or part not in current:
             return None
         current = current[part]
     return current
 
-def _local_sdk_arg_or_credentials(args: _owner.argparse.Namespace, attr: str, path: tuple[str, ...]) -> _owner.Any:
+def _local_sdk_arg_or_credentials(args: _owner_types.argparse.Namespace, attr: str, path: tuple[str, ...], *, _owner: _ModuleType) -> _owner_types.Any:
     """Return an explicit CLI value or matching credential-bundle value."""
     value = getattr(args, attr, None)
     if value not in (None, ''):
         return value
     return _owner._local_sdk_credentials_value(args, path)
 
-def _required_local_sdk_arg_or_credentials(args: _owner.argparse.Namespace, attr: str, path: tuple[str, ...]) -> _owner.Any:
+def _required_local_sdk_arg_or_credentials(args: _owner_types.argparse.Namespace, attr: str, path: tuple[str, ...], *, _owner: _ModuleType) -> _owner_types.Any:
     """Return a required direct-local field from args or credentials file."""
     value = _owner._local_sdk_arg_or_credentials(args, attr, path)
     if value in (None, ''):
@@ -69,7 +72,7 @@ def _required_local_sdk_arg_or_credentials(args: _owner.argparse.Namespace, attr
         raise _owner.PyEzvizError(f'Missing --{option}; provide it explicitly or via --credentials-file')
     return value
 
-def _local_sdk_media_key(args: _owner.argparse.Namespace, client: _owner.EzvizClient | None) -> str | bytes:
+def _local_sdk_media_key(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient | None, *, _owner: _ModuleType) -> str | bytes:
     """Read the direct-local media decrypt key without logging or persisting it."""
     key_hex = _owner._env_or_arg(args, 'media_key_hex', 'EZVIZ_LOCAL_MEDIA_KEY_HEX')
     if key_hex:
@@ -100,17 +103,17 @@ def _local_sdk_media_key(args: _owner.argparse.Namespace, client: _owner.EzvizCl
             return str(cloud_key)
     raise _owner.PyEzvizError('Missing media key for --decrypt-video; provide --media-key, --media-key-hex, EZVIZ_LOCAL_MEDIA_KEY, EZVIZ_LOCAL_MEDIA_KEY_HEX, credentials-file media_key/media_key_hex, or authenticated client access')
 
-def _local_sdk_has_static_media_key(args: _owner.argparse.Namespace) -> bool:
+def _local_sdk_has_static_media_key(args: _owner_types.argparse.Namespace, *, _owner: _ModuleType) -> bool:
     """Return True when local-sdk-dump can decrypt without cloud key lookup."""
     return bool(_owner._env_or_arg(args, 'media_key_hex', 'EZVIZ_LOCAL_MEDIA_KEY_HEX') or _owner._env_or_arg(args, 'media_key', 'EZVIZ_LOCAL_MEDIA_KEY') or _owner._local_sdk_credentials_value(args, ('media_key_hex',)) or _owner._local_sdk_credentials_value(args, ('media_key',)))
 
-def _read_optional_binary_file(path: str | None) -> bytes | None:
+def _read_optional_binary_file(path: str | None, *, _owner: _ModuleType) -> bytes | None:
     """Read an optional caller-owned binary body from disk."""
     if not path:
         return None
     return _owner.Path(path).read_bytes()
 
-def _local_sdk_cas_device_info(args: _owner.argparse.Namespace, client: _owner.EzvizClient | None) -> _owner.EzvizCasDeviceInfo:
+def _local_sdk_cas_device_info(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient | None, *, _owner: _ModuleType) -> _owner_types.EzvizCasDeviceInfo:
     """Build local CAS device info from explicit fields or cloud CAS."""
     if args.fetch_cas:
         if client is None:
@@ -133,7 +136,7 @@ def _local_sdk_cas_device_info(args: _owner.argparse.Namespace, client: _owner.E
     encrypt_type = _owner._local_sdk_arg_or_credentials(args, 'encrypt_type', ('cas', 'encrypt_type'))
     return _owner.EzvizCasDeviceInfo(serial=serial, operation_code=str(operation_code), key=str(cas_key), encrypt_type=int(encrypt_type))
 
-def _build_local_sdk_cli_stream(args: _owner.argparse.Namespace, client: _owner.EzvizClient | None=None) -> _owner.Any:
+def _build_local_sdk_cli_stream(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient | None, *, _owner: _ModuleType) -> _owner_types.Any:
     """Build the direct-local SDK stream from explicit CLI/environment fields."""
     device_info = _owner._local_sdk_cas_device_info(args, client)
     host = str(_owner._required_local_sdk_arg_or_credentials(args, 'host', ('endpoint', 'host')))
@@ -144,32 +147,32 @@ def _build_local_sdk_cli_stream(args: _owner.argparse.Namespace, client: _owner.
     stream_setup_sequence = 29 if args.stream_sequence is None else args.stream_sequence
     return _owner.open_local_sdk_stream(endpoint, device_info, preview_request, timeout=args.socket_timeout, pre_start_body=_owner._read_optional_binary_file(args.pre_start_body_file), pre_start_sequence=pre_start_sequence, preview_sequence=preview_sequence, stream_setup_sequence=stream_setup_sequence, stream_rate=args.stream_rate, stream_mode=args.stream_mode, max_prefix_bytes=args.max_prefix_bytes, command_source_port=args.receiver_port if args.receiver_shape == 'app' else None)
 
-def _build_local_sdk_ecdh_cli_stream(args: _owner.argparse.Namespace, client: _owner.EzvizClient | None=None) -> _owner.Any:
+def _build_local_sdk_ecdh_cli_stream(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient | None, *, _owner: _ModuleType) -> _owner_types.Any:
     """Build an encrypted local SDK ECDH stream."""
     device_info = _owner._local_sdk_cas_device_info(args, client)
     host = str(_owner._required_local_sdk_arg_or_credentials(args, 'host', ('endpoint', 'host')))
     endpoint = _owner.HcNetSdkLanEndpoint(serial=device_info.serial, host=host, command_port=int(_owner._local_sdk_arg_or_credentials(args, 'command_port', ('endpoint', 'command_port')) or 9010), stream_port=int(_owner._local_sdk_arg_or_credentials(args, 'stream_port', ('endpoint', 'stream_port')) or 9020))
     return _owner.open_local_sdk_ecdh_stream(endpoint, device_info, channel=args.channel, receiver_port=args.local_sdk_ecdh_receiver_port, identifier=args.identifier, uuid=_owner._env_or_arg(args, 'uuid', 'EZVIZ_LOCAL_UUID'), timestamp=_owner._env_or_arg(args, 'timestamp', 'EZVIZ_LOCAL_TIMESTAMP'), send_init=args.local_sdk_ecdh_send_init, pre_start_body=_owner._read_optional_binary_file(args.pre_start_body_file), pre_start_sequence=args.pre_start_sequence, preview_sequence=args.preview_sequence, stream_setup_sequence=args.stream_sequence, stream_rate=args.stream_rate, stream_mode=args.stream_mode, timeout=args.socket_timeout, max_prefix_bytes=args.max_prefix_bytes)
 
-def _local_sdk_receiver_info_from_args(args: _owner.argparse.Namespace) -> _owner.EzvizLocalReceiverInfo | _owner.EzvizLocalReceiverInfoAttrs:
+def _local_sdk_receiver_info_from_args(args: _owner_types.argparse.Namespace, *, _owner: _ModuleType) -> _owner_types.EzvizLocalReceiverInfo | _owner_types.EzvizLocalReceiverInfoAttrs:
     """Build the requested ReceiverInfo XML shape for local-SDK preview."""
     if args.receiver_shape == 'structured':
         return _owner.EzvizLocalReceiverInfo(nat_address=args.nat_address, nat_port=args.nat_port, upnp_address=args.upnp_address, upnp_port=args.upnp_port, inner_address=args.inner_address, inner_port=args.inner_port, stream_type=args.receiver_stream_type)
     return _owner.EzvizLocalReceiverInfoAttrs(address=args.nat_address, port=args.receiver_port, server_type=args.receiver_server_type, stream_type=args.receiver_stream_type, new_stream_type=args.receiver_new_stream_type, trans_proto=args.receiver_trans_proto)
 
-def _local_sdk_receiver_info_ex_from_args(args: _owner.argparse.Namespace) -> _owner.EzvizLocalReceiverInfoEx | _owner.EzvizLocalReceiverInfoExAttrs:
+def _local_sdk_receiver_info_ex_from_args(args: _owner_types.argparse.Namespace, *, _owner: _ModuleType) -> _owner_types.EzvizLocalReceiverInfoEx | _owner_types.EzvizLocalReceiverInfoExAttrs:
     """Build the requested ReceiverInfoEx XML shape for local-SDK preview."""
     if args.receiver_shape == 'structured':
         return _owner.EzvizLocalReceiverInfoEx(uuid=_owner._env_or_arg(args, 'uuid', 'EZVIZ_LOCAL_UUID'), timestamp=_owner._env_or_arg(args, 'timestamp', 'EZVIZ_LOCAL_TIMESTAMP'))
     return _owner.EzvizLocalReceiverInfoExAttrs(port=args.receiver_ex_port)
 
-def _local_sdk_authentication_from_args(args: _owner.argparse.Namespace) -> _owner.EzvizLocalAuthenticationAttrs | None:
+def _local_sdk_authentication_from_args(args: _owner_types.argparse.Namespace, *, _owner: _ModuleType) -> _owner_types.EzvizLocalAuthenticationAttrs | None:
     """Return app-shaped Authentication only when that XML shape is requested."""
     if args.receiver_shape == 'structured':
         return None
     return _owner.EzvizLocalAuthenticationAttrs(biz_code=args.auth_biz_code, interval=args.auth_interval)
 
-def _handle_local_sdk_stream_dump(args: _owner.argparse.Namespace, client: _owner.EzvizClient | None=None) -> int:
+def _handle_local_sdk_stream_dump(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient | None, *, _owner: _ModuleType) -> int:
     """Dump direct-local SDK media with caller-supplied local fields."""
     if args.decrypt_video and (not _owner.has_positive_finite_capture_bound(max_packets=args.max_packets, duration_seconds=args.duration)):
         raise _owner.PyEzvizError('--decrypt-video requires a positive finite --duration or --max-packets before opening a local SDK stream')
@@ -208,31 +211,31 @@ def _handle_local_sdk_stream_dump(args: _owner.argparse.Namespace, client: _owne
         _owner._write_local_sdk_metadata_output(args.metadata_output, stream)
     return 0
 
-def _copy_local_sdk_ecdh_cli_stream(args: _owner.argparse.Namespace, client: _owner.EzvizClient | None, stream: _owner.Any, output: _owner.BinaryIO) -> None:
+def _copy_local_sdk_ecdh_cli_stream(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient | None, stream: _owner_types.Any, output: _owner_types.BinaryIO, *, _owner: _ModuleType) -> None:
     """Copy one CLI-selected ECDH stream to its requested container."""
     _owner.copy_local_sdk_ecdh_stream_to_media(stream, output, output_format=args.format, decrypt_video=args.decrypt_video, media_key=_owner._local_sdk_media_key(args, client) if args.decrypt_video else None, ffmpeg_path=args.ffmpeg_path, nalu_header_size=_owner._codec_nalu_header_size(args.decrypt_codec), max_packets=args.max_packets, max_frames=args.max_packets, duration_seconds=args.duration)
 
-def _handle_local_sdk_keys(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_local_sdk_keys(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Fetch and print direct-local SDK credentials for explicit setup flows."""
     credentials = _owner.get_local_sdk_stream_credentials_from_client(client, args.serial, cas_serial=args.cas_serial, fetch_media_key=not args.no_media_key, register_p2p_session=not args.no_p2p_register, smscode=args.sms_code)
     _owner._write_json(credentials.as_dict(include_media_key=not args.no_media_key))
     return 0
 
-def _handle_h264_annexb_summary(args: _owner.argparse.Namespace) -> int:
+def _handle_h264_annexb_summary(args: _owner_types.argparse.Namespace, *, _owner: _ModuleType) -> int:
     """Summarize a local H.264 Annex-B elementary stream."""
     data = _owner.Path(args.input).read_bytes()
     idr_windows = _owner.summarize_h264_annexb_idr_windows(data, max_windows=args.max_idr_windows)
-    summary: dict[str, _owner.Any] = {'input': args.input, 'units': _owner.summarize_h264_annexb_units(data, max_units=args.max_units), 'idr_windows': idr_windows}
+    summary: dict[str, _owner_types.Any] = {'input': args.input, 'units': _owner.summarize_h264_annexb_units(data, max_units=args.max_units), 'idr_windows': idr_windows}
     if args.decode_idr_windows:
         summary['decode_idr_windows'] = _owner._decode_h264_annexb_idr_windows(data, idr_windows, ffmpeg_path=args.ffmpeg_path)
     _owner._write_json(summary)
     return 0
 
-def _handle_hcnetsdk_command_dump_summary(args: _owner.argparse.Namespace) -> int:
+def _handle_hcnetsdk_command_dump_summary(args: _owner_types.argparse.Namespace, *, _owner: _ModuleType) -> int:
     """Summarize offline HCNetSDK command-port dump artifacts."""
     if not args.command_frame_dir and (not args.inbound_media_file) and (not args.playm4_input_dir) and (not args.native_annexb_dir):
         raise _owner.PyEzvizError('hcnetsdk-command-dump-summary requires --command-frame-dir or --inbound-media-file or --playm4-input-dir or --native-annexb-dir')
-    summary: dict[str, _owner.Any] = {}
+    summary: dict[str, _owner_types.Any] = {}
     if args.command_frame_dir:
         summary['command_frames'] = _owner._hcnetsdk_command_frame_dump_summary(_owner.Path(args.command_frame_dir), max_frames=args.max_frames)
     if args.inbound_media_file:
@@ -244,14 +247,14 @@ def _handle_hcnetsdk_command_dump_summary(args: _owner.argparse.Namespace) -> in
     _owner._write_json(summary)
     return 0
 
-def _hcnetsdk_command_frame_dump_summary(directory: _owner.Path, *, max_frames: int) -> dict[str, _owner.Any]:
+def _hcnetsdk_command_frame_dump_summary(directory: _owner_types.Path, *, max_frames: int, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return sanitized metadata for dumped outbound command frames."""
     if max_frames <= 0:
         raise _owner.PyEzvizError('--max-frames must be positive')
     if not directory.is_dir():
         raise _owner.PyEzvizError(f'Command frame dump directory not found: {directory}')
     paths = sorted(directory.rglob('ezviz-hcnetsdk-command-frame-*.bin'))
-    samples: list[dict[str, _owner.Any]] = []
+    samples: list[dict[str, _owner_types.Any]] = []
     command_counts: dict[str, int] = {}
     parse_errors: list[dict[str, str]] = []
     for path in paths:
@@ -268,7 +271,7 @@ def _hcnetsdk_command_frame_dump_summary(directory: _owner.Path, *, max_frames: 
             command_counts[key] = command_counts.get(key, 0) + 1
         if len(samples) >= max_frames:
             continue
-        sample: dict[str, _owner.Any] = {'path': str(path), 'length': len(frame_bytes), 'total_length': frame.header.total_length, 'field_4': frame.header.field_4, 'field_8': frame.header.field_8, 'field_12': frame.header.field_12, 'body_length': len(frame.body), 'body_prefix_hex': frame.body[:16].hex()}
+        sample: dict[str, _owner_types.Any] = {'path': str(path), 'length': len(frame_bytes), 'total_length': frame.header.total_length, 'field_4': frame.header.field_4, 'field_8': frame.header.field_8, 'field_12': frame.header.field_12, 'body_length': len(frame.body), 'body_prefix_hex': frame.body[:16].hex()}
         if command_id is not None:
             sample['command_id'] = command_id
             sample['auth_word'] = frame.header.field_8
@@ -279,7 +282,7 @@ def _hcnetsdk_command_frame_dump_summary(directory: _owner.Path, *, max_frames: 
         samples.append(sample)
     return {'input': str(directory), 'file_count': len(paths), 'sample_limit': max_frames, 'samples': samples, 'truncated': len(paths) > len(samples), 'command_counts': command_counts, 'parse_errors': parse_errors}
 
-def _hcnetsdk_inbound_media_dump_summary(path: _owner.Path, *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> dict[str, _owner.Any]:
+def _hcnetsdk_inbound_media_dump_summary(path: _owner_types.Path, *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return sanitized metadata for raw dumped command-port inbound media bytes."""
     if max_frames <= 0:
         raise _owner.PyEzvizError('--max-frames must be positive')
@@ -288,16 +291,16 @@ def _hcnetsdk_inbound_media_dump_summary(path: _owner.Path, *, max_frames: int, 
     except OSError as err:
         raise _owner.PyEzvizError(f'Inbound media dump not found: {path}') from err
     scan = _owner._scan_hcnetsdk_command_port_media_frames(data, max_frames=max_frames)
-    summary: dict[str, _owner.Any] = {'input': str(path), 'byte_count': len(data), **scan}
+    summary: dict[str, _owner_types.Any] = {'input': str(path), 'byte_count': len(data), **scan}
     payloads = scan.get('payloads')
     if isinstance(payloads, list):
-        packet_payloads = _owner.cast(list[bytes], payloads)
+        packet_payloads = _owner.cast('list[bytes]', payloads)
         summary['idmx_h264'] = _owner.summarize_idmx_h264_local_packets(packet_payloads, max_frames=max_frames)
         _owner._add_hcnetsdk_annexb_dump_summary(summary, packet_payloads, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path)
         del summary['payloads']
     return summary
 
-def _hcnetsdk_playm4_input_dump_summary(directory: _owner.Path, *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> dict[str, _owner.Any]:
+def _hcnetsdk_playm4_input_dump_summary(directory: _owner_types.Path, *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return sanitized metadata for PlayM4 input dump chunks."""
     if max_frames <= 0:
         raise _owner.PyEzvizError('--max-frames must be positive')
@@ -305,11 +308,11 @@ def _hcnetsdk_playm4_input_dump_summary(directory: _owner.Path, *, max_frames: i
         raise _owner.PyEzvizError(f'PlayM4 input dump directory not found: {directory}')
     paths = sorted(directory.rglob('*-playm4-input-*.bin'))
     packets = [path.read_bytes() for path in paths]
-    summary: dict[str, _owner.Any] = {'input': str(directory), 'file_count': len(paths), 'byte_count': sum(len(packet) for packet in packets), 'idmx_h264': _owner.summarize_idmx_h264_local_packets(packets, max_frames=max_frames)}
+    summary: dict[str, _owner_types.Any] = {'input': str(directory), 'file_count': len(paths), 'byte_count': sum(len(packet) for packet in packets), 'idmx_h264': _owner.summarize_idmx_h264_local_packets(packets, max_frames=max_frames)}
     _owner._add_hcnetsdk_annexb_dump_summary(summary, packets, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path)
     return summary
 
-def _hcnetsdk_native_annexb_dump_summary(directory: _owner.Path, *, label: str, codec: str, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> dict[str, _owner.Any]:
+def _hcnetsdk_native_annexb_dump_summary(directory: _owner_types.Path, *, label: str, codec: str, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return sanitized metadata for native Annex-B Frida dump chunks."""
     if max_frames <= 0:
         raise _owner.PyEzvizError('--max-frames must be positive')
@@ -320,7 +323,7 @@ def _hcnetsdk_native_annexb_dump_summary(directory: _owner.Path, *, label: str, 
     data = b''.join(chunks)
     detected_codec = _owner._detect_native_annexb_codec(data, requested=codec)
     samples = [{'path': str(path), 'size': len(chunk), 'sha256': _owner.hashlib.sha256(chunk).hexdigest()} for path, chunk in zip(paths[:max_frames], chunks[:max_frames], strict=False)]
-    summary: dict[str, _owner.Any] = {'input': str(directory), 'label': label, 'codec': detected_codec, 'requested_codec': codec, 'file_count': len(paths), 'byte_count': len(data), 'sample_limit': max_frames, 'samples': samples, 'truncated': len(paths) > len(samples)}
+    summary: dict[str, _owner_types.Any] = {'input': str(directory), 'label': label, 'codec': detected_codec, 'requested_codec': codec, 'file_count': len(paths), 'byte_count': len(data), 'sample_limit': max_frames, 'samples': samples, 'truncated': len(paths) > len(samples)}
     if detected_codec == 'hevc':
         irap_windows = _owner.summarize_hevc_annexb_irap_windows(data, max_windows=max_frames)
         summary['annexb_irap_windows'] = irap_windows
@@ -336,9 +339,9 @@ def _hcnetsdk_native_annexb_dump_summary(directory: _owner.Path, *, label: str, 
         summary['decode_chunk_windows'] = _owner._decode_native_annexb_chunk_windows(paths, codec='h264', max_windows=max_frames, ffmpeg_path=ffmpeg_path)
     return summary
 
-def _decode_native_annexb_chunk_windows(paths: list[_owner.Path], *, codec: str, max_windows: int, ffmpeg_path: str) -> list[dict[str, _owner.Any]]:
+def _decode_native_annexb_chunk_windows(paths: list[_owner_types.Path], *, codec: str, max_windows: int, ffmpeg_path: str, _owner: _ModuleType) -> list[dict[str, _owner_types.Any]]:
     """Decode sampled IDR/IRAP-bearing native dump chunks independently."""
-    results: list[dict[str, _owner.Any]] = []
+    results: list[dict[str, _owner_types.Any]] = []
     for path in paths:
         data = path.read_bytes()
         if codec == 'hevc':
@@ -355,7 +358,7 @@ def _decode_native_annexb_chunk_windows(paths: list[_owner.Path], *, codec: str,
             break
     return results
 
-def _detect_native_annexb_codec(data: bytes, *, requested: str) -> str:
+def _detect_native_annexb_codec(data: bytes, *, requested: str, _owner: _ModuleType) -> str:
     """Return the requested or likely codec for Annex-B dump bytes."""
     if requested != 'auto':
         return requested
@@ -376,7 +379,7 @@ def _detect_native_annexb_codec(data: bytes, *, requested: str) -> str:
             hevc_score += 1
     return 'hevc' if hevc_score > h264_score else 'h264'
 
-def _iter_annexb_nal_prefixes(data: bytes) -> _owner.Iterator[bytes]:
+def _iter_annexb_nal_prefixes(data: bytes, *, _owner: _ModuleType) -> _owner_types.Iterator[bytes]:
     """Yield the first bytes after Annex-B start codes."""
     offset = 0
     while offset < len(data):
@@ -395,7 +398,7 @@ def _iter_annexb_nal_prefixes(data: bytes) -> _owner.Iterator[bytes]:
             yield data[nal_offset:nal_offset + 2]
         offset = nal_offset + 1
 
-def _add_hcnetsdk_annexb_dump_summary(summary: dict[str, _owner.Any], packets: list[bytes], *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> None:
+def _add_hcnetsdk_annexb_dump_summary(summary: dict[str, _owner_types.Any], packets: list[bytes], *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str, _owner: _ModuleType) -> None:
     """Attach sanitized reconstructed Annex-B metadata to a dump summary."""
     try:
         annexb, codec = _owner._idmx_local_packets_to_annexb_with_codec(packets)
@@ -415,11 +418,11 @@ def _add_hcnetsdk_annexb_dump_summary(summary: dict[str, _owner.Any], packets: l
     if decode_idr_windows:
         summary['decode_idr_windows'] = _owner._decode_annexb_windows(annexb, idr_windows, ffmpeg_path=ffmpeg_path, input_format='h264')
 
-def _scan_hcnetsdk_command_port_media_frames(data: bytes, *, max_frames: int) -> dict[str, _owner.Any]:
+def _scan_hcnetsdk_command_port_media_frames(data: bytes, *, max_frames: int, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Scan raw command-port bytes for little-endian ``$`` media frames."""
     offset = 0
     payloads: list[bytes] = []
-    samples: list[dict[str, _owner.Any]] = []
+    samples: list[dict[str, _owner_types.Any]] = []
     prefix_bytes = 0
     invalid_markers = 0
     while offset < len(data):
@@ -444,7 +447,7 @@ def _scan_hcnetsdk_command_port_media_frames(data: bytes, *, max_frames: int) ->
         offset = marker + total_length
     return {'frame_count': len(payloads), 'prefix_bytes': prefix_bytes, 'invalid_markers': invalid_markers, 'sample_limit': max_frames, 'samples': samples, 'truncated': len(payloads) > len(samples), 'payloads': payloads}
 
-def _handle_hcnetsdk_command_plan_generate(args: _owner.argparse.Namespace) -> int:
+def _handle_hcnetsdk_command_plan_generate(args: _owner_types.argparse.Namespace, *, _owner: _ModuleType) -> int:
     """Convert concrete port-8000 control frames into generated templates."""
     try:
         data = _owner.json.loads(_owner.Path(args.input).read_text(encoding='utf-8'))
@@ -465,13 +468,13 @@ def _handle_hcnetsdk_command_plan_generate(args: _owner.argparse.Namespace) -> i
         output_path.write_text(text, encoding='utf-8')
     return 0
 
-def _hcnetsdk_generated_plan_to_json(plan: _owner.HcNetSdkCommandPortGeneratedMultiSocketPlan) -> dict[str, _owner.Any]:
+def _hcnetsdk_generated_plan_to_json(plan: _owner_types.HcNetSdkCommandPortGeneratedMultiSocketPlan, *, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return the public JSON shape for a generated command-port plan."""
     return {'steps': [_owner._hcnetsdk_generated_plan_step_to_json(step) for step in plan.steps]}
 
-def _hcnetsdk_generated_plan_step_to_json(step: _owner.HcNetSdkCommandPortGeneratedSocketStep) -> dict[str, _owner.Any]:
+def _hcnetsdk_generated_plan_step_to_json(step: _owner_types.HcNetSdkCommandPortGeneratedSocketStep, *, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return JSON for one generated command-port socket step."""
-    value: dict[str, _owner.Any] = {'templates': [_owner._hcnetsdk_command_template_to_json(template) for template in step.control_templates]}
+    value: dict[str, _owner_types.Any] = {'templates': [_owner._hcnetsdk_command_template_to_json(template) for template in step.control_templates]}
     if step.name is not None:
         value['name'] = step.name
     if step.read_response_after_each is not True:
@@ -494,9 +497,9 @@ def _hcnetsdk_generated_plan_step_to_json(step: _owner.HcNetSdkCommandPortGenera
         value['keepalive_initial_delay_seconds'] = step.keepalive_initial_delay_seconds
     return value
 
-def _hcnetsdk_command_template_to_json(template: _owner.HcNetSdkCommandPortControlTemplate) -> dict[str, _owner.Any]:
+def _hcnetsdk_command_template_to_json(template: _owner_types.HcNetSdkCommandPortControlTemplate, *, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return JSON for one generated command-port control template."""
-    value: dict[str, _owner.Any] = {'command_id': f'0x{template.command_id:x}'}
+    value: dict[str, _owner_types.Any] = {'command_id': f'0x{template.command_id:x}'}
     if template.name is not None:
         value['name'] = template.name
     if template.body_tail:
@@ -511,20 +514,20 @@ def _hcnetsdk_command_template_to_json(template: _owner.HcNetSdkCommandPortContr
         value['body_tail_transform'] = template.body_tail_transform
     return value
 
-def _decode_annexb_windows(data: bytes, window_summary: _owner.Mapping[str, _owner.Any], *, ffmpeg_path: str, input_format: str) -> list[dict[str, _owner.Any]]:
+def _decode_annexb_windows(data: bytes, window_summary: _owner_types.Mapping[str, _owner_types.Any], *, ffmpeg_path: str, input_format: str, _owner: _ModuleType) -> list[dict[str, _owner_types.Any]]:
     """Return bounded ffmpeg decode results for sampled Annex-B windows."""
-    results: list[dict[str, _owner.Any]] = []
+    results: list[dict[str, _owner_types.Any]] = []
     samples = window_summary.get('samples')
     if not isinstance(samples, list):
         return results
     for sample in samples:
-        if not isinstance(sample, _owner.Mapping):
+        if not isinstance(sample, _StaticMapping):
             continue
         start_offset = sample.get('start_code_offset')
         if not isinstance(start_offset, int):
             continue
         cut = data[start_offset:]
-        result: dict[str, _owner.Any] = {'index': sample.get('index'), 'start_code_offset': start_offset, 'input_bytes': len(cut)}
+        result: dict[str, _owner_types.Any] = {'index': sample.get('index'), 'start_code_offset': start_offset, 'input_bytes': len(cut)}
         try:
             completed = _owner.subprocess.run([ffmpeg_path, '-v', 'error', '-f', input_format, '-i', 'pipe:0', '-f', 'null', '-'], input=cut, stdout=_owner.subprocess.DEVNULL, stderr=_owner.subprocess.PIPE, check=False, timeout=30)
         except OSError as err:
@@ -543,11 +546,11 @@ def _decode_annexb_windows(data: bytes, window_summary: _owner.Mapping[str, _own
         results.append(result)
     return results
 
-def _decode_h264_annexb_idr_windows(data: bytes, idr_summary: _owner.Mapping[str, _owner.Any], *, ffmpeg_path: str) -> list[dict[str, _owner.Any]]:
+def _decode_h264_annexb_idr_windows(data: bytes, idr_summary: _owner_types.Mapping[str, _owner_types.Any], *, ffmpeg_path: str, _owner: _ModuleType) -> list[dict[str, _owner_types.Any]]:
     """Return bounded ffmpeg decode results for sampled H.264 IDR windows."""
     return _owner._decode_annexb_windows(data, idr_summary, ffmpeg_path=ffmpeg_path, input_format='h264')
 
-def _write_local_sdk_metadata_output(path: str | None, stream: _owner.Any, *, packet_output_path: str | None=None) -> None:
+def _write_local_sdk_metadata_output(path: str | None, stream: _owner_types.Any, *, packet_output_path: str | None, _owner: _ModuleType) -> None:
     """Write safe stream metadata and optional bounded packet samples."""
     metadata = _owner._local_sdk_stream_metadata(stream)
     if packet_output_path:
@@ -557,7 +560,7 @@ def _write_local_sdk_metadata_output(path: str | None, stream: _owner.Any, *, pa
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(_owner.json.dumps(metadata, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 
-def _write_hcnetsdk_sampled_packet_output(path: str, stream: _owner.Any) -> None:
+def _write_hcnetsdk_sampled_packet_output(path: str, stream: _owner_types.Any, *, _owner: _ModuleType) -> None:
     """Write bounded sampled command-port packets as raw dump-compatible frames."""
     packets = getattr(stream, '_idmx_summary_packets', None)
     if not isinstance(packets, list):
@@ -572,13 +575,13 @@ def _write_hcnetsdk_sampled_packet_output(path: str, stream: _owner.Any) -> None
             output.write((len(packet) + 4).to_bytes(2, 'little'))
             output.write(packet)
 
-def _local_sdk_stream_metadata(stream: _owner.Any) -> dict[str, _owner.Any]:
+def _local_sdk_stream_metadata(stream: _owner_types.Any, *, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return non-secret direct-local SDK bootstrap and media metadata."""
     finalize_packet_summary = getattr(stream, 'finalize_packet_summary', None)
     if callable(finalize_packet_summary):
         finalize_packet_summary()
     bootstrap = getattr(stream, 'bootstrap', None)
-    metadata: dict[str, _owner.Any] = {'bootstrap_complete': bootstrap is not None}
+    metadata: dict[str, _owner_types.Any] = {'bootstrap_complete': bootstrap is not None}
     sdk_client = getattr(stream, 'sdk_client', None)
     endpoint = getattr(sdk_client, 'endpoint', None)
     if endpoint is not None:
@@ -594,7 +597,7 @@ def _local_sdk_stream_metadata(stream: _owner.Any) -> dict[str, _owner.Any]:
     keepalive_events = getattr(stream, 'keepalive_events', None)
     if keepalive_events:
         metadata['keepalive_events'] = [{'index': getattr(event, 'index', None), 'command_id': getattr(event, 'command_id', None), 'elapsed_seconds': getattr(event, 'elapsed_seconds', None), 'sent': getattr(event, 'sent', None), 'error': getattr(event, 'error', None)} for event in keepalive_events]
-    exchanges: dict[str, _owner.Any] = {}
+    exchanges: dict[str, _owner_types.Any] = {}
     for name in ('pre_start', 'preview', 'stream_setup'):
         exchange = getattr(bootstrap, name, None)
         if exchange is None:
@@ -611,11 +614,11 @@ def _local_sdk_stream_metadata(stream: _owner.Any) -> dict[str, _owner.Any]:
         metadata['first_media'] = {'prefix_length': len(first_media.prefix), 'prefix_sha256': _owner.hashlib.sha256(first_media.prefix).hexdigest(), 'channel': frame.header.channel, 'payload_length': frame.header.payload_length, 'payload_sha256': _owner.hashlib.sha256(frame.payload).hexdigest()}
     return metadata
 
-def _hcnetsdk_command_port_exchange_metadata(exchange: _owner.Any) -> dict[str, _owner.Any]:
+def _hcnetsdk_command_port_exchange_metadata(exchange: _owner_types.Any, *, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return non-secret metadata for one command-port request/response."""
     frame = getattr(exchange, 'request', b'')
     response = getattr(exchange, 'response', None)
-    metadata: dict[str, _owner.Any] = {'request_length': len(frame)}
+    metadata: dict[str, _owner_types.Any] = {'request_length': len(frame)}
     if len(frame) >= 16:
         metadata['request_command_family'] = int.from_bytes(frame[4:8], 'big')
         metadata['request_auth_word'] = int.from_bytes(frame[8:12], 'big')
@@ -634,7 +637,7 @@ def _hcnetsdk_command_port_exchange_metadata(exchange: _owner.Any) -> dict[str, 
         metadata['response']['body_word_samples'] = _owner._hcnetsdk_command_port_body_word_samples(body)
     return metadata
 
-def _hcnetsdk_command_port_body_word_samples(body: bytes, *, max_samples: int=16) -> list[dict[str, int]]:
+def _hcnetsdk_command_port_body_word_samples(body: bytes, *, max_samples: int, _owner: _ModuleType) -> list[dict[str, int]]:
     """Return bounded nonzero 32-bit body words for diagnostics."""
     samples: list[dict[str, int]] = []
     for offset in range(0, len(body) - 3, 4):
@@ -646,6 +649,6 @@ def _hcnetsdk_command_port_body_word_samples(body: bytes, *, max_samples: int=16
             break
     return samples
 
-def _hcnetsdk_command_port_body_tail_word_samples(tail: bytes, *, max_samples: int=16) -> list[dict[str, int]]:
+def _hcnetsdk_command_port_body_tail_word_samples(tail: bytes, *, max_samples: int, _owner: _ModuleType) -> list[dict[str, int]]:
     """Return bounded nonzero 32-bit request-tail words for diagnostics."""
     return _owner._hcnetsdk_command_port_body_word_samples(tail, max_samples=max_samples)

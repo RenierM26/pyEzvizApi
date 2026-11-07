@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.devices.light_bulb`.
 
@@ -12,17 +13,16 @@ from typing import TYPE_CHECKING
 from pyezvizapi.devices import light_bulb as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.devices.light_bulb import (
-    Any as Any,
-    DeviceSwitchType as DeviceSwitchType,
-    EzvizDeviceRecord as EzvizDeviceRecord,
-    EzvizLightBulb as EzvizLightBulb,
-    PyEzvizError as PyEzvizError,
-    annotations as annotations,
-    fetch_nested_value as fetch_nested_value,
-    json as json,
-    local_ip_address as local_ip_address,
-    switch_values as switch_values,
-    )
+    import pyezvizapi.devices.light_bulb as _compat_module_0
+    Any = _compat_module_0.Any
+    DeviceSwitchType = _compat_module_0.DeviceSwitchType
+    EzvizDeviceRecord = _compat_module_0.EzvizDeviceRecord
+    EzvizLightBulb = _compat_module_0.EzvizLightBulb
+    PyEzvizError = _compat_module_0.PyEzvizError
+    annotations = _compat_module_0.annotations
+    fetch_nested_value = _compat_module_0.fetch_nested_value
+    json = _compat_module_0.json
+    local_ip_address = _compat_module_0.local_ip_address
+    switch_values = _compat_module_0.switch_values
 
 sys.modules[__name__] = _implementation

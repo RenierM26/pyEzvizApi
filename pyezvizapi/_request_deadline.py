@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.deadline`.
 
@@ -12,19 +14,18 @@ from typing import TYPE_CHECKING
 from pyezvizapi.cloud import deadline as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.cloud.deadline import (
-        _BUDGET as _BUDGET,
-        Any as Any,
-        Callable as Callable,
-        ContextVar as ContextVar,
-        Iterator as Iterator,
-        Timeout as Timeout,
-        bounded_request_timeout as bounded_request_timeout,
-        contextmanager as contextmanager,
-        remaining_request_budget as remaining_request_budget,
-        request_budget_lock as request_budget_lock,
-        request_deadline as request_deadline,
-        time as time,
-    )
+    import pyezvizapi.cloud.deadline as _compat_module_0
+    _BUDGET = _compat_module_0._BUDGET
+    Any = _compat_module_0.Any
+    Callable = _compat_module_0.Callable
+    ContextVar = _compat_module_0.ContextVar
+    Iterator = _compat_module_0.Iterator
+    Timeout = _compat_module_0.Timeout
+    bounded_request_timeout = _compat_module_0.bounded_request_timeout
+    contextmanager = _compat_module_0.contextmanager
+    remaining_request_budget = _compat_module_0.remaining_request_budget
+    request_budget_lock = _compat_module_0.request_budget_lock
+    request_deadline = _compat_module_0.request_deadline
+    time = _compat_module_0.time
 
 sys.modules[__name__] = _implementation

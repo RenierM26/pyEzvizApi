@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.push.longlink.codec`.
 
@@ -12,42 +14,41 @@ from typing import TYPE_CHECKING
 from pyezvizapi.push.longlink import codec as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.push.longlink.codec import (
-        IV as IV,
-        Any as Any,
-        AuthenticationRejected as AuthenticationRejected,
-        Cipher as Cipher,
-        _auth_iv_status as _auth_iv_status,
-        algorithms as algorithms,
-        annotations as annotations,
-        authentication_i as authentication_i,
-        authentication_ii as authentication_ii,
-        authentication_iii_create as authentication_iii_create,
-        authentication_iii_existing as authentication_iii_existing,
-        authentication_iv_create as authentication_iv_create,
-        authentication_iv_existing as authentication_iv_existing,
-        control_keepalive as control_keepalive,
-        das_request as das_request,
-        das_response as das_response,
-        decode_event_envelope as decode_event_envelope,
-        decode_mobile_body as decode_mobile_body,
-        decrypt as decrypt,
-        encode_application_ack as encode_application_ack,
-        encrypt as encrypt,
-        hashlib as hashlib,
-        header as header,
-        hmac as hmac,
-        json as json,
-        master_key as master_key,
-        modes as modes,
-        padding as padding,
-        re as re,
-        refresh_i as refresh_i,
-        refresh_ii as refresh_ii,
-        refresh_iii as refresh_iii,
-        share_key as share_key,
-        signature as signature,
-        struct as struct,
-    )
+    import pyezvizapi.push.longlink.codec as _compat_module_0
+    IV = _compat_module_0.IV
+    Any = _compat_module_0.Any
+    AuthenticationRejected = _compat_module_0.AuthenticationRejected
+    Cipher = _compat_module_0.Cipher
+    _auth_iv_status = _compat_module_0._auth_iv_status
+    algorithms = _compat_module_0.algorithms
+    annotations = _compat_module_0.annotations
+    authentication_i = _compat_module_0.authentication_i
+    authentication_ii = _compat_module_0.authentication_ii
+    authentication_iii_create = _compat_module_0.authentication_iii_create
+    authentication_iii_existing = _compat_module_0.authentication_iii_existing
+    authentication_iv_create = _compat_module_0.authentication_iv_create
+    authentication_iv_existing = _compat_module_0.authentication_iv_existing
+    control_keepalive = _compat_module_0.control_keepalive
+    das_request = _compat_module_0.das_request
+    das_response = _compat_module_0.das_response
+    decode_event_envelope = _compat_module_0.decode_event_envelope
+    decode_mobile_body = _compat_module_0.decode_mobile_body
+    decrypt = _compat_module_0.decrypt
+    encode_application_ack = _compat_module_0.encode_application_ack
+    encrypt = _compat_module_0.encrypt
+    hashlib = _compat_module_0.hashlib
+    header = _compat_module_0.header
+    hmac = _compat_module_0.hmac
+    json = _compat_module_0.json
+    master_key = _compat_module_0.master_key
+    modes = _compat_module_0.modes
+    padding = _compat_module_0.padding
+    re = _compat_module_0.re
+    refresh_i = _compat_module_0.refresh_i
+    refresh_ii = _compat_module_0.refresh_ii
+    refresh_iii = _compat_module_0.refresh_iii
+    share_key = _compat_module_0.share_key
+    signature = _compat_module_0.signature
+    struct = _compat_module_0.struct
 
 sys.modules[__name__] = _implementation

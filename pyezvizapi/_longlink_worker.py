@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.push.longlink.worker`.
 
@@ -12,20 +14,19 @@ from typing import TYPE_CHECKING
 from pyezvizapi.push.longlink import worker as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.push.longlink.worker import (
-        _LOGGER as _LOGGER,
-        Any as Any,
-        Callable as Callable,
-        Event as Event,
-        EzvizPushFatalError as EzvizPushFatalError,
-        Lock as Lock,
-        Protocol as Protocol,
-        PushSession as PushSession,
-        PushWorker as PushWorker,
-        Thread as Thread,
-        annotations as annotations,
-        current_thread as current_thread,
-        logging as logging,
-    )
+    import pyezvizapi.push.longlink.worker as _compat_module_0
+    _LOGGER = _compat_module_0._LOGGER
+    Any = _compat_module_0.Any
+    Callable = _compat_module_0.Callable
+    Event = _compat_module_0.Event
+    EzvizPushFatalError = _compat_module_0.EzvizPushFatalError
+    Lock = _compat_module_0.Lock
+    Protocol = _compat_module_0.Protocol
+    PushSession = _compat_module_0.PushSession
+    PushWorker = _compat_module_0.PushWorker
+    Thread = _compat_module_0.Thread
+    annotations = _compat_module_0.annotations
+    current_thread = _compat_module_0.current_thread
+    logging = _compat_module_0.logging
 
 sys.modules[__name__] = _implementation

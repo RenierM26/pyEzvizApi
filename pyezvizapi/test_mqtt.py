@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.cli.mqtt_listener`.
 
@@ -12,29 +13,28 @@ from typing import TYPE_CHECKING
 from pyezvizapi.cli import mqtt_listener as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.cli.mqtt_listener import (
-        _LOGGER as _LOGGER,
-        LOG_FILE as LOG_FILE,
-        Any as Any,
-        EzvizAuthVerificationCode as EzvizAuthVerificationCode,
-        EzvizClient as EzvizClient,
-        Path as Path,
-        PyEzvizError as PyEzvizError,
-        _load_token_file as _load_token_file,
-        _parse_args as _parse_args,
-        _save_token_file as _save_token_file,
-        annotations as annotations,
-        argparse as argparse,
-        cast as cast,
-        getpass as getpass,
-        json as json,
-        logging as logging,
-        main as main,
-        message_handler as message_handler,
-        save_private_token as save_private_token,
-        sys as sys,
-        time as time,
-    )
+    import pyezvizapi.cli.mqtt_listener as _compat_module_0
+    _LOGGER = _compat_module_0._LOGGER
+    LOG_FILE = _compat_module_0.LOG_FILE
+    Any = _compat_module_0.Any
+    EzvizAuthVerificationCode = _compat_module_0.EzvizAuthVerificationCode
+    EzvizClient = _compat_module_0.EzvizClient
+    Path = _compat_module_0.Path
+    PyEzvizError = _compat_module_0.PyEzvizError
+    _load_token_file = _compat_module_0._load_token_file
+    _parse_args = _compat_module_0._parse_args
+    _save_token_file = _compat_module_0._save_token_file
+    annotations = _compat_module_0.annotations
+    argparse = _compat_module_0.argparse
+    cast = _compat_module_0.cast
+    getpass = _compat_module_0.getpass
+    json = _compat_module_0.json
+    logging = _compat_module_0.logging
+    main = _compat_module_0.main
+    message_handler = _compat_module_0.message_handler
+    save_private_token = _compat_module_0.save_private_token
+    sys = _compat_module_0.sys
+    time = _compat_module_0.time
 
 if __name__ == "__main__":
     sys.exit(_implementation.main())

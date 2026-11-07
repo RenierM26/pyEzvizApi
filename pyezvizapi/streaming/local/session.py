@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys as _sys
+
 import bisect
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
@@ -2031,54 +2033,97 @@ def _local_sdk_preview_request_from_credentials(  # noqa: PLR0913
     )
 
 
-from pyezvizapi.streaming.local.capture import copy_local_stream_to_mpegps as copy_local_stream_to_mpegps
+from pyezvizapi.streaming.local import capture as _impl_capture
+
+def copy_local_stream_to_mpegps(stream: Any, output: BinaryIO, *, max_packets: int | None=None, duration_seconds: float | None=None, monotonic: Callable[[], float]=time.monotonic) -> None:
+    """Write local MPEG-PS payloads directly without an FFmpeg subprocess."""
+    return _impl_capture.copy_local_stream_to_mpegps(stream, output, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import collect_local_stream_mpegps as collect_local_stream_mpegps
+def collect_local_stream_mpegps(stream: Any, *, max_packets: int | None=None, duration_seconds: float | None=None, monotonic: Callable[[], float]=time.monotonic) -> bytes:
+    """Collect bounded local MPEG-PS payloads into memory.
+
+    This is intended for transforms, such as the EZVIZ encrypted-video NAL
+    decrypt pass, that need complete MPEG-PS packet context across local RTP
+    packet boundaries.
+    """
+    return _impl_capture.collect_local_stream_mpegps(stream, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import copy_local_stream_to_decrypted_mpegps as copy_local_stream_to_decrypted_mpegps
+def copy_local_stream_to_decrypted_mpegps(stream: Any, output: BinaryIO, media_key: str | bytes, *, nalu_header_size: int | None=None, max_packets: int | None=None, duration_seconds: float | None=None, monotonic: Callable[[], float]=time.monotonic) -> None:
+    """Collect, decrypt and write local MPEG-PS payloads.
+
+    Decryption is deliberately bounded by max_packets or duration_seconds
+    because the MPEG-PS/NAL transform is stateful across packet splits and must
+    operate on an in-memory capture.
+    """
+    return _impl_capture.copy_local_stream_to_decrypted_mpegps(stream, output, media_key, nalu_header_size=nalu_header_size, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import copy_local_stream_to_decrypted_mpegts as copy_local_stream_to_decrypted_mpegts
+def copy_local_stream_to_decrypted_mpegts(stream: Any, output: BinaryIO, media_key: str | bytes, *, ffmpeg_path: str='ffmpeg', nalu_header_size: int | None=None, max_packets: int | None=None, duration_seconds: float | None=None, monotonic: Callable[[], float]=time.monotonic, h264_skip_initial_idr_windows: int=0, h264_trim_to_clean_idr_window: bool=False, h264_clean_idr_preroll_seconds: float=0.0, h264_clean_idr_max_windows: int=32, h264_wait_for_clean_idr_window: bool=False, h264_clean_idr_wait_seconds: float=60.0, decrypt_hevc_parameter_sets: bool=False, native_shared_clock: bool=False, app_relative_clock: bool=False) -> None:  # noqa: PLR0913
+    """Collect, decrypt, remux and write local MPEG-TS bytes."""
+    return _impl_capture.copy_local_stream_to_decrypted_mpegts(stream, output, media_key, ffmpeg_path=ffmpeg_path, nalu_header_size=nalu_header_size, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic, h264_skip_initial_idr_windows=h264_skip_initial_idr_windows, h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window, h264_clean_idr_preroll_seconds=h264_clean_idr_preroll_seconds, h264_clean_idr_max_windows=h264_clean_idr_max_windows, h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window, h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets, native_shared_clock=native_shared_clock, app_relative_clock=app_relative_clock, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import _require_bounded_decrypt_capture as _require_bounded_decrypt_capture
+def _require_bounded_decrypt_capture(*, max_packets: int | None, duration_seconds: float | None) -> None:
+    return _impl_capture._require_bounded_decrypt_capture(max_packets=max_packets, duration_seconds=duration_seconds, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import _require_bounded_idmx_capture as _require_bounded_idmx_capture
+def _require_bounded_idmx_capture(*, max_packets: int | None, duration_seconds: float | None) -> None:
+    return _impl_capture._require_bounded_idmx_capture(max_packets=max_packets, duration_seconds=duration_seconds, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import copy_local_stream_to_mpegts as copy_local_stream_to_mpegts
+def copy_local_stream_to_mpegts(stream: Any, output: BinaryIO, *, ffmpeg_path: str='ffmpeg', max_packets: int | None=None, duration_seconds: float | None=None, monotonic: Callable[[], float]=time.monotonic, h264_skip_initial_idr_windows: int=0, h264_trim_to_clean_idr_window: bool=False, h264_clean_idr_preroll_seconds: float=0.0, h264_clean_idr_max_windows: int=32, h264_wait_for_clean_idr_window: bool=False, h264_clean_idr_wait_seconds: float=60.0, native_shared_clock: bool=False, app_relative_clock: bool=False) -> None:  # noqa: PLR0913
+    """Pipe local media payloads through FFmpeg and write MPEG-TS bytes."""
+    return _impl_capture.copy_local_stream_to_mpegts(stream, output, ffmpeg_path=ffmpeg_path, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic, h264_skip_initial_idr_windows=h264_skip_initial_idr_windows, h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window, h264_clean_idr_preroll_seconds=h264_clean_idr_preroll_seconds, h264_clean_idr_max_windows=h264_clean_idr_max_windows, h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window, h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds, native_shared_clock=native_shared_clock, app_relative_clock=app_relative_clock, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import _clear_native_rtp_packets_with_legacy_indices as _clear_native_rtp_packets_with_legacy_indices
+def _clear_native_rtp_packets_with_legacy_indices(packets: list[bytes], video_types: frozenset[int]) -> tuple[list[RtpPacket], set[int]]:
+    """Separate genuine RTP media clocks from legacy native-body wrappers."""
+    return _impl_capture._clear_native_rtp_packets_with_legacy_indices(packets, video_types, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import _copy_clear_native_idmx_timed_av as _copy_clear_native_idmx_timed_av
+def _copy_clear_native_idmx_timed_av(packets: list[bytes], audio: RtpAacStream | None, output: BinaryIO, *, ffmpeg_path: str, selected_annexb: bytes | None=None, selected_codec: RtpVideoCodec | None=None, native_shared_clock: bool=False, app_relative_clock: bool=False) -> bool:
+    """Keep native clear AAC jitter through one timed input, not raw-file probing."""
+    return _impl_capture._copy_clear_native_idmx_timed_av(packets, audio, output, ffmpeg_path=ffmpeg_path, selected_annexb=selected_annexb, selected_codec=selected_codec, native_shared_clock=native_shared_clock, app_relative_clock=app_relative_clock, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import _clear_native_selected_timeline as _clear_native_selected_timeline
+def _clear_native_selected_timeline(units: tuple[bytes, ...], timestamps: list[int], packets: list[RtpPacket], selected_annexb: bytes, codec: RtpVideoCodec, *, video_types: frozenset[int]=DEFAULT_VIDEO_PAYLOAD_TYPES, nal_source_keys: list[RtpSequenceKey] | None=None) -> tuple[tuple[bytes, ...], list[int], list[RtpPacket], int | None]:
+    """Match the decoded clean suffix, retaining audio only inside its wire interval."""
+    return _impl_capture._clear_native_selected_timeline(units, timestamps, packets, selected_annexb, codec, video_types=video_types, nal_source_keys=nal_source_keys, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import _copy_decrypted_native_idmx_timed_av as _copy_decrypted_native_idmx_timed_av
+def _copy_decrypted_native_idmx_timed_av(packets: list[bytes], annexb: bytes, audio: RtpAacStream | None, output: BinaryIO, *, codec: RtpVideoCodec, ffmpeg_path: str, media_key: str | bytes=b'', nalu_header_size: int | None=None, decrypt_hevc_parameter_sets: bool=False, native_shared_clock: bool=False, app_relative_clock: bool=False) -> bool:  # noqa: PLR0913
+    """Use advertised native picture cadence and received AAC sample timestamps."""
+    return _impl_capture._copy_decrypted_native_idmx_timed_av(packets, annexb, audio, output, codec=codec, ffmpeg_path=ffmpeg_path, media_key=media_key, nalu_header_size=nalu_header_size, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets, native_shared_clock=native_shared_clock, app_relative_clock=app_relative_clock, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import _native_decrypted_rtp_timeline as _native_decrypted_rtp_timeline
+def _native_decrypted_rtp_timeline(packets: list[bytes], annexb: bytes, codec: RtpVideoCodec, media_key: str | bytes, nalu_header_size: int | None, decrypt_hevc_parameter_sets: bool=False) -> tuple[tuple[bytes, ...], list[int]] | None:
+    """Match decrypted NAL spans to their real RTP clocks without renumbering gaps."""
+    return _impl_capture._native_decrypted_rtp_timeline(packets, annexb, codec, media_key, nalu_header_size, decrypt_hevc_parameter_sets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import _native_decrypted_picture_timeline as _native_decrypted_picture_timeline
+def _native_decrypted_picture_timeline(annexb: bytes, codec: RtpVideoCodec, advertised_rate: str) -> tuple[tuple[bytes, ...], list[int]]:
+    return _impl_capture._native_decrypted_picture_timeline(annexb, codec, advertised_rate, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.capture import h264_clean_idr_capture_budgets as h264_clean_idr_capture_budgets
-
-
-from pyezvizapi.streaming.local.capture import _checked_h264_duration_sum as _checked_h264_duration_sum
-
-
-from pyezvizapi.streaming.local.capture import _is_ignorable_leading_stream_payload as _is_ignorable_leading_stream_payload
+def h264_clean_idr_capture_budgets(*, duration_seconds: float | None, h264_skip_initial_idr_windows: int, h264_trim_to_clean_idr_window: bool, h264_clean_idr_preroll_seconds: float, h264_clean_idr_max_windows: int, h264_wait_for_clean_idr_window: bool, h264_clean_idr_wait_seconds: float) -> tuple[float | None, float | None]:
+    """Validate H.264 trim settings and return capture and payload budgets."""
+    return _impl_capture.h264_clean_idr_capture_budgets(duration_seconds=duration_seconds, h264_skip_initial_idr_windows=h264_skip_initial_idr_windows, h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window, h264_clean_idr_preroll_seconds=h264_clean_idr_preroll_seconds, h264_clean_idr_max_windows=h264_clean_idr_max_windows, h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window, h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.capture import copy_hcnetsdk_real_data_to_mpegts as copy_hcnetsdk_real_data_to_mpegts
+def _checked_h264_duration_sum(duration_seconds: float, extension_seconds: float, *, context: str) -> float:
+    """Add one startup window without allowing deadline overflow."""
+    return _impl_capture._checked_h264_duration_sum(duration_seconds, extension_seconds, context=context, _owner=_sys.modules[__name__])
+
+
+def _is_ignorable_leading_stream_payload(payload: bytes) -> bool:
+    """Return True for tiny command-port blips before the first media record."""
+    return _impl_capture._is_ignorable_leading_stream_payload(payload, _owner=_sys.modules[__name__])
+
+
+def copy_hcnetsdk_real_data_to_mpegts(packets: Iterable[HcNetSdkRealDataPacket], output: BinaryIO, *, ffmpeg_path: str='ffmpeg') -> None:
+    """Remux HCNetSDK real-play MPEG-PS callback packets to MPEG-TS."""
+    return _impl_capture.copy_hcnetsdk_real_data_to_mpegts(packets, output, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
 
 
 def _local_media_packet(
@@ -2261,328 +2306,502 @@ HCNETSDK_HRUDP_FRAME_HEADER_SIZE = 12
 HCNETSDK_HRUDP_VIDEO_FRAME_TYPE = 3
 
 
-from pyezvizapi.streaming.local.diagnostics import collect_local_stream_media_packets as collect_local_stream_media_packets
+from pyezvizapi.streaming.local import diagnostics as _impl_diagnostics
 
+def collect_local_stream_media_packets(stream: Any, *, max_packets: int | None=None, duration_seconds: float | None=None, monotonic: Callable[[], float]=time.monotonic) -> list[bytes]:
+    """Collect bounded local media payloads while preserving RTP packet boundaries."""
+    return _impl_diagnostics.collect_local_stream_media_packets(stream, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.diagnostics import summarize_idmx_h264_local_packets as summarize_idmx_h264_local_packets
 
+def summarize_idmx_h264_local_packets(packets: Iterable[bytes], *, max_frames: int=64) -> dict[str, Any]:
+    """Return sanitized IDMX/H.264 frame-shape metadata for local media packets."""
+    return _impl_diagnostics.summarize_idmx_h264_local_packets(packets, max_frames=max_frames, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.diagnostics import _idmx_route_diagnostics as _idmx_route_diagnostics
 
+def _idmx_route_diagnostics(packets: list[bytes]) -> dict[str, object]:
+    """Return sanitized codec/ownership metadata for a local IDMX capture."""
+    return _impl_diagnostics._idmx_route_diagnostics(packets, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.diagnostics import _summarize_idmx_packet_shapes as _summarize_idmx_packet_shapes
 
+def _summarize_idmx_packet_shapes(packets: list[bytes], *, max_samples: int) -> dict[str, Any]:
+    """Return bounded packet-wrapper diagnostics for IDMX captures."""
+    return _impl_diagnostics._summarize_idmx_packet_shapes(packets, max_samples=max_samples, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.diagnostics import _summarize_idmx_packet_shape as _summarize_idmx_packet_shape
 
+def _summarize_idmx_packet_shape(packet: bytes, packet_index: int) -> dict[str, Any]:
+    """Return sanitized shape metadata for one sampled command-port packet."""
+    return _impl_diagnostics._summarize_idmx_packet_shape(packet, packet_index, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.diagnostics import _possible_hcnetsdk_hrudp_packet_shape as _possible_hcnetsdk_hrudp_packet_shape
 
+def _possible_hcnetsdk_hrudp_packet_shape(packet: bytes) -> dict[str, Any] | None:
+    """Return likely HCPreview HRUDP wrapper fields when a packet is self-bounded."""
+    return _impl_diagnostics._possible_hcnetsdk_hrudp_packet_shape(packet, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.diagnostics import summarize_h264_annexb_units as summarize_h264_annexb_units
 
+def summarize_h264_annexb_units(data: bytes, *, max_units: int=64) -> dict[str, Any]:
+    """Return sanitized H.264 Annex-B NAL-unit metadata."""
+    return _impl_diagnostics.summarize_h264_annexb_units(data, max_units=max_units, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.diagnostics import summarize_h264_annexb_idr_windows as summarize_h264_annexb_idr_windows
 
+def summarize_h264_annexb_idr_windows(data: bytes, *, max_windows: int=16) -> dict[str, Any]:
+    """Return sanitized IDR-started H.264 Annex-B window metadata."""
+    return _impl_diagnostics.summarize_h264_annexb_idr_windows(data, max_windows=max_windows, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.diagnostics import summarize_hevc_annexb_irap_windows as summarize_hevc_annexb_irap_windows
 
+def summarize_hevc_annexb_irap_windows(data: bytes, *, max_windows: int=16) -> dict[str, Any]:
+    """Return sanitized IRAP-started HEVC Annex-B window metadata."""
+    return _impl_diagnostics.summarize_hevc_annexb_irap_windows(data, max_windows=max_windows, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.diagnostics import skip_h264_annexb_initial_idr_windows as skip_h264_annexb_initial_idr_windows
 
+def skip_h264_annexb_initial_idr_windows(data: bytes, count: int) -> bytes:
+    """Return Annex-B bytes starting at the requested IDR window."""
+    return _impl_diagnostics.skip_h264_annexb_initial_idr_windows(data, count, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.diagnostics import skip_hevc_annexb_initial_irap_windows as skip_hevc_annexb_initial_irap_windows
 
+def skip_hevc_annexb_initial_irap_windows(data: bytes, count: int) -> bytes:
+    """Return HEVC Annex-B bytes starting at the requested IRAP window."""
+    return _impl_diagnostics.skip_hevc_annexb_initial_irap_windows(data, count, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import collect_h264_idmx_annexb_after_first_clean_idr_window as collect_h264_idmx_annexb_after_first_clean_idr_window
 
+from pyezvizapi.streaming.local import windows as _impl_windows
 
-from pyezvizapi.streaming.local.windows import _hevc_prefixed_suffix_accept_start_offset as _hevc_prefixed_suffix_accept_start_offset
+def collect_h264_idmx_annexb_after_first_clean_idr_window(packets: Iterable[bytes], *, duration_seconds: float | None, monotonic: Callable[[], float]=time.monotonic, ffmpeg_path: str='ffmpeg', max_windows: int=32, wait_seconds: float=60.0) -> bytes:
+    """Collect IDMX packets from the first clean IDR window onward.
 
+    This is a streaming-friendly variant of post-capture clean-IDR trimming:
+    startup packets may be discarded for up to ``wait_seconds``, and the
+    requested ``duration_seconds`` window starts only after a decodable IDR
+    window is found.
+    """
+    return _impl_windows.collect_h264_idmx_annexb_after_first_clean_idr_window(packets, duration_seconds=duration_seconds, monotonic=monotonic, ffmpeg_path=ffmpeg_path, max_windows=max_windows, wait_seconds=wait_seconds, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import collect_idmx_annexb_after_first_clean_video_window as collect_idmx_annexb_after_first_clean_video_window
 
+def _hevc_prefixed_suffix_accept_start_offset(accept_start_offset: Callable[[int], bool], *, prefix_length: int) -> Callable[[int], bool]:
+    """Map offsets in a parameter-prefixed HEVC suffix back to the original suffix."""
+    return _impl_windows._hevc_prefixed_suffix_accept_start_offset(accept_start_offset, prefix_length=prefix_length, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _probe_first_clean_idmx_video_window as _probe_first_clean_idmx_video_window
 
+def collect_idmx_annexb_after_first_clean_video_window(packets: Iterable[bytes], *, duration_seconds: float | None, monotonic: Callable[[], float]=time.monotonic, ffmpeg_path: str='ffmpeg', max_windows: int=32, wait_seconds: float=60.0) -> tuple[bytes, str]:
+    """Collect clear IDMX video from the first clean H.264 IDR or HEVC IRAP."""
+    return _impl_windows.collect_idmx_annexb_after_first_clean_video_window(packets, duration_seconds=duration_seconds, monotonic=monotonic, ffmpeg_path=ffmpeg_path, max_windows=max_windows, wait_seconds=wait_seconds, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window as collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window
 
+def _probe_first_clean_idmx_video_window(packets: list[bytes], *, ffmpeg_path: str, max_windows: int) -> tuple[int | None, str | None, str | None, _H264CleanIdrProbeResult]:
+    return _impl_windows._probe_first_clean_idmx_video_window(packets, ffmpeg_path=ffmpeg_path, max_windows=max_windows, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _raise_if_clean_window_probe_exhausted as _raise_if_clean_window_probe_exhausted
 
+def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(packets: Iterable[bytes], media_key: str | bytes, *, nalu_header_size: int | None=None, duration_seconds: float | None, monotonic: Callable[[], float]=time.monotonic, ffmpeg_path: str='ffmpeg', max_windows: int=32, wait_seconds: float=60.0) -> bytes:
+    """Collect decrypted IDMX H.264 from the first clean IDR window onward."""
+    return _impl_windows.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(packets, media_key, nalu_header_size=nalu_header_size, duration_seconds=duration_seconds, monotonic=monotonic, ffmpeg_path=ffmpeg_path, max_windows=max_windows, wait_seconds=wait_seconds, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _should_probe_clean_window as _should_probe_clean_window
 
+def _raise_if_clean_window_probe_exhausted(*, probe: _H264CleanIdrProbeResult, max_windows: int, first_decode_error: str | None, message: str) -> None:
+    """Stop streaming probes once the requested clean-window budget is spent."""
+    return _impl_windows._raise_if_clean_window_probe_exhausted(probe=probe, max_windows=max_windows, first_decode_error=first_decode_error, message=message, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _requested_duration_h264_suffix_predicate as _requested_duration_h264_suffix_predicate
 
+def _should_probe_clean_window(*, packet_count: int, last_probe_packet_count: int) -> bool:
+    """Avoid rebuilding and decoding the growing packet buffer every packet."""
+    return _impl_windows._should_probe_clean_window(packet_count=packet_count, last_probe_packet_count=last_probe_packet_count, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _requested_duration_idmx_suffix_predicate as _requested_duration_idmx_suffix_predicate
 
+def _requested_duration_h264_suffix_predicate(*, packets: list[bytes], packet_times: list[float], base_offset: int, now: float, duration_seconds: float) -> Callable[[int], bool]:
+    """Return a suffix-start guard that preserves useful post-IDR duration."""
+    return _impl_windows._requested_duration_h264_suffix_predicate(packets=packets, packet_times=packet_times, base_offset=base_offset, now=now, duration_seconds=duration_seconds, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _requested_duration_decrypted_h264_suffix_predicate as _requested_duration_decrypted_h264_suffix_predicate
 
+def _requested_duration_idmx_suffix_predicate(*, packets: list[bytes], packet_times: list[float], codec: str, base_offset: int, now: float, duration_seconds: float) -> Callable[[int], bool]:
+    """Return a suffix-start guard for clear H.264/HEVC IDMX Annex-B."""
+    return _impl_windows._requested_duration_idmx_suffix_predicate(packets=packets, packet_times=packet_times, codec=codec, base_offset=base_offset, now=now, duration_seconds=duration_seconds, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import trim_h264_annexb_to_first_clean_idr_window as trim_h264_annexb_to_first_clean_idr_window
 
+def _requested_duration_decrypted_h264_suffix_predicate(*, packets: list[bytes], packet_times: list[float], media_key: str | bytes, nalu_header_size: int | None, stream_is_clear: bool, base_offset: int, now: float, duration_seconds: float) -> Callable[[int], bool]:
+    """Return a suffix-start guard for clear-first or encrypted H.264 IDMX."""
+    return _impl_windows._requested_duration_decrypted_h264_suffix_predicate(packets=packets, packet_times=packet_times, media_key=media_key, nalu_header_size=nalu_header_size, stream_is_clear=stream_is_clear, base_offset=base_offset, now=now, duration_seconds=duration_seconds, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import trim_h264_annexb_to_first_error_free_suffix as trim_h264_annexb_to_first_error_free_suffix
 
+def trim_h264_annexb_to_first_clean_idr_window(data: bytes, *, ffmpeg_path: str='ffmpeg', max_windows: int=32) -> bytes:
+    """Return Annex-B bytes from the first IDR window that decodes cleanly."""
+    return _impl_windows.trim_h264_annexb_to_first_clean_idr_window(data, ffmpeg_path=ffmpeg_path, max_windows=max_windows, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import trim_hevc_annexb_to_first_clean_irap_window as trim_hevc_annexb_to_first_clean_irap_window
 
+def trim_h264_annexb_to_first_error_free_suffix(data: bytes, *, ffmpeg_path: str='ffmpeg', max_windows: int=32, accept_start_offset: Callable[[int], bool] | None=None) -> bytes:
+    """Return the earliest IDR-started suffix that decodes without errors."""
+    return _impl_windows.trim_h264_annexb_to_first_error_free_suffix(data, ffmpeg_path=ffmpeg_path, max_windows=max_windows, accept_start_offset=accept_start_offset, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import trim_hevc_annexb_to_first_error_free_suffix as trim_hevc_annexb_to_first_error_free_suffix
 
+def trim_hevc_annexb_to_first_clean_irap_window(data: bytes, *, ffmpeg_path: str='ffmpeg', max_windows: int=32) -> bytes:
+    """Return Annex-B bytes from the first IRAP window that decodes cleanly."""
+    return _impl_windows.trim_hevc_annexb_to_first_clean_irap_window(data, ffmpeg_path=ffmpeg_path, max_windows=max_windows, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _hevc_annexb_parameter_prefix_for_suffix as _hevc_annexb_parameter_prefix_for_suffix
 
+def trim_hevc_annexb_to_first_error_free_suffix(data: bytes, *, ffmpeg_path: str='ffmpeg', max_windows: int=32, accept_start_offset: Callable[[int], bool] | None=None) -> bytes:
+    """Return the earliest IRAP-started suffix that decodes without errors."""
+    return _impl_windows.trim_hevc_annexb_to_first_error_free_suffix(data, ffmpeg_path=ffmpeg_path, max_windows=max_windows, accept_start_offset=accept_start_offset, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _try_first_clean_h264_annexb_idr_window_offset as _try_first_clean_h264_annexb_idr_window_offset
 
+def _hevc_annexb_parameter_prefix_for_suffix(data: bytes, *, start_offset: int, leading_nal_types: object) -> bytes:
+    """Return prior VPS/SPS/PPS when a recovered IRAP lacks local parameters."""
+    return _impl_windows._hevc_annexb_parameter_prefix_for_suffix(data, start_offset=start_offset, leading_nal_types=leading_nal_types, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _try_first_clean_decrypted_h264_annexb_idr_window_offset as _try_first_clean_decrypted_h264_annexb_idr_window_offset
 
+def _try_first_clean_h264_annexb_idr_window_offset(packets: list[bytes], *, ffmpeg_path: str, max_windows: int) -> _H264CleanIdrProbeResult:
+    """Return the first clean IDR window offset for partial IDMX packets."""
+    return _impl_windows._try_first_clean_h264_annexb_idr_window_offset(packets, ffmpeg_path=ffmpeg_path, max_windows=max_windows, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _try_first_clean_hevc_annexb_irap_window_offset as _try_first_clean_hevc_annexb_irap_window_offset
 
+def _try_first_clean_decrypted_h264_annexb_idr_window_offset(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, ffmpeg_path: str, max_windows: int) -> _H264CleanIdrProbeResult:
+    """Return the first clean IDR offset for partial encrypted IDMX packets."""
+    return _impl_windows._try_first_clean_decrypted_h264_annexb_idr_window_offset(packets, media_key, nalu_header_size=nalu_header_size, ffmpeg_path=ffmpeg_path, max_windows=max_windows, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _decrypted_h264_annexb_packet_index_for_offset as _decrypted_h264_annexb_packet_index_for_offset
 
+def _try_first_clean_hevc_annexb_irap_window_offset(packets: list[bytes], *, ffmpeg_path: str, max_windows: int) -> _H264CleanIdrProbeResult:
+    """Return the first clean HEVC IRAP window offset for partial IDMX packets."""
+    return _impl_windows._try_first_clean_hevc_annexb_irap_window_offset(packets, ffmpeg_path=ffmpeg_path, max_windows=max_windows, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _decrypted_hevc_annexb_packet_index_for_offset as _decrypted_hevc_annexb_packet_index_for_offset
 
+def _decrypted_h264_annexb_packet_index_for_offset(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, offset: int) -> int:
+    """Return the packet index that first contributes the given Annex-B offset."""
+    return _impl_windows._decrypted_h264_annexb_packet_index_for_offset(packets, media_key, nalu_header_size=nalu_header_size, offset=offset, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _idmx_h264_annexb_packet_spans as _idmx_h264_annexb_packet_spans
 
+def _decrypted_hevc_annexb_packet_index_for_offset(packets: list[bytes], media_key: str | bytes, *, offset: int) -> int:
+    """Return the first packet contributing the HEVC NAL at ``offset``."""
+    return _impl_windows._decrypted_hevc_annexb_packet_index_for_offset(packets, media_key, offset=offset, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _idmx_hevc_annexb_packet_spans as _idmx_hevc_annexb_packet_spans
 
+def _idmx_h264_annexb_packet_spans(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, stream_is_clear: bool) -> tuple[bytes, list[tuple[int, int, int, int, int, int, int]]]:
+    """Assemble H.264 while recording each NAL's contributing packet span."""
+    return _impl_windows._idmx_h264_annexb_packet_spans(packets, media_key, nalu_header_size=nalu_header_size, stream_is_clear=stream_is_clear, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _idmx_h264_packets_from_selected_annexb as _idmx_h264_packets_from_selected_annexb
 
+def _idmx_hevc_annexb_packet_spans(packets: list[bytes], media_key: str | bytes, *, decrypt_hevc_parameter_sets: bool=False) -> tuple[bytes, list[tuple[int, int, int, int, int, int, int]]]:
+    """Assemble decrypted HEVC while recording each NAL's packet span."""
+    return _impl_windows._idmx_hevc_annexb_packet_spans(packets, media_key, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _idmx_packet_frame_slice as _idmx_packet_frame_slice
 
+def _idmx_h264_packets_from_selected_annexb(packets: list[bytes], *, full_annexb: bytes, selected_annexb: bytes, media_key: str | bytes, nalu_header_size: int | None, stream_is_clear: bool) -> list[bytes]:
+    """Return the packet interval contributing selected H.264 VCL NALs."""
+    return _impl_windows._idmx_h264_packets_from_selected_annexb(packets, full_annexb=full_annexb, selected_annexb=selected_annexb, media_key=media_key, nalu_header_size=nalu_header_size, stream_is_clear=stream_is_clear, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _idmx_packets_for_selected_vcl_spans as _idmx_packets_for_selected_vcl_spans
 
+def _idmx_packet_frame_slice(packet: bytes, start: int, stop: int, *, video_payload_types: frozenset[int]) -> bytes:
+    return _impl_windows._idmx_packet_frame_slice(packet, start, stop, video_payload_types=video_payload_types, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _idmx_packets_from_selected_annexb as _idmx_packets_from_selected_annexb
 
+def _idmx_packets_for_selected_vcl_spans(packets: list[bytes], *, spans: list[tuple[int, int, int, int, int, int, int]], full_annexb: bytes, selected_annexb: bytes, video_input_format: str) -> list[bytes]:
+    """Return packets and aggregate frames bounded by selected VCL NALs."""
+    return _impl_windows._idmx_packets_for_selected_vcl_spans(packets, spans=spans, full_annexb=full_annexb, selected_annexb=selected_annexb, video_input_format=video_input_format, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _h264_annexb_packet_index_for_offset as _h264_annexb_packet_index_for_offset
 
+def _idmx_packets_from_selected_annexb(packets: list[bytes], *, full_annexb: bytes, selected_annexb: bytes, media_key: str | bytes, nalu_header_size: int | None, video_input_format: str) -> list[bytes]:
+    """Keep packets from the first selected VCL NAL for aligned audio muxing."""
+    return _impl_windows._idmx_packets_from_selected_annexb(packets, full_annexb=full_annexb, selected_annexb=selected_annexb, media_key=media_key, nalu_header_size=nalu_header_size, video_input_format=video_input_format, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _hevc_annexb_packet_index_for_offset as _hevc_annexb_packet_index_for_offset
 
+def _h264_annexb_packet_index_for_offset(packets: list[bytes], *, offset: int) -> int:
+    """Return the packet index that first contributes the clear Annex-B offset."""
+    return _impl_windows._h264_annexb_packet_index_for_offset(packets, offset=offset, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _idmx_annexb_packet_index_for_offset as _idmx_annexb_packet_index_for_offset
 
+def _hevc_annexb_packet_index_for_offset(packets: list[bytes], *, offset: int) -> int:
+    """Return the packet index that first contributes the clear HEVC Annex-B offset."""
+    return _impl_windows._hevc_annexb_packet_index_for_offset(packets, offset=offset, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _try_first_clean_h264_annexb_idr_window_offset_from_annexb as _try_first_clean_h264_annexb_idr_window_offset_from_annexb
 
+def _idmx_annexb_packet_index_for_offset(packets: list[bytes], *, codec: str, offset: int) -> int:
+    return _impl_windows._idmx_annexb_packet_index_for_offset(packets, codec=codec, offset=offset, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _ffmpeg_h264_decode_errors as _ffmpeg_h264_decode_errors
 
+def _try_first_clean_h264_annexb_idr_window_offset_from_annexb(annexb: bytes, *, ffmpeg_path: str, max_windows: int) -> _H264CleanIdrProbeResult:
+    """Return the first clean IDR window offset for Annex-B H.264 bytes."""
+    return _impl_windows._try_first_clean_h264_annexb_idr_window_offset_from_annexb(annexb, ffmpeg_path=ffmpeg_path, max_windows=max_windows, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _ffmpeg_hevc_decode_errors as _ffmpeg_hevc_decode_errors
 
+def _ffmpeg_h264_decode_errors(data: bytes, *, ffmpeg_path: str, accept_success_with_stderr: bool=True) -> list[str]:
+    return _impl_windows._ffmpeg_h264_decode_errors(data, ffmpeg_path=ffmpeg_path, accept_success_with_stderr=accept_success_with_stderr, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _ffmpeg_video_decode_errors as _ffmpeg_video_decode_errors
 
+def _ffmpeg_hevc_decode_errors(data: bytes, *, ffmpeg_path: str, accept_success_with_stderr: bool=True) -> list[str]:
+    return _impl_windows._ffmpeg_hevc_decode_errors(data, ffmpeg_path=ffmpeg_path, accept_success_with_stderr=accept_success_with_stderr, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _ffmpeg_video_decode_probe_timeout_seconds as _ffmpeg_video_decode_probe_timeout_seconds
 
+def _ffmpeg_video_decode_errors(data: bytes, *, ffmpeg_path: str, input_format: str, accept_success_with_stderr: bool=False) -> list[str]:
+    return _impl_windows._ffmpeg_video_decode_errors(data, ffmpeg_path=ffmpeg_path, input_format=input_format, accept_success_with_stderr=accept_success_with_stderr, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.windows import _hevc_annexb_irap_window_start_index as _hevc_annexb_irap_window_start_index
 
+def _ffmpeg_video_decode_probe_timeout_seconds(data: bytes) -> int:
+    """Keep tiny decode probes quick while allowing full suffix checks to finish."""
+    return _impl_windows._ffmpeg_video_decode_probe_timeout_seconds(data, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_frame_rtp_packet as _idmx_local_frame_rtp_packet
 
+def _hevc_annexb_irap_window_start_index(nal_types: list[int], irap_nal_index: int) -> int:
+    return _impl_windows._hevc_annexb_irap_window_start_index(nal_types, irap_nal_index, _owner=_sys.modules[__name__])
 
-from pyezvizapi.streaming.local.payloads import _summarize_idmx_h264_local_frame as _summarize_idmx_h264_local_frame
 
+from pyezvizapi.streaming.local import payloads as _impl_payloads
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_frame_transport_fields as _idmx_local_frame_transport_fields
+def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int) -> RtpPacket | None:
+    """Normalize standards-shaped and legacy IDMX headers into one RTP model."""
+    return _impl_payloads._idmx_local_frame_rtp_packet(frame, header_size, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_frame_is_h264_transport as _idmx_local_frame_is_h264_transport
+def _summarize_idmx_h264_local_frame(frame: bytes, frame_index: int, *, h264_payload_types: frozenset[int]) -> dict[str, Any]:
+    return _impl_payloads._summarize_idmx_h264_local_frame(frame, frame_index, h264_payload_types=h264_payload_types, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_frame_sequence_number as _idmx_local_frame_sequence_number
+def _idmx_local_frame_transport_fields(frame: bytes, header_size: int) -> dict[str, Any]:
+    """Return sanitized RTP-like fields from an IDMX local frame header."""
+    return _impl_payloads._idmx_local_frame_transport_fields(frame, header_size, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_frame_rtp_timestamp as _idmx_local_frame_rtp_timestamp
+def _idmx_local_frame_is_h264_transport(frame: bytes, header_size: int, *, payload_types: frozenset[int]=frozenset({IDMX_H264_RTP_PAYLOAD_TYPE})) -> bool:
+    return _impl_payloads._idmx_local_frame_is_h264_transport(frame, header_size, payload_types=payload_types, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_frame_rtp_marker as _idmx_local_frame_rtp_marker
+def _idmx_local_frame_sequence_number(frame: bytes, header_size: int) -> int | None:
+    return _impl_payloads._idmx_local_frame_sequence_number(frame, header_size, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_rtp_extension as _idmx_rtp_extension
+def _idmx_local_frame_rtp_timestamp(frame: bytes, header_size: int) -> int | None:
+    return _impl_payloads._idmx_local_frame_rtp_timestamp(frame, header_size, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_audio_descriptor as _idmx_audio_descriptor
+def _idmx_local_frame_rtp_marker(frame: bytes, header_size: int) -> bool:
+    return _impl_payloads._idmx_local_frame_rtp_marker(frame, header_size, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_audio_metadata as _idmx_audio_metadata
+def _idmx_rtp_extension(frame: bytes) -> tuple[int, bytes] | None:
+    """Return the profile and bytes from a complete RTP header extension."""
+    return _impl_payloads._idmx_rtp_extension(frame, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_audio_payload_types as _idmx_audio_payload_types
+def _idmx_audio_descriptor(packets: list[bytes]) -> tuple[int, int] | None:
+    """Read sample rate and channels from an IDMX 0x43 audio descriptor."""
+    return _impl_payloads._idmx_audio_descriptor(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_packets_have_aac as _idmx_local_packets_have_aac
+def _idmx_audio_metadata(packets: list[bytes], _media_key: str | bytes) -> tuple[int, int] | None:
+    """Return authoritative AAC metadata from the native stream descriptor."""
+    return _impl_payloads._idmx_audio_metadata(packets, _media_key, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_video_frame_rate as _idmx_local_video_frame_rate
+def _idmx_audio_payload_types(packets: list[bytes]) -> frozenset[int]:
+    """Return the AAC payload route advertised by startup stream metadata."""
+    return _impl_payloads._idmx_audio_payload_types(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _merge_idmx_h264_frame_summary as _merge_idmx_h264_frame_summary
+def _idmx_local_packets_have_aac(packets: list[bytes]) -> bool:
+    return _impl_payloads._idmx_local_packets_have_aac(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _increment_h264_nal_type_count as _increment_h264_nal_type_count
+def _idmx_local_video_frame_rate(packets: list[bytes]) -> str | None:
+    """Estimate video frame rate from the standard 90 kHz RTP timestamp clock."""
+    return _impl_payloads._idmx_local_video_frame_rate(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _record_idmx_h264_nal_unit_summary as _record_idmx_h264_nal_unit_summary
+def _merge_idmx_h264_frame_summary(summary: dict[str, Any], frame_summary: dict[str, Any]) -> None:
+    return _impl_payloads._merge_idmx_h264_frame_summary(summary, frame_summary, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _increment_idmx_h264_nal_unit_counter as _increment_idmx_h264_nal_unit_counter
+def _increment_h264_nal_type_count(h264: dict[str, Any], nal_type: Any) -> None:
+    return _impl_payloads._increment_h264_nal_type_count(h264, nal_type, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _append_idmx_h264_nal_unit_sample as _append_idmx_h264_nal_unit_sample
+def _record_idmx_h264_nal_unit_summary(summary: dict[str, Any], frame: bytes, frame_summary: dict[str, Any], *, active_fu: dict[str, Any] | None, h264_payload_types: frozenset[int]) -> dict[str, Any] | None:
+    return _impl_payloads._record_idmx_h264_nal_unit_summary(summary, frame, frame_summary, active_fu=active_fu, h264_payload_types=h264_payload_types, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _looks_like_idmx_local_payload as _looks_like_idmx_local_payload
+def _increment_idmx_h264_nal_unit_counter(summary: dict[str, Any], name: str) -> None:
+    return _impl_payloads._increment_idmx_h264_nal_unit_counter(summary, name, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _looks_like_length_prefixed_idmx_local_payload as _looks_like_length_prefixed_idmx_local_payload
+def _append_idmx_h264_nal_unit_sample(summary: dict[str, Any], unit: dict[str, Any], *, complete: bool, end_frame_index: Any) -> None:
+    return _impl_payloads._append_idmx_h264_nal_unit_sample(summary, unit, complete=complete, end_frame_index=end_frame_index, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _iter_idmx_local_frames as _iter_idmx_local_frames
+def _looks_like_idmx_local_payload(payload: bytes) -> bool:
+    return _impl_payloads._looks_like_idmx_local_payload(payload, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _iter_idmx_local_frame_or_nested as _iter_idmx_local_frame_or_nested
+def _looks_like_length_prefixed_idmx_local_payload(payload: bytes) -> bool:
+    return _impl_payloads._looks_like_length_prefixed_idmx_local_payload(payload, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _iter_idmx_local_packet_frame as _iter_idmx_local_packet_frame
+def _iter_idmx_local_frames(payload: bytes) -> Iterator[bytes]:
+    return _impl_payloads._iter_idmx_local_frames(payload, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_packet_contains_aggregate_media_frame as _idmx_local_packet_contains_aggregate_media_frame
+def _iter_idmx_local_frame_or_nested(frame: bytes, *, video_payload_types: frozenset[int]=frozenset()) -> Iterator[bytes]:
+    """Yield one IDMX frame, or nested frames from command-port aggregate records."""
+    return _impl_payloads._iter_idmx_local_frame_or_nested(frame, video_payload_types=video_payload_types, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_packet_contains_aggregate_descriptors as _idmx_local_packet_contains_aggregate_descriptors
+def _iter_idmx_local_packet_frame(packet: bytes, *, video_payload_types: frozenset[int]=frozenset()) -> Iterator[bytes]:
+    return _impl_payloads._iter_idmx_local_packet_frame(packet, video_payload_types=video_payload_types, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_frames_contain_routed_media as _idmx_local_frames_contain_routed_media
+def _idmx_local_packet_contains_aggregate_media_frame(packet: bytes, *, video_payload_types: frozenset[int]=frozenset()) -> bool:
+    return _impl_payloads._idmx_local_packet_contains_aggregate_media_frame(packet, video_payload_types=video_payload_types, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_packet_frame_sequence_number as _idmx_local_packet_frame_sequence_number
+def _idmx_local_packet_contains_aggregate_descriptors(packet: bytes) -> bool:
+    return _impl_payloads._idmx_local_packet_contains_aggregate_descriptors(packet, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _iter_idmx_local_packet_frames as _iter_idmx_local_packet_frames
+def _idmx_local_frames_contain_routed_media(frames: tuple[bytes, ...], *, video_payload_types: frozenset[int]=frozenset()) -> bool:
+    """Return whether nested frames contain video under their final route profile."""
+    return _impl_payloads._idmx_local_frames_contain_routed_media(frames, video_payload_types=video_payload_types, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_frame_contains_media as _idmx_local_frame_contains_media
+def _idmx_local_packet_frame_sequence_number(frame: bytes) -> int | None:
+    return _impl_payloads._idmx_local_packet_frame_sequence_number(frame, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _local_stream_packets_are_idmx as _local_stream_packets_are_idmx
+def _iter_idmx_local_packet_frames(packets: list[bytes]) -> Iterator[bytes]:
+    return _impl_payloads._iter_idmx_local_packet_frames(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _unsupported_idmx_local_payload_error as _unsupported_idmx_local_payload_error
+def _idmx_local_frame_contains_media(frame: bytes) -> bool:
+    return _impl_payloads._idmx_local_frame_contains_media(frame, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _decrypt_idmx_local_packets_to_annexb as _decrypt_idmx_local_packets_to_annexb
+def _local_stream_packets_are_idmx(packets: list[bytes]) -> bool:
+    return _impl_payloads._local_stream_packets_are_idmx(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _decrypt_idmx_local_packets_to_annexb_with_codec as _decrypt_idmx_local_packets_to_annexb_with_codec
+def _unsupported_idmx_local_payload_error() -> PyEzvizError:
+    return _impl_payloads._unsupported_idmx_local_payload_error(_owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _decrypt_idmx_local_packets_to_adts_aac as _decrypt_idmx_local_packets_to_adts_aac
+def _decrypt_idmx_local_packets_to_annexb(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None=None, decrypt_hevc_parameter_sets: bool=False) -> bytes:
+    return _impl_payloads._decrypt_idmx_local_packets_to_annexb(packets, media_key, nalu_header_size=nalu_header_size, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_packets_to_h264_annexb as _idmx_local_packets_to_h264_annexb
+def _decrypt_idmx_local_packets_to_annexb_with_codec(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None=None, decrypt_hevc_parameter_sets: bool=False) -> tuple[bytes, RtpVideoCodec | None]:
+    """Decrypt local video and retain an authoritative descriptor codec."""
+    return _impl_payloads._decrypt_idmx_local_packets_to_annexb_with_codec(packets, media_key, nalu_header_size=nalu_header_size, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _h264_annexb_packet_end_offsets as _h264_annexb_packet_end_offsets
+def _decrypt_idmx_local_packets_to_adts_aac(packets: list[bytes], media_key: str | bytes, *, audio_metadata: tuple[int, int] | None=None, audio_payload_types: frozenset[int] | None=None, require_contiguous: bool=True, decrypt_audio: bool=True, allow_timestamp_jitter: bool=False) -> _IdmxAacStream | None:
+    """Return supported encrypted IDMX AAC as ADTS, or None for other audio."""
+    return _impl_payloads._decrypt_idmx_local_packets_to_adts_aac(packets, media_key, audio_metadata=audio_metadata, audio_payload_types=audio_payload_types, require_contiguous=require_contiguous, decrypt_audio=decrypt_audio, allow_timestamp_jitter=allow_timestamp_jitter, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_packets_to_hevc_annexb as _idmx_local_packets_to_hevc_annexb
+def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
+    return _impl_payloads._idmx_local_packets_to_h264_annexb(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _hevc_annexb_packet_end_offsets as _hevc_annexb_packet_end_offsets
+def _h264_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
+    return _impl_payloads._h264_annexb_packet_end_offsets(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_video_payload_types as _idmx_local_video_payload_types
+def _idmx_local_packets_to_hevc_annexb(packets: list[bytes], *, trim_trailing_non_vcl: bool=True) -> bytes:
+    return _impl_payloads._idmx_local_packets_to_hevc_annexb(packets, trim_trailing_non_vcl=trim_trailing_non_vcl, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_route_profile as _idmx_local_route_profile
+def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
+    return _impl_payloads._hevc_annexb_packet_end_offsets(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_supported_video_payload_types as _idmx_local_supported_video_payload_types
+def _idmx_local_video_payload_types(packets: list[bytes], *, codec: RtpVideoCodec | None=None) -> frozenset[int]:
+    """Return descriptor-owned local video routes with legacy PT 96 fallback."""
+    return _impl_payloads._idmx_local_video_payload_types(packets, codec=codec, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_packets_to_annexb as _idmx_local_packets_to_annexb
+def _idmx_local_route_profile(packets: list[bytes]) -> RtpRouteProfile:
+    """Return the final authoritative route snapshot for local IDMX packets."""
+    return _impl_payloads._idmx_local_route_profile(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_packets_to_annexb_with_codec as _idmx_local_packets_to_annexb_with_codec
+def _idmx_local_supported_video_payload_types(packets: list[bytes]) -> tuple[frozenset[int], frozenset[int]]:
+    """Return H.264/HEVC routes, rejecting unsupported-only video profiles."""
+    return _impl_payloads._idmx_local_supported_video_payload_types(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_packets_to_h264_annexb_with_codec as _idmx_local_packets_to_h264_annexb_with_codec
+def _idmx_local_packets_to_annexb(packets: list[bytes]) -> bytes:
+    return _impl_payloads._idmx_local_packets_to_annexb(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_local_packets_have_direct_hevc_media as _idmx_local_packets_have_direct_hevc_media
+def _idmx_local_packets_to_annexb_with_codec(packets: list[bytes]) -> tuple[bytes, str]:
+    return _impl_payloads._idmx_local_packets_to_annexb_with_codec(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _local_media_aes_key as _local_media_aes_key
+def _idmx_local_packets_to_h264_annexb_with_codec(packets: list[bytes]) -> tuple[bytes, str]:
+    return _impl_payloads._idmx_local_packets_to_h264_annexb_with_codec(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _idmx_hevc_direct_frame_matches_route as _idmx_hevc_direct_frame_matches_route
+def _idmx_local_packets_have_direct_hevc_media(packets: list[bytes]) -> bool:
+    return _impl_payloads._idmx_local_packets_have_direct_hevc_media(packets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _append_idmx_hevc_media_payload as _append_idmx_hevc_media_payload
+def _local_media_aes_key(media_key: str | bytes) -> bytes:
+    return _impl_payloads._local_media_aes_key(media_key, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _append_idmx_h264_fu_a_payload as _append_idmx_h264_fu_a_payload
+def _idmx_hevc_direct_frame_matches_route(body: bytes, *, authoritative_hevc: bool, conflicting_h264_route: bool=False) -> bool:
+    return _impl_payloads._idmx_hevc_direct_frame_matches_route(body, authoritative_hevc=authoritative_hevc, conflicting_h264_route=conflicting_h264_route, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _append_decrypted_hevc_nal as _append_decrypted_hevc_nal
+def _append_idmx_hevc_media_payload(output: bytearray, payload: bytes, aes_key: bytes, *, active_fu: _RtpFragmentedNal | None, sequence_number: int | None=None, rtp_timestamp: int | None=None, rtp_marker: bool=False, decrypt_parameter_sets: bool=True) -> _RtpFragmentedNal | None:
+    return _impl_payloads._append_idmx_hevc_media_payload(output, payload, aes_key, active_fu=active_fu, sequence_number=sequence_number, rtp_timestamp=rtp_timestamp, rtp_marker=rtp_marker, decrypt_parameter_sets=decrypt_parameter_sets, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _append_decrypted_h264_nal as _append_decrypted_h264_nal
+def _append_idmx_h264_fu_a_payload(output: bytearray, payload: bytes, *, active_fu: _RtpFragmentedNal | None, sequence_number: int | None=None, rtp_timestamp: int | None=None, aes_key: bytes | None=None, nalu_header_size: int=H264_NAL_HEADER_SIZE) -> _RtpFragmentedNal | None:
+    return _impl_payloads._append_idmx_h264_fu_a_payload(output, payload, active_fu=active_fu, sequence_number=sequence_number, rtp_timestamp=rtp_timestamp, aes_key=aes_key, nalu_header_size=nalu_header_size, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _append_hevc_nal as _append_hevc_nal
+def _append_decrypted_hevc_nal(output: bytearray, nal: bytes, aes_key: bytes) -> None:
+    return _impl_payloads._append_decrypted_hevc_nal(output, nal, aes_key, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _trim_trailing_h264_non_vcl_nals as _trim_trailing_h264_non_vcl_nals
+def _append_decrypted_h264_nal(output: bytearray, nal: bytes, aes_key: bytes, *, nalu_header_size: int=H264_NAL_HEADER_SIZE) -> None:
+    return _impl_payloads._append_decrypted_h264_nal(output, nal, aes_key, nalu_header_size=nalu_header_size, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _trim_trailing_hevc_non_vcl_nals as _trim_trailing_hevc_non_vcl_nals
+def _append_hevc_nal(output: bytearray, nal: bytes) -> None:
+    return _impl_payloads._append_hevc_nal(output, nal, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _decrypt_hevc_nal_prefix as _decrypt_hevc_nal_prefix
+def _trim_trailing_h264_non_vcl_nals(data: bytes) -> bytes:
+    return _impl_payloads._trim_trailing_h264_non_vcl_nals(data, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _decrypt_h264_nal_prefix as _decrypt_h264_nal_prefix
+def _trim_trailing_hevc_non_vcl_nals(data: bytes) -> bytes:
+    return _impl_payloads._trim_trailing_hevc_non_vcl_nals(data, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _iter_local_stream_payloads as _iter_local_stream_payloads
+def _decrypt_hevc_nal_prefix(nal: bytes, aes_key: bytes) -> bytes:
+    return _impl_payloads._decrypt_hevc_nal_prefix(nal, aes_key, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _copy_mpegps_payloads_to_mpegts as _copy_mpegps_payloads_to_mpegts
+def _decrypt_h264_nal_prefix(nal: bytes, aes_key: bytes, *, nalu_header_size: int=H264_NAL_HEADER_SIZE) -> bytes:
+    return _impl_payloads._decrypt_h264_nal_prefix(nal, aes_key, nalu_header_size=nalu_header_size, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _copy_idmx_audio_video_to_mpegts as _copy_idmx_audio_video_to_mpegts
+def _iter_local_stream_payloads(stream: Any, *, max_packets: int | None, duration_seconds: float | None, monotonic: Callable[[], float]) -> Iterator[bytes]:
+    return _impl_payloads._iter_local_stream_payloads(stream, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _start_ffmpeg_stderr_drain as _start_ffmpeg_stderr_drain
+def _copy_mpegps_payloads_to_mpegts(payloads: Iterable[bytes], output: BinaryIO, *, process: subprocess.Popen[bytes]) -> None:
+    return _impl_payloads._copy_mpegps_payloads_to_mpegts(payloads, output, process=process, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _ffmpeg_stderr_tail as _ffmpeg_stderr_tail
+def _copy_idmx_audio_video_to_mpegts(annexb: bytes, audio: _IdmxAacStream, output: BinaryIO, *, ffmpeg_path: str, video_input_format: str, video_frame_rate: str | None) -> None:
+    """Mux decrypted IDMX elementary video and AAC into MPEG-TS."""
+    return _impl_payloads._copy_idmx_audio_video_to_mpegts(annexb, audio, output, ffmpeg_path=ffmpeg_path, video_input_format=video_input_format, video_frame_rate=video_frame_rate, _owner=_sys.modules[__name__])
 
 
-from pyezvizapi.streaming.local.payloads import _write_local_stream_payloads as _write_local_stream_payloads
+def _start_ffmpeg_stderr_drain(process: subprocess.Popen[bytes], *, max_bytes: int=65536) -> tuple[BoundedStderrTail, Thread | None]:
+    return _impl_payloads._start_ffmpeg_stderr_drain(process, max_bytes=max_bytes, _owner=_sys.modules[__name__])
+
+
+def _ffmpeg_stderr_tail(chunks: list[bytes] | BoundedStderrTail, *, max_chars: int=1200) -> str:
+    return _impl_payloads._ffmpeg_stderr_tail(chunks, max_chars=max_chars, _owner=_sys.modules[__name__])
+
+
+def _write_local_stream_payloads(stream: Any, output: BinaryIO, *, max_packets: int | None, duration_seconds: float | None, monotonic: Callable[[], float]) -> None:
+    return _impl_payloads._write_local_stream_payloads(stream, output, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic, _owner=_sys.modules[__name__])
 
 
 __all__ = [name for name in globals() if not name.startswith("_")]

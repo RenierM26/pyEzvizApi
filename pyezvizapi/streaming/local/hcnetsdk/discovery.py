@@ -1,21 +1,24 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""discovery implementation; legacy runtime hooks remain on the owner module.
-
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
+'discovery implementation; legacy runtime hooks remain on the owner module.\n\nAccess through _owner is deliberate: callers that patch the compatibility\nmodule must still affect dependent operations. No copied hook snapshots.\n'
 from __future__ import annotations
 
-import pyezvizapi.streaming.local.hcnetsdk.api as _owner
+from collections.abc import Mapping as _StaticMapping
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+from pyezvizapi.streaming.local.hcnetsdk.models_session import (
+    EzvizLocalSdkFrame as _StaticEzvizLocalSdkFrame,
+)
 
-def classify_lan_ports(endpoint: _owner.HcNetSdkLanEndpoint, *, timeout: float | None=2.0, socket_factory: _owner.SocketFactory=_owner.socket.create_connection) -> list[_owner.HcNetSdkPortProbe]:
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.local.hcnetsdk.api as _owner_types
+
+def classify_lan_ports(endpoint: _owner_types.HcNetSdkLanEndpoint, *, timeout: float | None, socket_factory: _owner_types.SocketFactory, _owner: _ModuleType) -> list[_owner_types.HcNetSdkPortProbe]:
     """Probe advertised LAN ports without authenticating or changing state."""
     ports = [endpoint.sdk_tls_port, endpoint.command_port, endpoint.stream_port, endpoint.rtsp_port]
     seen: set[int] = set()
-    results: list[_owner.HcNetSdkPortProbe] = []
+    results: list[_owner_types.HcNetSdkPortProbe] = []
     for port in ports:
         if port is None or port <= 0 or port in seen:
             continue
@@ -23,67 +26,67 @@ def classify_lan_ports(endpoint: _owner.HcNetSdkLanEndpoint, *, timeout: float |
         results.append(_owner._probe_port(endpoint.host, port, timeout=timeout, socket_factory=socket_factory))
     return results
 
-def sadp_activate_device_request(serial: str, password: str) -> _owner.SadpActivateDeviceRequest:
+def sadp_activate_device_request(serial: str, password: str, *, _owner: _ModuleType) -> _owner_types.SadpActivateDeviceRequest:
     """Return the local SADP device activation request shape."""
     return _owner.SadpActivateDeviceRequest(serial=serial, password=password)
 
-def sadp_device_net_param(*, ipv4_address: str, ipv4_subnet_mask: str, ipv4_gateway: str, dhcp_enabled: int | bool, http_port: int, command_port: int, ipv6_address: str='', ipv6_gateway: str='', ipv6_mask_len: int=0) -> _owner.SadpDeviceNetParam:
+def sadp_device_net_param(*, ipv4_address: str, ipv4_subnet_mask: str, ipv4_gateway: str, dhcp_enabled: int | bool, http_port: int, command_port: int, ipv6_address: str, ipv6_gateway: str, ipv6_mask_len: int, _owner: _ModuleType) -> _owner_types.SadpDeviceNetParam:
     """Return the Android ``SADP_DEV_NET_PARAM`` field-update model."""
     return _owner.SadpDeviceNetParam(ipv4_address=ipv4_address, ipv4_subnet_mask=ipv4_subnet_mask, ipv4_gateway=ipv4_gateway, dhcp_enabled=dhcp_enabled, http_port=http_port, command_port=command_port, ipv6_address=ipv6_address, ipv6_gateway=ipv6_gateway, ipv6_mask_len=ipv6_mask_len)
 
-def sadp_modify_device_net_param_request(mac: str, password: str, net_param: _owner.SadpDeviceNetParam) -> _owner.SadpModifyDeviceNetParamRequest:
+def sadp_modify_device_net_param_request(mac: str, password: str, net_param: _owner_types.SadpDeviceNetParam, *, _owner: _ModuleType) -> _owner_types.SadpModifyDeviceNetParamRequest:
     """Return the local SADP network-parameter update request shape."""
     return _owner.SadpModifyDeviceNetParamRequest(mac=mac, password=password, net_param=net_param)
 
-def sadp_modify_device_net_param_v40_request(mac: str, password: str, net_param: _owner.SadpDeviceNetParam, *, ret_net_param: _owner.SadpDeviceRetNetParam | None=None) -> _owner.SadpModifyDeviceNetParamV40Request:
+def sadp_modify_device_net_param_v40_request(mac: str, password: str, net_param: _owner_types.SadpDeviceNetParam, *, ret_net_param: _owner_types.SadpDeviceRetNetParam | None, _owner: _ModuleType) -> _owner_types.SadpModifyDeviceNetParamV40Request:
     """Return the local SADP V40 network-parameter update request shape."""
     return _owner.SadpModifyDeviceNetParamV40Request(mac=mac, password=password, net_param=net_param, ret_net_param=ret_net_param)
 
-def sadp_get_last_error_request() -> _owner.SadpNoArgRequest:
+def sadp_get_last_error_request(*, _owner: _ModuleType) -> _owner_types.SadpNoArgRequest:
     """Return the ``SADP_GetLastError`` request shape."""
     return _owner.SadpNoArgRequest(api=_owner.SADP_GET_LAST_ERROR)
 
-def sadp_get_sadp_version_request() -> _owner.SadpNoArgRequest:
+def sadp_get_sadp_version_request(*, _owner: _ModuleType) -> _owner_types.SadpNoArgRequest:
     """Return the ``SADP_GetSadpVersion`` request shape."""
     return _owner.SadpNoArgRequest(api=_owner.SADP_GET_VERSION)
 
-def sadp_set_log_to_file_request(log_level: int, log_dir: str | bytes, *, auto_delete: int | bool=True) -> _owner.SadpSetLogToFileRequest:
+def sadp_set_log_to_file_request(log_level: int, log_dir: str | bytes, *, auto_delete: int | bool, _owner: _ModuleType) -> _owner_types.SadpSetLogToFileRequest:
     """Return the ``SADP_SetLogToFile`` request shape."""
     return _owner.SadpSetLogToFileRequest(log_level=log_level, log_dir=log_dir, auto_delete=auto_delete)
 
-def sadp_start_v30_request(*, install_npf: int | bool=0, callback: str | None=None, user_data: str | None=None) -> _owner.SadpStartRequest:
+def sadp_start_v30_request(*, install_npf: int | bool, callback: str | None, user_data: str | None, _owner: _ModuleType) -> _owner_types.SadpStartRequest:
     """Return the ``SADP_Start_V30`` request shape."""
     return _owner.SadpStartRequest(version=30, install_npf=install_npf, callback=callback, user_data=user_data)
 
-def sadp_start_v40_request(*, install_npf: int | bool=0, callback: str | None=None, user_data: str | None=None) -> _owner.SadpStartRequest:
+def sadp_start_v40_request(*, install_npf: int | bool, callback: str | None, user_data: str | None, _owner: _ModuleType) -> _owner_types.SadpStartRequest:
     """Return the ``SADP_Start_V40`` request shape."""
     return _owner.SadpStartRequest(version=40, install_npf=install_npf, callback=callback, user_data=user_data)
 
-def sadp_stop_request() -> _owner.SadpNoArgRequest:
+def sadp_stop_request(*, _owner: _ModuleType) -> _owner_types.SadpNoArgRequest:
     """Return the ``SADP_Stop`` request shape."""
     return _owner.SadpNoArgRequest(api=_owner.SADP_STOP)
 
-def sadp_clearup_request() -> _owner.SadpNoArgRequest:
+def sadp_clearup_request(*, _owner: _ModuleType) -> _owner_types.SadpNoArgRequest:
     """Return the ``SADP_Clearup`` request shape."""
     return _owner.SadpNoArgRequest(api=_owner.SADP_CLEARUP)
 
-def sadp_send_inquiry_request() -> _owner.SadpNoArgRequest:
+def sadp_send_inquiry_request(*, _owner: _ModuleType) -> _owner_types.SadpNoArgRequest:
     """Return the ``SADP_SendInquiry`` request shape."""
     return _owner.SadpNoArgRequest(api=_owner.SADP_SEND_INQUIRY)
 
-def ezviz_lan_sadp_activate_batch_result(serial: str, password: str, *, code: int, error: int) -> _owner.SadpBatchResult:
+def ezviz_lan_sadp_activate_batch_result(serial: str, password: str, *, code: int, error: int, _owner: _ModuleType) -> _owner_types.SadpBatchResult:
     """Return the RN-style result map model for batch SADP activation."""
     return _owner.SadpBatchResult(identifier=serial, password=password, code=code, error=error, identifier_key='serial')
 
-def ezviz_lan_sadp_edit_net_param_batch_result(mac: str, password: str, *, code: int, error: int) -> _owner.SadpBatchResult:
+def ezviz_lan_sadp_edit_net_param_batch_result(mac: str, password: str, *, code: int, error: int, _owner: _ModuleType) -> _owner_types.SadpBatchResult:
     """Return the RN-style result map model for batch SADP network edits."""
     return _owner.SadpBatchResult(identifier=mac, password=password, code=code, error=error, identifier_key='mac')
 
-def ezviz_hcnetsdk_local_ability_parse_request(*, enabled: int | bool=True) -> _owner.HcNetSdkSetSdkLocalCfgRequest:
+def ezviz_hcnetsdk_local_ability_parse_request(*, enabled: int | bool, _owner: _ModuleType) -> _owner_types.HcNetSdkSetSdkLocalCfgRequest:
     """Return the SDK-local ability parser toggle exposed by the APK."""
     return _owner.hcnetsdk_set_sdk_local_cfg_request(_owner.HcNetSdkLocalCfgType.ABILITY_PARSE, structure='NET_DVR_LOCAL_ABILITY_PARSE_CFG', field_updates={'byEnableAbilityParse': _owner._byte_value('ability parse enabled', int(enabled))}, field_order=_owner.HCNETSDK_LOCAL_ABILITY_PARSE_CFG_FIELD_ORDER)
 
-def classify_hcnetsdk_tcp_payload(data: bytes) -> _owner.HcNetSdkTcpPayloadShape:
+def classify_hcnetsdk_tcp_payload(data: bytes, *, _owner: _ModuleType) -> _owner_types.HcNetSdkTcpPayloadShape:
     """Classify raw HCNetSDK command-port bytes without decoding secrets.
 
     Port 8000 traffic is still proprietary. This helper gives future live
@@ -112,7 +115,7 @@ def classify_hcnetsdk_tcp_payload(data: bytes) -> _owner.HcNetSdkTcpPayloadShape
     u16le_0 = int.from_bytes(data[:2], 'little') if length >= 2 else None
     return _owner.HcNetSdkTcpPayloadShape(kind=_owner._hcnetsdk_tcp_payload_kind(data, printable_ratio=printable / length, high_bit_ratio=high_bit / length, xml_offset=xml_offset, xml_tags=xml_tags, declared_length_offset=declared_offset), length=length, printable_ratio=printable / length, null_ratio=nulls / length, high_bit_ratio=high_bit / length, entropy_bits_per_byte=_owner._entropy_bits_per_byte(data), u32be_0=u32be_0, u32le_0=u32le_0, u32be_4=u32be_4, u32le_4=u32le_4, u32be_8=u32be_8, u32le_8=u32le_8, u32be_12=u32be_12, u32le_12=u32le_12, u16be_0=u16be_0, u16le_0=u16le_0, declared_length_offset=declared_offset, declared_length=declared_length, xml_offset=xml_offset, xml_tags=xml_tags)
 
-def parse_hcnetsdk_tcp_shape_log_line(line: str) -> _owner.HcNetSdkTcpShapeLogRecord | None:
+def parse_hcnetsdk_tcp_shape_log_line(line: str, *, _owner: _ModuleType) -> _owner_types.HcNetSdkTcpShapeLogRecord | None:
     """Parse one secret-safe HCNetSDK TCP shape log line.
 
     These lines contain only metadata, not raw bytes. This parser turns that
@@ -136,7 +139,7 @@ def parse_hcnetsdk_tcp_shape_log_line(line: str) -> _owner.HcNetSdkTcpShapeLogRe
         declared_offset = _owner._parse_length_candidate_offset(first_name)
     return _owner.HcNetSdkTcpShapeLogRecord(direction=match.group('direction'), fd=int(match.group('fd')), host=match.group('host'), port=int(match.group('port')), shape=_owner.HcNetSdkTcpPayloadShape(kind=kind, length=length, printable_ratio=_owner._parse_float(fields.get('printable')) or 0.0, null_ratio=_owner._parse_float(fields.get('nulls')) or 0.0, high_bit_ratio=_owner._parse_float(fields.get('high')) or 0.0, entropy_bits_per_byte=0.0, u32be_0=_owner._parse_int(fields.get('u32be0')), u32le_0=_owner._parse_int(fields.get('u32le0')), u32be_4=_owner._parse_int(fields.get('u32be4')), u32le_4=_owner._parse_int(fields.get('u32le4')), u32be_8=_owner._parse_int(fields.get('u32be8')), u32le_8=_owner._parse_int(fields.get('u32le8')), u32be_12=_owner._parse_int(fields.get('u32be12')), u32le_12=_owner._parse_int(fields.get('u32le12')), u16be_0=_owner._parse_int(fields.get('u16be0')), u16le_0=_owner._parse_int(fields.get('u16le0')), declared_length_offset=declared_offset, declared_length=declared_length), captured_length=_owner._parse_int(fields.get('captured')), fingerprint=fields.get('fp128'), length_candidates=length_candidates)
 
-def parse_hcnetsdk_semantic_log_line(line: str) -> _owner.HcNetSdkSemanticLogEvent | None:
+def parse_hcnetsdk_semantic_log_line(line: str, *, _owner: _ModuleType) -> _owner_types.HcNetSdkSemanticLogEvent | None:
     """Parse one secret-safe HCNetSDK semantic event line."""
     match = _owner.re.search('\\[hcnetsdk-semantic\\]\\s+(?P<body>.*)$', line.strip())
     if not match:
@@ -156,7 +159,7 @@ def parse_hcnetsdk_semantic_log_line(line: str) -> _owner.HcNetSdkSemanticLogEve
         return None
     return _owner.HcNetSdkSemanticLogEvent(name=' '.join(name_tokens), phase=phase, fields=fields)
 
-def summarize_hcnetsdk_command_trace(lines: _owner.Iterable[str]) -> _owner.HcNetSdkCommandTraceSummary:
+def summarize_hcnetsdk_command_trace(lines: _owner_types.Iterable[str], *, _owner: _ModuleType) -> _owner_types.HcNetSdkCommandTraceSummary:
     """Summarize one mixed HCNetSDK command-shape/semantic trace.
 
     This reducer is deliberately conservative: it uses semantic enter/leave
@@ -202,7 +205,7 @@ def summarize_hcnetsdk_command_trace(lines: _owner.Iterable[str]) -> _owner.HcNe
             keyframe_requested = _owner._event_field_bool(event, 'ret')
     return _owner.HcNetSdkCommandTraceSummary(settings_login_commands=tuple(login_commands), followup_commands=tuple(followup_commands), settings_login_success=settings_login_success, play_device_login_success=play_device_login_success, keyframe_requested=keyframe_requested, media_on_command_socket=media_on_command_socket)
 
-def parse_hcnetsdk_tcp_frame_header(data: bytes) -> _owner.HcNetSdkTcpFrameHeader:
+def parse_hcnetsdk_tcp_frame_header(data: bytes, *, _owner: _ModuleType) -> _owner_types.HcNetSdkTcpFrameHeader:
     """Parse the observed 16-byte HCNetSDK command-port frame header."""
     if len(data) < _owner.HCNETSDK_TCP_HEADER_LENGTH:
         raise _owner.PyEzvizError('HCNetSDK TCP frame header is truncated')
@@ -211,20 +214,20 @@ def parse_hcnetsdk_tcp_frame_header(data: bytes) -> _owner.HcNetSdkTcpFrameHeade
         raise _owner.PyEzvizError('HCNetSDK TCP frame total length is too small')
     return _owner.HcNetSdkTcpFrameHeader(total_length=total_length, field_4=int.from_bytes(data[4:8], 'big'), field_8=int.from_bytes(data[8:12], 'big'), field_12=int.from_bytes(data[12:16], 'big'))
 
-def parse_hcnetsdk_tcp_frame(data: bytes) -> _owner.HcNetSdkTcpFrame:
+def parse_hcnetsdk_tcp_frame(data: bytes, *, _owner: _ModuleType) -> _owner_types.HcNetSdkTcpFrame:
     """Parse one complete observed HCNetSDK command-port frame."""
     header = _owner.parse_hcnetsdk_tcp_frame_header(data)
     if len(data) < header.total_length:
         raise _owner.PyEzvizError('HCNetSDK TCP frame is truncated')
     return _owner.HcNetSdkTcpFrame(header=header, body=data[_owner.HCNETSDK_TCP_HEADER_LENGTH:header.total_length])
 
-def parse_hcnetsdk_command_port_login_session(first_response: _owner.HcNetSdkTcpFrame, second_response: _owner.HcNetSdkTcpFrame, *, challenge: bytes=b'', password_seed: bytes=b'') -> _owner.HcNetSdkCommandPortLoginSession:
+def parse_hcnetsdk_command_port_login_session(first_response: _owner_types.HcNetSdkTcpFrame, second_response: _owner_types.HcNetSdkTcpFrame, *, challenge: bytes, password_seed: bytes, _owner: _ModuleType) -> _owner_types.HcNetSdkCommandPortLoginSession:
     """Parse the successful second command-port login response."""
     if len(second_response.body) < 4 or second_response.body[:4] == _owner.HCNETSDK_COMMAND_PORT_EMPTY_SESSION_ID:
         raise _owner.PyEzvizError('HCNetSDK command-port login failed')
     return _owner.HcNetSdkCommandPortLoginSession(session_id=second_response.body[:4], auth_seed=second_response.header.field_4, serial=second_response.body[4:48].split(b'\x00', 1)[0].decode('ascii', errors='ignore'), first_response=first_response, second_response=second_response, challenge=challenge, password_seed=password_seed)
 
-def parse_ezviz_local_device(data: _owner.Mapping[str, _owner.Any]) -> _owner.EzvizLocalDevice:
+def parse_ezviz_local_device(data: _owner_types.Mapping[str, _owner_types.Any], *, _owner: _ModuleType) -> _owner_types.EzvizLocalDevice:
     """Parse one EZVIZ ``/v3/devices/loc/list`` local-device record."""
     serial = _owner._mapping_str(data, 'deviceSerial')
     if not serial:
@@ -232,7 +235,7 @@ def parse_ezviz_local_device(data: _owner.Mapping[str, _owner.Any]) -> _owner.Ez
     content = _owner._parse_local_device_content(data.get('deviceContent'))
     return _owner.EzvizLocalDevice(serial=serial, name=_owner._mapping_str(data, 'deviceName'), model=_owner._mapping_str(data, 'deviceModel'), category=_owner._mapping_str(data, 'category'), device_category=_owner._mapping_str(data, 'deviceCategory'), group_id=_owner._mapping_int(data, 'groupId', default=None), content=content, raw=data)
 
-def parse_sadp_response(data: bytes | str) -> _owner.SadpDeviceInfo:
+def parse_sadp_response(data: bytes | str, *, _owner: _ModuleType) -> _owner_types.SadpDeviceInfo:
     """Parse an XML SADP response body into a small field mapping."""
     text = data.decode('utf-8', 'ignore') if isinstance(data, bytes) else data
     start = text.find('<')
@@ -248,7 +251,7 @@ def parse_sadp_response(data: bytes | str) -> _owner.SadpDeviceInfo:
             fields[tag] = value
     return _owner.SadpDeviceInfo(fields=fields)
 
-def parse_ezviz_local_sdk_frame_header(data: bytes) -> _owner.EzvizLocalSdkFrameHeader:
+def parse_ezviz_local_sdk_frame_header(data: bytes, *, _owner: _ModuleType) -> _owner_types.EzvizLocalSdkFrameHeader:
     """Parse the 32-byte EZVIZ local SDK control header.
 
     Normal app traces against a directly-owned camera showed this
@@ -263,7 +266,7 @@ def parse_ezviz_local_sdk_frame_header(data: bytes) -> _owner.EzvizLocalSdkFrame
         raise _owner.PyEzvizError('EZVIZ local SDK frame header has invalid magic')
     return _owner.EzvizLocalSdkFrameHeader(magic=magic, version=int.from_bytes(data[4:8], 'big'), sequence=int.from_bytes(data[8:12], 'big'), marker=int.from_bytes(data[12:16], 'big'), command=int.from_bytes(data[18:20], 'big'), status=int.from_bytes(data[20:24], 'big'), body_length=int.from_bytes(data[24:28], 'big'), reserved=int.from_bytes(data[28:32], 'big'))
 
-def parse_ezviz_local_sdk_frame(data: bytes) -> _owner.EzvizLocalSdkFrame:
+def parse_ezviz_local_sdk_frame(data: bytes, *, _owner: _ModuleType) -> _owner_types.EzvizLocalSdkFrame:
     """Parse an EZVIZ local SDK frame and validate its declared body length."""
     header = _owner.parse_ezviz_local_sdk_frame_header(data)
     frame_length = _owner.EZVIZ_LOCAL_SDK_HEADER_LENGTH + header.body_length
@@ -271,9 +274,9 @@ def parse_ezviz_local_sdk_frame(data: bytes) -> _owner.EzvizLocalSdkFrame:
         raise _owner.PyEzvizError('EZVIZ local SDK frame body is truncated')
     return _owner.EzvizLocalSdkFrame(header=header, body=data[_owner.EZVIZ_LOCAL_SDK_HEADER_LENGTH:frame_length], trailer=data[frame_length:])
 
-def parse_ezviz_local_sdk_xml_fields(data: bytes | str | _owner.EzvizLocalSdkFrame) -> dict[str, str]:
+def parse_ezviz_local_sdk_xml_fields(data: bytes | str | _owner_types.EzvizLocalSdkFrame, *, _owner: _ModuleType) -> dict[str, str]:
     """Parse a local SDK XML body into simple tag text fields."""
-    if isinstance(data, _owner.EzvizLocalSdkFrame):
+    if isinstance(data, _StaticEzvizLocalSdkFrame):
         body: bytes | str = data.body
     else:
         body = data
@@ -291,7 +294,7 @@ def parse_ezviz_local_sdk_xml_fields(data: bytes | str | _owner.EzvizLocalSdkFra
             fields[tag] = value
     return fields
 
-def classify_ezviz_local_sdk_body(data: bytes) -> _owner.EzvizLocalSdkBodyShape:
+def classify_ezviz_local_sdk_body(data: bytes, *, _owner: _ModuleType) -> _owner_types.EzvizLocalSdkBodyShape:
     """Classify frame body shape without exposing body contents.
 
     The app trace showed plain XML response bodies, but request bodies
@@ -318,7 +321,7 @@ def classify_ezviz_local_sdk_body(data: bytes) -> _owner.EzvizLocalSdkBodyShape:
         kind = 'binary'
     return _owner.EzvizLocalSdkBodyShape(kind=kind, length=length, printable_ratio=printable / length, null_ratio=nulls / length, high_bit_ratio=high_bit / length, entropy_bits_per_byte=_owner._entropy_bits_per_byte(data), xml_offset=xml_offset, xml_tags=xml_tags)
 
-def parse_ezviz_interleaved_rtp_frame_header(data: bytes) -> _owner.EzvizInterleavedRtpFrameHeader:
+def parse_ezviz_interleaved_rtp_frame_header(data: bytes, *, _owner: _ModuleType) -> _owner_types.EzvizInterleavedRtpFrameHeader:
     """Parse the 4-byte interleaved RTP prefix from EZVIZ local media.
 
     The local stream port emits dollar + channel + big-endian length before an
@@ -331,7 +334,7 @@ def parse_ezviz_interleaved_rtp_frame_header(data: bytes) -> _owner.EzvizInterle
         raise _owner.PyEzvizError('EZVIZ interleaved RTP header has invalid magic')
     return _owner.EzvizInterleavedRtpFrameHeader(channel=data[1], payload_length=int.from_bytes(data[2:4], 'big'))
 
-def _parse_local_device_content(value: _owner.Any) -> _owner.EzvizLocalDeviceContent | None:
+def _parse_local_device_content(value: _owner_types.Any, *, _owner: _ModuleType) -> _owner_types.EzvizLocalDeviceContent | None:
     if value is None or value == '':
         return None
     if isinstance(value, str):
@@ -339,13 +342,13 @@ def _parse_local_device_content(value: _owner.Any) -> _owner.EzvizLocalDeviceCon
             data = _owner.json.loads(value)
         except ValueError as err:
             raise _owner.PyEzvizError('Invalid EZVIZ local deviceContent JSON') from err
-    elif isinstance(value, _owner.Mapping):
+    elif isinstance(value, _StaticMapping):
         data = value
     else:
         return None
     return _owner.EzvizLocalDeviceContent(device_ip=_owner._mapping_str(data, 'deviceIP'), device_type=_owner._mapping_int(data, 'deviceType', default=None), device_enc_type=_owner._mapping_int(data, 'deviceEncType', default=None), is_low_power=_owner._mapping_int(data, 'isLowPower', default=None), device_max_act_limit=_owner._mapping_int(data, 'deviceMaxActLimit', default=None), device_sdk_version=_owner._mapping_int(data, 'deviceSdkVersion', default=None), device_rand=_owner._mapping_str(data, 'deviceRand'), device_role_type=_owner._mapping_int(data, 'deviceRoleType', default=None))
 
-def _parse_shape_fields(text: str) -> dict[str, str]:
+def _parse_shape_fields(text: str, *, _owner: _ModuleType) -> dict[str, str]:
     fields: dict[str, str] = {}
     for part in text.split():
         if '=' not in part:
@@ -354,7 +357,7 @@ def _parse_shape_fields(text: str) -> dict[str, str]:
         fields[key] = value.rstrip(',')
     return fields
 
-def _parse_int(value: str | None) -> int | None:
+def _parse_int(value: str | None, *, _owner: _ModuleType) -> int | None:
     if value is None or value == '':
         return None
     try:
@@ -362,7 +365,7 @@ def _parse_int(value: str | None) -> int | None:
     except ValueError:
         return None
 
-def _parse_float(value: str | None) -> float | None:
+def _parse_float(value: str | None, *, _owner: _ModuleType) -> float | None:
     if value is None or value == '':
         return None
     try:
@@ -370,7 +373,7 @@ def _parse_float(value: str | None) -> float | None:
     except ValueError:
         return None
 
-def _parse_length_candidates(value: str | None) -> dict[str, int]:
+def _parse_length_candidates(value: str | None, *, _owner: _ModuleType) -> dict[str, int]:
     if not value:
         return {}
     candidates: dict[str, int] = {}
@@ -383,11 +386,11 @@ def _parse_length_candidates(value: str | None) -> dict[str, int]:
             candidates[name] = parsed
     return candidates
 
-def _parse_length_candidate_offset(name: str) -> int | None:
+def _parse_length_candidate_offset(name: str, *, _owner: _ModuleType) -> int | None:
     match = _owner.re.search('@(\\d+)$', name)
     return int(match.group(1)) if match else None
 
-def _probe_port(host: str, port: int, *, timeout: float | None, socket_factory: _owner.SocketFactory) -> _owner.HcNetSdkPortProbe:
+def _probe_port(host: str, port: int, *, timeout: float | None, socket_factory: _owner_types.SocketFactory, _owner: _ModuleType) -> _owner_types.HcNetSdkPortProbe:
     try:
         sock = socket_factory((host, port), timeout)
     except OSError as err:
@@ -424,7 +427,7 @@ def _probe_port(host: str, port: int, *, timeout: float | None, socket_factory: 
         tls_error = f'{type(err).__name__}: {err}'
     return _owner.HcNetSdkPortProbe(port=port, tcp_open=True, tls_accepted=tls_accepted, passive_bytes=passive_bytes, tls_error=tls_error)
 
-def discover_hcnetsdk_stream_details(endpoint: _owner.HcNetSdkLanEndpoint, password: str | bytes, *, channel: int=1, username: str=_owner.HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: _owner.SocketFactory=_owner.socket.create_connection, rsa_key: _owner.Any | None=None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic, max_response_bytes: int=524288) -> _owner.HcNetSdkStreamDetails:
+def discover_hcnetsdk_stream_details(endpoint: _owner_types.HcNetSdkLanEndpoint, password: str | bytes, *, channel: int, username: str, local_ip: str | None, timeout: float | None, socket_factory: _owner_types.SocketFactory, rsa_key: _owner_types.Any | None, monotonic: _owner_types.Callable[[], float], max_response_bytes: int, _owner: _ModuleType) -> _owner_types.HcNetSdkStreamDetails:
     """Login once and issue native GET1040 and ability8 queries on fresh sockets.
 
     Supplied credentials only: never renew or retry authentication. The finite
@@ -464,7 +467,7 @@ def discover_hcnetsdk_stream_details(endpoint: _owner.HcNetSdkLanEndpoint, passw
             raise _owner.EzvizLocalSdkDeadlineExpired('Camera stream discovery exhausted its deadline')
         return _owner.HcNetSdkStreamDetails(channel, configuration, capabilities, session.serial, capabilities_error)
 
-def discover_hcnetsdk_stream_details_for_login(endpoint: _owner.HcNetSdkLanEndpoint, login: _owner.HcNetSdkLoginCandidate, *, tls_context: _owner.ssl.SSLContext | None=None, channel: int=1, timeout: float=10.0, socket_factory: _owner.SocketFactory=_owner.socket.create_connection, rsa_key: _owner.Any | None=None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic, max_response_bytes: int=524288) -> _owner.HcNetSdkStreamDetails:
+def discover_hcnetsdk_stream_details_for_login(endpoint: _owner_types.HcNetSdkLanEndpoint, login: _owner_types.HcNetSdkLoginCandidate, *, tls_context: _owner_types.ssl.SSLContext | None, channel: int, timeout: float, socket_factory: _owner_types.SocketFactory, rsa_key: _owner_types.Any | None, monotonic: _owner_types.Callable[[], float], max_response_bytes: int, _owner: _ModuleType) -> _owner_types.HcNetSdkStreamDetails:
     """Query one explicit native login profile, never enumerate or renew secrets.
 
     HTTPSV40 means the native binary SDK over TLS, not HTTP/ISAPI. Default TLS
@@ -482,7 +485,7 @@ def discover_hcnetsdk_stream_details_for_login(endpoint: _owner.HcNetSdkLanEndpo
     if login.https:
         context = tls_context if tls_context is not None else _owner.ssl.create_default_context()
 
-        def connect_tls(address: tuple[str, int], budget: float | None) -> _owner.Any:
+        def connect_tls(address: tuple[str, int], budget: float | None) -> _owner_types.Any:
             started = monotonic()
             raw = socket_factory(address, budget)
             try:

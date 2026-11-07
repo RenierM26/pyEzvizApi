@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.native_session`.
 
@@ -12,35 +14,34 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming import native_session as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.native_session import (
-        _POLL_SECONDS as _POLL_SECONDS,
-        Any as Any,
-        Callable as Callable,
-        Event as Event,
-        ExitStack as ExitStack,
-        Fraction as Fraction,
-        Lock as Lock,
-        NativeMediaCompletion as NativeMediaCompletion,
-        NativeMpegTsSession as NativeMpegTsSession,
-        NativeMpegTsStream as NativeMpegTsStream,
-        NativePacketStream as NativePacketStream,
-        NativeSourceClock as NativeSourceClock,
-        NativeStreamClosed as NativeStreamClosed,
-        NativeStreamOptions as NativeStreamOptions,
-        PyEzvizError as PyEzvizError,
-        _Binding as _Binding,
-        _Cancelled as _Cancelled,
-        _no_source as _no_source,
-        _PsInput as _PsInput,
-        _SessionOutput as _SessionOutput,
-        _TsOutput as _TsOutput,
-        annotations as annotations,
-        dataclass as dataclass,
-        math as math,
-        replace as replace,
-        self_contained_idr as self_contained_idr,
-        suppress as suppress,
-        time as time,
-    )
+    import pyezvizapi.streaming.native_session as _compat_module_0
+    _POLL_SECONDS = _compat_module_0._POLL_SECONDS
+    Any = _compat_module_0.Any
+    Callable = _compat_module_0.Callable
+    Event = _compat_module_0.Event
+    ExitStack = _compat_module_0.ExitStack
+    Fraction = _compat_module_0.Fraction
+    Lock = _compat_module_0.Lock
+    NativeMediaCompletion = _compat_module_0.NativeMediaCompletion
+    NativeMpegTsSession = _compat_module_0.NativeMpegTsSession
+    NativeMpegTsStream = _compat_module_0.NativeMpegTsStream
+    NativePacketStream = _compat_module_0.NativePacketStream
+    NativeSourceClock = _compat_module_0.NativeSourceClock
+    NativeStreamClosed = _compat_module_0.NativeStreamClosed
+    NativeStreamOptions = _compat_module_0.NativeStreamOptions
+    PyEzvizError = _compat_module_0.PyEzvizError
+    _Binding = _compat_module_0._Binding
+    _Cancelled = _compat_module_0._Cancelled
+    _no_source = _compat_module_0._no_source
+    _PsInput = _compat_module_0._PsInput
+    _SessionOutput = _compat_module_0._SessionOutput
+    _TsOutput = _compat_module_0._TsOutput
+    annotations = _compat_module_0.annotations
+    dataclass = _compat_module_0.dataclass
+    math = _compat_module_0.math
+    replace = _compat_module_0.replace
+    self_contained_idr = _compat_module_0.self_contained_idr
+    suppress = _compat_module_0.suppress
+    time = _compat_module_0.time
 
 sys.modules[__name__] = _implementation

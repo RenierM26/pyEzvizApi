@@ -1,21 +1,23 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""recordings command handlers; legacy hooks resolve through cli.main."""
+'recordings command handlers; cli.main passes the retained runtime hooks explicitly.'
 from __future__ import annotations
 
-import pyezvizapi.cli.main as _owner
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pyezvizapi.cli.main as _owner_types
 
-def _decode_compressed_record_list(value: str) -> list[_owner.Any]:
+def _decode_compressed_record_list(value: str, *, _owner: _ModuleType) -> list[_owner_types.Any]:
     """Decode the app's base64+zlib JSON record-list payload when present."""
     return _owner._REAL_EZVIZ_CLIENT.decode_records_payload(value)
 
-def _first_record_list(payload: _owner.Any) -> list[_owner.Any]:
+def _first_record_list(payload: _owner_types.Any, *, _owner: _ModuleType) -> list[_owner_types.Any]:
     """Return the first plausible list of record dictionaries from an API response."""
     return _owner._REAL_EZVIZ_CLIENT.extract_record_list(payload)
 
-def _handle_sdcard_videos(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_sdcard_videos(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Fetch SD-card playback record descriptors."""
     if args.source == 'legacy':
         channel_serial = args.channel_serial or args.serial
@@ -30,7 +32,7 @@ def _handle_sdcard_videos(args: _owner.argparse.Namespace, client: _owner.EzvizC
     if args.json:
         _owner._write_json(records if records else response)
         return 0
-    rows: list[dict[str, _owner.Any]] = []
+    rows: list[dict[str, _owner_types.Any]] = []
     for item in records:
         if not isinstance(item, dict):
             continue
@@ -41,7 +43,7 @@ def _handle_sdcard_videos(args: _owner.argparse.Namespace, client: _owner.EzvizC
         _owner.sys.stdout.write('No SD-card videos returned.\n')
     return 0
 
-def _handle_cloud_videos(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_cloud_videos(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Fetch cloud video descriptors and optionally hydrate details."""
     response = client.get_cloud_videos(args.serial, args.channel, limit=args.limit, video_type=args.video_type, support_multi_channel_shared_service=args.support_multi_channel_shared_service)
     videos = response.get('videos')
@@ -55,7 +57,7 @@ def _handle_cloud_videos(args: _owner.argparse.Namespace, client: _owner.EzvizCl
     if args.json:
         _owner._write_json(videos)
         return 0
-    rows: list[dict[str, _owner.Any]] = []
+    rows: list[dict[str, _owner_types.Any]] = []
     for item in videos:
         if not isinstance(item, dict):
             continue
@@ -66,7 +68,7 @@ def _handle_cloud_videos(args: _owner.argparse.Namespace, client: _owner.EzvizCl
         _owner.sys.stdout.write('No cloud videos returned.\n')
     return 0
 
-def _handle_cloud_video_download(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_cloud_video_download(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Fetch cloud video details, then download the selected media bytes."""
     response = client.get_cloud_videos(args.serial, args.channel, limit=args.limit, video_type=args.video_type, support_multi_channel_shared_service=args.support_multi_channel_shared_service)
     videos = response.get('videos')
@@ -112,7 +114,7 @@ def _handle_cloud_video_download(args: _owner.argparse.Namespace, client: _owner
         _owner.sys.stdout.write(f'Wrote {len(data)} bytes to {output}\n')
     return 0
 
-def _select_cloud_video_for_seq_id(client: _owner.EzvizClient, *, serial: str, channel: int, seq_id: str, limit: int, video_type: int, support_multi_channel_shared_service: int) -> dict[str, _owner.Any]:
+def _select_cloud_video_for_seq_id(client: _owner_types.EzvizClient, *, serial: str, channel: int, seq_id: str, limit: int, video_type: int, support_multi_channel_shared_service: int, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return a hydrated cloud video descriptor for a selected seqId."""
     response = client.get_cloud_videos(serial, channel, limit=limit, video_type=video_type, support_multi_channel_shared_service=support_multi_channel_shared_service)
     videos = response.get('videos')
@@ -128,12 +130,12 @@ def _select_cloud_video_for_seq_id(client: _owner.EzvizClient, *, serial: str, c
     details_response = client.get_cloud_video_details(serial, channel, [selected], support_multi_channel_shared_service=support_multi_channel_shared_service)
     details = details_response.get('videos')
     if isinstance(details, list) and details and isinstance(details[0], dict):
-        return _owner.cast(dict[str, _owner.Any], details[0])
+        return _owner.cast('dict[str, _owner_types.Any]', details[0])
     return selected
 
-def _extract_ticket(ticket_response: dict[str, _owner.Any]) -> str:
+def _extract_ticket(ticket_response: dict[str, _owner_types.Any], *, _owner: _ModuleType) -> str:
     """Extract the ticket string from known EZVIZ ticketInfo response shapes."""
-    candidates: list[_owner.Any] = [ticket_response.get('ticketInfo')]
+    candidates: list[_owner_types.Any] = [ticket_response.get('ticketInfo')]
     data = ticket_response.get('data')
     if isinstance(data, dict):
         candidates.append(data.get('ticketInfo'))
@@ -142,7 +144,7 @@ def _extract_ticket(ticket_response: dict[str, _owner.Any]) -> str:
             return candidate['ticket']
     raise _owner.PyEzvizError('Camera ticket response does not include ticketInfo.ticket')
 
-def _cloud_video_start_millis(video: dict[str, _owner.Any]) -> int:
+def _cloud_video_start_millis(video: dict[str, _owner_types.Any], *, _owner: _ModuleType) -> int:
     """Return cloud clip start time in epoch milliseconds."""
     cover_pic = video.get('coverPic')
     if isinstance(cover_pic, str):
@@ -159,11 +161,11 @@ def _cloud_video_start_millis(video: dict[str, _owner.Any]) -> int:
                 return int(parsed_dt.timestamp() * 1000)
     raise _owner.PyEzvizError('Cloud video descriptor does not include a usable start time')
 
-def _cas_time_from_millis(value: int) -> str:
+def _cas_time_from_millis(value: int, *, _owner: _ModuleType) -> str:
     """Format epoch milliseconds as the CAS timestamp string used by the app."""
     return _owner.dt.datetime.fromtimestamp(value / 1000, tz=_owner.dt.UTC).strftime('%Y%m%dT%H%M%SZ')
 
-def _handle_cloud_video_decrypt(args: _owner.argparse.Namespace, client: _owner.EzvizClient | None) -> int:
+def _handle_cloud_video_decrypt(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient | None, *, _owner: _ModuleType) -> int:
     """Decrypt a cloud download .tmp file using the Python PS/NAL transform."""
     if bool(args.serial) == bool(args.key):
         raise _owner.PyEzvizError('Provide exactly one of --serial or --key')

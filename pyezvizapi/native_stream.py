@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.native_stream`.
 
@@ -12,58 +14,56 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming import native_stream as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.native_stream import (
-        _POLL_SECONDS as _POLL_SECONDS,
-        IO_CHUNK_BYTES as IO_CHUNK_BYTES,
-        MAX_PENDING_PS_BYTES as MAX_PENDING_PS_BYTES,
-        OUTPUT_QUEUE_CHUNKS as OUTPUT_QUEUE_CHUNKS,
-        TYPE_CHECKING as TYPE_CHECKING,
-        Any as Any,
-        AsyncGenerator as AsyncGenerator,
-        AutoClipSource as AutoClipSource,
-        BoundedSemaphore as BoundedSemaphore,
-        Callable as Callable,
-        Empty as Empty,
-        Event as Event,
-        Fraction as Fraction,
-        Iterator as Iterator,
-        Literal as Literal,
-        Lock as Lock,
-        MediaPacket as MediaPacket,
-        NativeMediaCompletion as NativeMediaCompletion,
-        NativeMpegTsStream as NativeMpegTsStream,
-        NativePacketStream as NativePacketStream,
-        NativePsTransform as NativePsTransform,
-        NativeSourceClock as NativeSourceClock,
-        NativeStreamClosed as NativeStreamClosed,
-        NativeStreamOptions as NativeStreamOptions,
-        NativeTrackCompletion as NativeTrackCompletion,
-        NativeTrackSelection as NativeTrackSelection,
-        Protocol as Protocol,
-        PyEzvizError as PyEzvizError,
-        Queue as Queue,
-        Thread as Thread,
-        _CallOutcome as _CallOutcome,
-        _Cancelled as _Cancelled,
-        _join_async_task as _join_async_task,
-        _owned_thread_call as _owned_thread_call,
-        _PsInput as _PsInput,
-        _TsOutput as _TsOutput,
-        _unwrap_call as _unwrap_call,
-        annotations as annotations,
-        asyncio as asyncio,
-        cast as cast,
-        current_thread as current_thread,
-        dataclass as dataclass,
-        hashlib as hashlib,
-        import_module as import_module,
-        io as io,
-        math as math,
-        native_mpegts_stream_from_client as native_mpegts_stream_from_client,
-        secrets as secrets,
-        suppress as suppress,
-        sys as sys,
-        time as time,
-    )
+    import pyezvizapi.streaming.native_stream as _compat_module_0
+    _POLL_SECONDS = _compat_module_0._POLL_SECONDS
+    IO_CHUNK_BYTES = _compat_module_0.IO_CHUNK_BYTES
+    MAX_PENDING_PS_BYTES = _compat_module_0.MAX_PENDING_PS_BYTES
+    OUTPUT_QUEUE_CHUNKS = _compat_module_0.OUTPUT_QUEUE_CHUNKS
+    Any = _compat_module_0.Any
+    AsyncGenerator = _compat_module_0.AsyncGenerator
+    AutoClipSource = _compat_module_0.AutoClipSource
+    BoundedSemaphore = _compat_module_0.BoundedSemaphore
+    Callable = _compat_module_0.Callable
+    Empty = _compat_module_0.Empty
+    Event = _compat_module_0.Event
+    Fraction = _compat_module_0.Fraction
+    Iterator = _compat_module_0.Iterator
+    Literal = _compat_module_0.Literal
+    Lock = _compat_module_0.Lock
+    MediaPacket = _compat_module_0.MediaPacket
+    NativeMediaCompletion = _compat_module_0.NativeMediaCompletion
+    NativeMpegTsStream = _compat_module_0.NativeMpegTsStream
+    NativePacketStream = _compat_module_0.NativePacketStream
+    NativePsTransform = _compat_module_0.NativePsTransform
+    NativeSourceClock = _compat_module_0.NativeSourceClock
+    NativeStreamClosed = _compat_module_0.NativeStreamClosed
+    NativeStreamOptions = _compat_module_0.NativeStreamOptions
+    NativeTrackCompletion = _compat_module_0.NativeTrackCompletion
+    NativeTrackSelection = _compat_module_0.NativeTrackSelection
+    Protocol = _compat_module_0.Protocol
+    PyEzvizError = _compat_module_0.PyEzvizError
+    Queue = _compat_module_0.Queue
+    Thread = _compat_module_0.Thread
+    _CallOutcome = _compat_module_0._CallOutcome
+    _Cancelled = _compat_module_0._Cancelled
+    _join_async_task = _compat_module_0._join_async_task
+    _owned_thread_call = _compat_module_0._owned_thread_call
+    _PsInput = _compat_module_0._PsInput
+    _TsOutput = _compat_module_0._TsOutput
+    _unwrap_call = _compat_module_0._unwrap_call
+    annotations = _compat_module_0.annotations
+    asyncio = _compat_module_0.asyncio
+    cast = _compat_module_0.cast
+    current_thread = _compat_module_0.current_thread
+    dataclass = _compat_module_0.dataclass
+    hashlib = _compat_module_0.hashlib
+    import_module = _compat_module_0.import_module
+    io = _compat_module_0.io
+    math = _compat_module_0.math
+    native_mpegts_stream_from_client = _compat_module_0.native_mpegts_stream_from_client
+    secrets = _compat_module_0.secrets
+    suppress = _compat_module_0.suppress
+    sys = _compat_module_0.sys
+    time = _compat_module_0.time
 
 sys.modules[__name__] = _implementation

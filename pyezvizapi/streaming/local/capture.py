@@ -1,21 +1,19 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""capture implementation; legacy runtime hooks remain on the owner module.
-
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
+'capture implementation; legacy runtime hooks remain on the owner module.\n\nAccess through _owner is deliberate: callers that patch the compatibility\nmodule must still affect dependent operations. No copied hook snapshots.\n'
 from __future__ import annotations
 
-import pyezvizapi.streaming.local.session as _owner
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.local.session as _owner_types
 
-def copy_local_stream_to_mpegps(stream: _owner.Any, output: _owner.BinaryIO, *, max_packets: int | None=None, duration_seconds: float | None=None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic) -> None:
+def copy_local_stream_to_mpegps(stream: _owner_types.Any, output: _owner_types.BinaryIO, *, max_packets: int | None, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], _owner: _ModuleType) -> None:
     """Write local MPEG-PS payloads directly without an FFmpeg subprocess."""
     _owner._write_local_stream_payloads(stream, output, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic)
 
-def collect_local_stream_mpegps(stream: _owner.Any, *, max_packets: int | None=None, duration_seconds: float | None=None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic) -> bytes:
+def collect_local_stream_mpegps(stream: _owner_types.Any, *, max_packets: int | None, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], _owner: _ModuleType) -> bytes:
     """Collect bounded local MPEG-PS payloads into memory.
 
     This is intended for transforms, such as the EZVIZ encrypted-video NAL
@@ -24,7 +22,7 @@ def collect_local_stream_mpegps(stream: _owner.Any, *, max_packets: int | None=N
     """
     return b''.join(_owner._iter_local_stream_payloads(stream, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic))
 
-def copy_local_stream_to_decrypted_mpegps(stream: _owner.Any, output: _owner.BinaryIO, media_key: str | bytes, *, nalu_header_size: int | None=None, max_packets: int | None=None, duration_seconds: float | None=None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic) -> None:
+def copy_local_stream_to_decrypted_mpegps(stream: _owner_types.Any, output: _owner_types.BinaryIO, media_key: str | bytes, *, nalu_header_size: int | None, max_packets: int | None, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], _owner: _ModuleType) -> None:
     """Collect, decrypt and write local MPEG-PS payloads.
 
     Decryption is deliberately bounded by max_packets or duration_seconds
@@ -39,7 +37,7 @@ def copy_local_stream_to_decrypted_mpegps(stream: _owner.Any, output: _owner.Bin
     output.write(_owner.decrypt_hikvision_ps_video(payload, media_key, nalu_header_size=nalu_header_size))
     output.flush()
 
-def copy_local_stream_to_decrypted_mpegts(stream: _owner.Any, output: _owner.BinaryIO, media_key: str | bytes, *, ffmpeg_path: str='ffmpeg', nalu_header_size: int | None=None, max_packets: int | None=None, duration_seconds: float | None=None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic, h264_skip_initial_idr_windows: int=0, h264_trim_to_clean_idr_window: bool=False, h264_clean_idr_preroll_seconds: float=0.0, h264_clean_idr_max_windows: int=32, h264_wait_for_clean_idr_window: bool=False, h264_clean_idr_wait_seconds: float=60.0, decrypt_hevc_parameter_sets: bool=False, native_shared_clock: bool=False, app_relative_clock: bool=False) -> None:  # noqa: PLR0912, PLR0913, PLR0915
+def copy_local_stream_to_decrypted_mpegts(stream: _owner_types.Any, output: _owner_types.BinaryIO, media_key: str | bytes, *, ffmpeg_path: str, nalu_header_size: int | None, max_packets: int | None, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], h264_skip_initial_idr_windows: int, h264_trim_to_clean_idr_window: bool, h264_clean_idr_preroll_seconds: float, h264_clean_idr_max_windows: int, h264_wait_for_clean_idr_window: bool, h264_clean_idr_wait_seconds: float, decrypt_hevc_parameter_sets: bool, native_shared_clock: bool, app_relative_clock: bool, _owner: _ModuleType) -> None:  # noqa: PLR0912, PLR0913, PLR0915 -- explicit runtime context plus retained signature
     """Collect, decrypt, remux and write local MPEG-TS bytes."""
     if app_relative_clock and native_shared_clock:
         raise _owner.PyEzvizError('app_relative_clock and native_shared_clock are mutually exclusive')
@@ -53,7 +51,7 @@ def copy_local_stream_to_decrypted_mpegts(stream: _owner.Any, output: _owner.Bin
         payloads = _owner._iter_local_stream_payloads(stream, max_packets=max_packets, duration_seconds=payload_duration_seconds, monotonic=monotonic)
         recorded_packets: list[bytes] = []
 
-        def record_payloads() -> _owner.Iterator[bytes]:
+        def record_payloads() -> _owner_types.Iterator[bytes]:
             for payload in payloads:
                 recorded_packets.append(payload)
                 yield payload
@@ -107,7 +105,7 @@ def copy_local_stream_to_decrypted_mpegts(stream: _owner.Any, output: _owner.Bin
             selected_packets = packets if annexb == full_annexb else _owner._idmx_packets_from_selected_annexb(packets, full_annexb=full_annexb, selected_annexb=annexb, media_key=media_key, nalu_header_size=nalu_header_size, video_input_format=video_input_format)
             audio = _owner._decrypt_idmx_local_packets_to_adts_aac(selected_packets, media_key, audio_metadata=_owner._idmx_audio_metadata(packets, media_key), audio_payload_types=_owner._idmx_audio_payload_types(packets), require_contiguous=False, allow_timestamp_jitter=True)
         if annexb == full_annexb:
-            codec: _owner.RtpVideoCodec = 'hevc' if video_input_format == 'hevc' else 'h264'
+            codec: _owner_types.RtpVideoCodec = 'hevc' if video_input_format == 'hevc' else 'h264'
             if _owner._copy_decrypted_native_idmx_timed_av(packets, annexb, audio, output, codec=codec, ffmpeg_path=ffmpeg_path, media_key=media_key, nalu_header_size=nalu_header_size, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets, **_owner._native_timing_options(native_shared_clock, app_relative_clock=app_relative_clock)):
                 return
         if native_shared_clock or app_relative_clock:
@@ -129,15 +127,15 @@ def copy_local_stream_to_decrypted_mpegts(stream: _owner.Any, output: _owner.Bin
     process = _owner._open_local_mpegts_remux_process(ffmpeg_path)
     _owner._copy_mpegps_payloads_to_mpegts([decrypted], output, process=process)
 
-def _require_bounded_decrypt_capture(*, max_packets: int | None, duration_seconds: float | None) -> None:
+def _require_bounded_decrypt_capture(*, max_packets: int | None, duration_seconds: float | None, _owner: _ModuleType) -> None:
     if not _owner.has_positive_finite_capture_bound(max_packets=max_packets, duration_seconds=duration_seconds):
         raise _owner.PyEzvizError('Encrypted local stream decrypt requires a positive finite duration_seconds or max_packets')
 
-def _require_bounded_idmx_capture(*, max_packets: int | None, duration_seconds: float | None) -> None:
+def _require_bounded_idmx_capture(*, max_packets: int | None, duration_seconds: float | None, _owner: _ModuleType) -> None:
     if max_packets is None and duration_seconds is None:
         raise _owner.PyEzvizError('EZVIZ local IDMX stream remux requires duration_seconds or max_packets')
 
-def copy_local_stream_to_mpegts(stream: _owner.Any, output: _owner.BinaryIO, *, ffmpeg_path: str='ffmpeg', max_packets: int | None=None, duration_seconds: float | None=None, monotonic: _owner.Callable[[], float]=_owner.time.monotonic, h264_skip_initial_idr_windows: int=0, h264_trim_to_clean_idr_window: bool=False, h264_clean_idr_preroll_seconds: float=0.0, h264_clean_idr_max_windows: int=32, h264_wait_for_clean_idr_window: bool=False, h264_clean_idr_wait_seconds: float=60.0, native_shared_clock: bool=False, app_relative_clock: bool=False) -> None:  # noqa: PLR0912, PLR0913, PLR0915
+def copy_local_stream_to_mpegts(stream: _owner_types.Any, output: _owner_types.BinaryIO, *, ffmpeg_path: str, max_packets: int | None, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], h264_skip_initial_idr_windows: int, h264_trim_to_clean_idr_window: bool, h264_clean_idr_preroll_seconds: float, h264_clean_idr_max_windows: int, h264_wait_for_clean_idr_window: bool, h264_clean_idr_wait_seconds: float, native_shared_clock: bool, app_relative_clock: bool, _owner: _ModuleType) -> None:  # noqa: PLR0912, PLR0913, PLR0915 -- explicit runtime context plus retained signature
     """Pipe local media payloads through FFmpeg and write MPEG-TS bytes."""
     if app_relative_clock and native_shared_clock:
         raise _owner.PyEzvizError('app_relative_clock and native_shared_clock are mutually exclusive')
@@ -164,7 +162,7 @@ def copy_local_stream_to_mpegts(stream: _owner.Any, output: _owner.BinaryIO, *, 
         packets: list[bytes] = []
         if h264_wait_for_clean_idr_window:
 
-            def recorded_payloads() -> _owner.Iterator[bytes]:
+            def recorded_payloads() -> _owner_types.Iterator[bytes]:
                 for payload in _owner.chain((first_payload,), payloads):
                     packets.append(payload)
                     yield payload
@@ -196,7 +194,7 @@ def copy_local_stream_to_mpegts(stream: _owner.Any, output: _owner.BinaryIO, *, 
                 annexb = _owner.trim_h264_annexb_to_first_clean_idr_window(annexb, ffmpeg_path=ffmpeg_path, max_windows=h264_clean_idr_max_windows)
             video_input_format = 'h264'
             video_frame_rate = None
-        if (is_h264_startup_options or h264_wait_for_clean_idr_window) and _owner._copy_clear_native_idmx_timed_av(packets, None, output, ffmpeg_path=ffmpeg_path, selected_annexb=annexb, selected_codec=_owner.cast(_owner.RtpVideoCodec, video_input_format), **_owner._native_timing_options(native_shared_clock, app_relative_clock=app_relative_clock)):
+        if (is_h264_startup_options or h264_wait_for_clean_idr_window) and _owner._copy_clear_native_idmx_timed_av(packets, None, output, ffmpeg_path=ffmpeg_path, selected_annexb=annexb, selected_codec=_owner.cast('_owner_types.RtpVideoCodec', video_input_format), **_owner._native_timing_options(native_shared_clock, app_relative_clock=app_relative_clock)):
             return
         if native_shared_clock or app_relative_clock:
             raise _owner.PyEzvizError(f"{('app_relative_clock' if app_relative_clock else 'native_shared_clock')} requires genuine native RTP AV timing")
@@ -219,9 +217,9 @@ def copy_local_stream_to_mpegts(stream: _owner.Any, output: _owner.BinaryIO, *, 
     process = _owner._open_local_mpegts_remux_process(ffmpeg_path)
     _owner._copy_mpegps_payloads_to_mpegts(_owner.chain((first_payload,), payloads), output, process=process)
 
-def _clear_native_rtp_packets_with_legacy_indices(packets: list[bytes], video_types: frozenset[int]) -> tuple[list[_owner.RtpPacket], set[int]]:
+def _clear_native_rtp_packets_with_legacy_indices(packets: list[bytes], video_types: frozenset[int], *, _owner: _ModuleType) -> tuple[list[_owner_types.RtpPacket], set[int]]:
     """Separate genuine RTP media clocks from legacy native-body wrappers."""
-    rtp_packets: list[_owner.RtpPacket] = []
+    rtp_packets: list[_owner_types.RtpPacket] = []
     legacy_video_indices: set[int] = set()
     for frame in _owner._iter_idmx_local_packet_frames(packets):
         header = _owner._idmx_local_frame_header_size(frame)
@@ -233,7 +231,7 @@ def _clear_native_rtp_packets_with_legacy_indices(packets: list[bytes], video_ty
                     legacy_video_indices.add(len(rtp_packets) - 1)
     return (rtp_packets, legacy_video_indices)
 
-def _copy_clear_native_idmx_timed_av(packets: list[bytes], audio: _owner.RtpAacStream | None, output: _owner.BinaryIO, *, ffmpeg_path: str, selected_annexb: bytes | None=None, selected_codec: _owner.RtpVideoCodec | None=None, native_shared_clock: bool=False, app_relative_clock: bool=False) -> bool:  # noqa: PLR0912
+def _copy_clear_native_idmx_timed_av(packets: list[bytes], audio: _owner_types.RtpAacStream | None, output: _owner_types.BinaryIO, *, ffmpeg_path: str, selected_annexb: bytes | None, selected_codec: _owner_types.RtpVideoCodec | None, native_shared_clock: bool, app_relative_clock: bool, _owner: _ModuleType) -> bool:  # noqa: PLR0912 -- explicit runtime context plus retained signature
     """Keep native clear AAC jitter through one timed input, not raw-file probing."""
     if app_relative_clock and selected_annexb is not None:
         raise _owner.PyEzvizError('app_relative_clock requires the complete native startup timeline')
@@ -252,7 +250,7 @@ def _copy_clear_native_idmx_timed_av(packets: list[bytes], audio: _owner.RtpAacS
         return False
     codec = selected_codec if selected_annexb is not None and selected_codec is not None else _owner.detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
     timestamps: list[int] = []
-    source_keys: list[_owner.RtpSequenceKey] = []
+    source_keys: list[_owner_types.RtpSequenceKey] = []
     units = _owner.rtp_packets_to_nal_units(rtp_packets, codec=codec, completed_access_units_only=selected_annexb is None, allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps, nal_source_keys=source_keys)
     if app_relative_clock and len(set(source_keys)) > 1:
         raise _owner.EzvizUnsupportedMediaError('app_relative_clock cannot combine multiple video source clocks', source='rtp', reason='unsupported_av_clock')
@@ -281,13 +279,13 @@ def _copy_clear_native_idmx_timed_av(packets: list[bytes], audio: _owner.RtpAacS
     first_payload = next(payloads)
     process = _owner.open_mpegts_remux_process(ffmpeg_path, input_format='mpeg', preserve_timestamps=True, popen=_owner.subprocess.Popen, **_owner._app_remux_options(app_relative_clock))
 
-    def write_input(stdin: _owner.BinaryIO) -> None:
+    def write_input(stdin: _owner_types.BinaryIO) -> None:
         for payload in _owner.chain((first_payload,), payloads):
             stdin.write(payload)
     _owner.copy_remuxed_output(process, output, write_input=write_input)
     return True
 
-def _clear_native_selected_timeline(units: tuple[bytes, ...], timestamps: list[int], packets: list[_owner.RtpPacket], selected_annexb: bytes, codec: _owner.RtpVideoCodec, *, video_types: frozenset[int]=_owner.DEFAULT_VIDEO_PAYLOAD_TYPES, nal_source_keys: list[_owner.RtpSequenceKey] | None=None) -> tuple[tuple[bytes, ...], list[int], list[_owner.RtpPacket], int | None]:
+def _clear_native_selected_timeline(units: tuple[bytes, ...], timestamps: list[int], packets: list[_owner_types.RtpPacket], selected_annexb: bytes, codec: _owner_types.RtpVideoCodec, *, video_types: frozenset[int], nal_source_keys: list[_owner_types.RtpSequenceKey] | None, _owner: _ModuleType) -> tuple[tuple[bytes, ...], list[int], list[_owner_types.RtpPacket], int | None]:
     """Match the decoded clean suffix, retaining audio only inside its wire interval."""
     selected = tuple((selected_annexb[start:end] for _prefix, start, end in _owner._h264_annexb_nal_spans(selected_annexb)))
     first_vcl = next((i for i, unit in enumerate(selected) if _owner.rtp_nal_units_have_vcl((unit,), codec=codec)), None)
@@ -312,7 +310,7 @@ def _clear_native_selected_timeline(units: tuple[bytes, ...], timestamps: list[i
     first_packet, last_packet = (first_packets[0], last_packets[-1])
     selected_source = _owner._rtp_sequence_key(packets[last_packet])
     end_packet = next((i for i in range(last_packet + 1, len(packets)) if packets[i].payload_type in video_types and _owner._rtp_sequence_key(packets[i]) == selected_source), len(packets))
-    selected_packets: list[_owner.RtpPacket] = []
+    selected_packets: list[_owner_types.RtpPacket] = []
     boundary_index: int | None = None
     for i, packet in enumerate(packets[:end_packet + 1]):
         if i == end_packet:
@@ -325,9 +323,9 @@ def _clear_native_selected_timeline(units: tuple[bytes, ...], timestamps: list[i
     prefix = selected[:first_vcl]
     return (prefix + tail, [timestamps[start]] * len(prefix) + timestamps[start:stop], selected_packets, boundary_index)
 
-def _copy_decrypted_native_idmx_timed_av(packets: list[bytes], annexb: bytes, audio: _owner.RtpAacStream | None, output: _owner.BinaryIO, *, codec: _owner.RtpVideoCodec, ffmpeg_path: str, media_key: str | bytes=b'', nalu_header_size: int | None=None, decrypt_hevc_parameter_sets: bool=False, native_shared_clock: bool=False, app_relative_clock: bool=False) -> bool:  # noqa: PLR0913
+def _copy_decrypted_native_idmx_timed_av(packets: list[bytes], annexb: bytes, audio: _owner_types.RtpAacStream | None, output: _owner_types.BinaryIO, *, codec: _owner_types.RtpVideoCodec, ffmpeg_path: str, media_key: str | bytes, nalu_header_size: int | None, decrypt_hevc_parameter_sets: bool, native_shared_clock: bool, app_relative_clock: bool, _owner: _ModuleType) -> bool:  # noqa: PLR0913 -- explicit runtime context plus retained signature
     """Use advertised native picture cadence and received AAC sample timestamps."""
-    rtp_packets: list[_owner.RtpPacket] = []
+    rtp_packets: list[_owner_types.RtpPacket] = []
     for frame in _owner._iter_idmx_local_packet_frames(packets):
         header = _owner._idmx_local_frame_header_size(frame)
         if header is not None:
@@ -355,13 +353,13 @@ def _copy_decrypted_native_idmx_timed_av(packets: list[bytes], annexb: bytes, au
     first_payload = next(payloads)
     process = _owner.open_mpegts_remux_process(ffmpeg_path, input_format='mpeg', preserve_timestamps=True, popen=_owner.subprocess.Popen, **_owner._app_remux_options(app_relative_clock))
 
-    def write_input(stdin: _owner.BinaryIO) -> None:
+    def write_input(stdin: _owner_types.BinaryIO) -> None:
         for payload in _owner.chain((first_payload,), payloads):
             stdin.write(payload)
     _owner.copy_remuxed_output(process, output, write_input=write_input)
     return True
 
-def _native_decrypted_rtp_timeline(packets: list[bytes], annexb: bytes, codec: _owner.RtpVideoCodec, media_key: str | bytes, nalu_header_size: int | None, decrypt_hevc_parameter_sets: bool=False) -> tuple[tuple[bytes, ...], list[int]] | None:
+def _native_decrypted_rtp_timeline(packets: list[bytes], annexb: bytes, codec: _owner_types.RtpVideoCodec, media_key: str | bytes, nalu_header_size: int | None, decrypt_hevc_parameter_sets: bool, *, _owner: _ModuleType) -> tuple[tuple[bytes, ...], list[int]] | None:
     """Match decrypted NAL spans to their real RTP clocks without renumbering gaps."""
     reconstructed, spans = _owner._idmx_hevc_annexb_packet_spans(packets, media_key, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets) if codec == 'hevc' else _owner._idmx_h264_annexb_packet_spans(packets, media_key, nalu_header_size=nalu_header_size, stream_is_clear=False)
     if not spans:
@@ -386,7 +384,7 @@ def _native_decrypted_rtp_timeline(packets: list[bytes], annexb: bytes, codec: _
         timestamps.append(packet.timestamp)
     return (tuple(units), timestamps)
 
-def _native_decrypted_picture_timeline(annexb: bytes, codec: _owner.RtpVideoCodec, advertised_rate: str) -> tuple[tuple[bytes, ...], list[int]]:
+def _native_decrypted_picture_timeline(annexb: bytes, codec: _owner_types.RtpVideoCodec, advertised_rate: str, *, _owner: _ModuleType) -> tuple[tuple[bytes, ...], list[int]]:
     period = _owner.Fraction(_owner.IDMX_VIDEO_RTP_CLOCK_RATE) / _owner.Fraction(advertised_rate)
     units = tuple((annexb[start:end] for _prefix, start, end in _owner._h264_annexb_nal_spans(annexb)))
     timestamps: list[int] = []
@@ -400,7 +398,7 @@ def _native_decrypted_picture_timeline(annexb: bytes, codec: _owner.RtpVideoCode
         timestamps.append(round(max(0, frame_index) * period))
     return (units, timestamps)
 
-def h264_clean_idr_capture_budgets(*, duration_seconds: float | None, h264_skip_initial_idr_windows: int, h264_trim_to_clean_idr_window: bool, h264_clean_idr_preroll_seconds: float, h264_clean_idr_max_windows: int, h264_wait_for_clean_idr_window: bool, h264_clean_idr_wait_seconds: float) -> tuple[float | None, float | None]:
+def h264_clean_idr_capture_budgets(*, duration_seconds: float | None, h264_skip_initial_idr_windows: int, h264_trim_to_clean_idr_window: bool, h264_clean_idr_preroll_seconds: float, h264_clean_idr_max_windows: int, h264_wait_for_clean_idr_window: bool, h264_clean_idr_wait_seconds: float, _owner: _ModuleType) -> tuple[float | None, float | None]:
     """Validate H.264 trim settings and return capture and payload budgets."""
     if h264_skip_initial_idr_windows < 0:
         raise _owner.PyEzvizError('h264_skip_initial_idr_windows cannot be negative')
@@ -429,7 +427,7 @@ def h264_clean_idr_capture_budgets(*, duration_seconds: float | None, h264_skip_
         payload_duration_seconds = _owner._checked_h264_duration_sum(duration_seconds, h264_clean_idr_wait_seconds, context='payload')
     return (capture_duration_seconds, payload_duration_seconds)
 
-def _checked_h264_duration_sum(duration_seconds: float, extension_seconds: float, *, context: str) -> float:
+def _checked_h264_duration_sum(duration_seconds: float, extension_seconds: float, *, context: str, _owner: _ModuleType) -> float:
     """Add one startup window without allowing deadline overflow."""
     try:
         combined = duration_seconds + extension_seconds
@@ -439,11 +437,11 @@ def _checked_h264_duration_sum(duration_seconds: float, extension_seconds: float
         raise _owner.PyEzvizError(f'H.264 clean-IDR {context} duration must be finite')
     return combined
 
-def _is_ignorable_leading_stream_payload(payload: bytes) -> bool:
+def _is_ignorable_leading_stream_payload(payload: bytes, *, _owner: _ModuleType) -> bool:
     """Return True for tiny command-port blips before the first media record."""
     return bool(payload) and len(payload) < len(_owner.MPEG_PS_START_CODE)
 
-def copy_hcnetsdk_real_data_to_mpegts(packets: _owner.Iterable[_owner.HcNetSdkRealDataPacket], output: _owner.BinaryIO, *, ffmpeg_path: str='ffmpeg') -> None:
+def copy_hcnetsdk_real_data_to_mpegts(packets: _owner_types.Iterable[_owner_types.HcNetSdkRealDataPacket], output: _owner_types.BinaryIO, *, ffmpeg_path: str, _owner: _ModuleType) -> None:
     """Remux HCNetSDK real-play MPEG-PS callback packets to MPEG-TS."""
     process = _owner._open_local_mpegts_remux_process(ffmpeg_path)
     _owner._copy_mpegps_payloads_to_mpegts(_owner.iter_hcnetsdk_real_data_mpegps(packets), output, process=process)

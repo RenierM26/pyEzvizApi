@@ -1,13 +1,15 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""devices command handlers; legacy hooks resolve through cli.main."""
+'devices command handlers; cli.main passes the retained runtime hooks explicitly.'
 from __future__ import annotations
 
-import pyezvizapi.cli.main as _owner
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pyezvizapi.cli.main as _owner_types
 
-def _handle_devices_light(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_devices_light(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Handle `devices_light` subcommands (status)."""
     if args.devices_light_action == 'status':
         data = client.load_light_bulbs(refresh=getattr(args, 'refresh', True))
@@ -20,19 +22,19 @@ def _handle_devices_light(args: _owner.argparse.Namespace, client: _owner.EzvizC
         return 0
     return 2
 
-def _handle_pagelist(client: _owner.EzvizClient) -> int:
+def _handle_pagelist(client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Output full pagelist (raw JSON) for exploration in editors like Notepad++."""
     data = client.get_page_list()
     _owner._write_json(data)
     return 0
 
-def _handle_device_infos(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_device_infos(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Output device infos mapping (raw JSON), optionally filtered by serial."""
     data = client.get_device_infos(args.serial) if args.serial else client.get_device_infos()
     _owner._write_json(data)
     return 0
 
-def _handle_unifiedmsg(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_unifiedmsg(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Fetch unified message list and optionally dump media URLs."""
     response = client.get_device_messages_list(serials=args.serials, limit=args.limit, date=args.date, end_time=args.end_time or '')
     raw_messages = response.get('message')
@@ -40,9 +42,9 @@ def _handle_unifiedmsg(args: _owner.argparse.Namespace, client: _owner.EzvizClie
         raw_messages = response.get('messages')
     if not isinstance(raw_messages, list):
         raw_messages = []
-    messages: list[dict[str, _owner.Any]] = [msg for msg in raw_messages if isinstance(msg, dict)]
+    messages: list[dict[str, _owner_types.Any]] = [msg for msg in raw_messages if isinstance(msg, dict)]
 
-    def _extract_url(message: dict[str, _owner.Any]) -> str | None:
+    def _extract_url(message: dict[str, _owner_types.Any]) -> str | None:
         url = message.get('pic')
         if not url:
             url = message.get('defaultPic') or message.get('image')
@@ -63,7 +65,7 @@ def _handle_unifiedmsg(args: _owner.argparse.Namespace, client: _owner.EzvizClie
     if args.json:
         _owner._write_json(messages)
         return 0
-    rows: list[dict[str, _owner.Any]] = []
+    rows: list[dict[str, _owner_types.Any]] = []
     for item in messages:
         ext = item.get('ext')
         ext_dict = ext if isinstance(ext, dict) else None
@@ -74,7 +76,7 @@ def _handle_unifiedmsg(args: _owner.argparse.Namespace, client: _owner.EzvizClie
         _owner.sys.stdout.write('No unified messages returned.\n')
     return 0
 
-def _handle_light(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_light(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Handle `light` subcommands (toggle/status)."""
     light_bulb = _owner.EzvizLightBulb(client, args.serial)
     _owner._LOGGER.debug('Light bulb loaded')
@@ -87,7 +89,7 @@ def _handle_light(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -
     _owner._LOGGER.error('Action not implemented for light: %s', args.light_action)
     return 2
 
-def _handle_home_defence_mode(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_home_defence_mode(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Handle `home_defence_mode` subcommands (set mode)."""
     if args.mode:
         res = client.api_set_defence_mode(getattr(_owner.DefenseModeType, args.mode).value)
@@ -95,7 +97,7 @@ def _handle_home_defence_mode(args: _owner.argparse.Namespace, client: _owner.Ez
         return 0
     return 2
 
-def _handle_camera(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_camera(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Handle `camera` subcommands (status/move/unlock/switch/alarm/select)."""
     camera = _owner.EzvizCamera(client, args.serial)
     _owner._LOGGER.debug('Camera loaded')

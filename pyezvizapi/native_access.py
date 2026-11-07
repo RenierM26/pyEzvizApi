@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.media.access`.
 
@@ -12,18 +14,17 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.media import access as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.media.access import (
-        _PREFIX_BYTES as _PREFIX_BYTES,
-        _START as _START,
-        MAX_PENDING_PS_BYTES as MAX_PENDING_PS_BYTES,
-        Iterator as Iterator,
-        _Bits as _Bits,
-        _check_idr as _check_idr,
-        _hevc_sps as _hevc_sps,
-        _units as _units,
-        annotations as annotations,
-        re as re,
-        self_contained_idr as self_contained_idr,
-    )
+    import pyezvizapi.streaming.media.access as _compat_module_0
+    _PREFIX_BYTES = _compat_module_0._PREFIX_BYTES
+    _START = _compat_module_0._START
+    MAX_PENDING_PS_BYTES = _compat_module_0.MAX_PENDING_PS_BYTES
+    Iterator = _compat_module_0.Iterator
+    _Bits = _compat_module_0._Bits
+    _check_idr = _compat_module_0._check_idr
+    _hevc_sps = _compat_module_0._hevc_sps
+    _units = _compat_module_0._units
+    annotations = _compat_module_0.annotations
+    re = _compat_module_0.re
+    self_contained_idr = _compat_module_0.self_contained_idr
 
 sys.modules[__name__] = _implementation

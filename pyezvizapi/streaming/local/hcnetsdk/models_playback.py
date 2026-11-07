@@ -1,35 +1,34 @@
 # Runtime hooks deliberately resolve through their legacy owner.
 # ruff: noqa: SLF001
-
+# Model defaults depend only on the SDK constants leaf.
+# ruff: noqa: E402, I001, SLF001
+from __future__ import annotations
+from pyezvizapi.streaming.local.hcnetsdk import constants as _constants
 """models playback implementation; legacy runtime hooks remain on the owner module.
 
 Access through _owner is deliberate: callers that patch the compatibility
 module must still affect dependent operations. No copied hook snapshots.
 """
-from __future__ import annotations
 
-import pyezvizapi.streaming.local.hcnetsdk.protocol as _owner
-
-
-class HcNetSdkRealDataType(_owner.IntEnum):
+class HcNetSdkRealDataType(_constants.IntEnum):
     """HCNetSDK real-play callback data types used by ``RealDataCallBack``."""
     SYSTEM_HEADER = 1
     STREAM_DATA = 2
     AUDIO_STREAM_DATA = 3
     PRIVATE_DATA = 112
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkLanEndpoint:
     """LAN endpoint metadata derived from EZVIZ pagelist ``CONNECTION``."""
     serial: str
     host: str
     net_host: str | None = None
-    command_port: int = _owner.HCNETSDK_DEFAULT_SERVER_PORT
+    command_port: int = _constants.HCNETSDK_DEFAULT_SERVER_PORT
     net_command_port: int | None = None
     stream_port: int | None = None
     net_stream_port: int | None = None
     rtsp_port: int | None = None
-    sdk_tls_port: int = _owner.HCNETSDK_DEFAULT_TLS_PORT
+    sdk_tls_port: int = _constants.HCNETSDK_DEFAULT_TLS_PORT
 
     @classmethod
     def from_connection(cls, serial: str, connection: _owner.Mapping[str, _owner.Any] | None) -> _owner.HcNetSdkLanEndpoint:
@@ -41,7 +40,7 @@ class HcNetSdkLanEndpoint:
             raise _owner.PyEzvizError(f'Missing localIp in CONNECTION metadata for {serial}')
         return cls(serial=serial, host=host.strip(), net_host=_owner._mapping_str(connection, 'netIp'), command_port=_owner._mapping_int(connection, 'localCmdPort', default=_owner.HCNETSDK_DEFAULT_SERVER_PORT) or _owner.HCNETSDK_DEFAULT_SERVER_PORT, net_command_port=_owner._mapping_int(connection, 'netCmdPort', default=None), stream_port=_owner._mapping_int(connection, 'localStreamPort', default=None), net_stream_port=_owner._mapping_int(connection, 'netStreamPort', default=None), rtsp_port=_owner._mapping_int(connection, 'localRtspPort', default=_owner.HCNETSDK_DEFAULT_RTSP_PORT, zero_is_missing=True))
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkSetupAlarmRequest:
     """Native ``NET_DVR_SetupAlarmChan_V30`` / ``V41`` call shape."""
     login_id: int
@@ -55,11 +54,11 @@ class HcNetSdkSetupAlarmRequest:
             return {'api': _owner.HCNETSDK_SETUP_ALARM_CHAN_V30, 'lUserID': self.login_id, 'failureHandle': -1}
         return {'api': _owner.HCNETSDK_SETUP_ALARM_CHAN_V41, 'lUserID': self.login_id, 'lpSetupParam': self.setup_param.to_native_dict(), 'failureHandle': -1}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkCloseAlarmRequest:
     """Native ``NET_DVR_CloseAlarmChan_V30`` call shape."""
     alarm_handle: int
-    api: str = _owner.HCNETSDK_CLOSE_ALARM_CHAN_V30
+    api: str = _constants.HCNETSDK_CLOSE_ALARM_CHAN_V30
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for closing an alarm channel."""
@@ -69,7 +68,7 @@ class HcNetSdkCloseAlarmRequest:
             raise _owner.PyEzvizError('HCNetSDK close-alarm API is unsupported')
         return {'api': self.api, 'lAlarmHandle': self.alarm_handle}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanVideoResolution:
     """Camera-advertised resolution with its own native rate/bitrate limits."""
     index: int | None = None
@@ -82,13 +81,13 @@ class EzvizLanVideoResolution:
     bitrate_max: int | None = None
     bitrate_codes: tuple[int, ...] = ()
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkStreamDetails:
     """One fresh camera snapshot: current configuration is not observed media."""
     channel: int
-    configuration: _owner.EzvizLanCompressionConfig = _owner.field(repr=False)
+    configuration: _owner.EzvizLanCompressionConfig = _constants.field(repr=False)
     capabilities: _owner.EzvizLanAudioVideoCompressInfo
-    reported_login_serial: str = _owner.field(default='', repr=False)
+    reported_login_serial: str = _constants.field(default='', repr=False)
     capabilities_error: int | None = None
 
     def configured_media(self, *, sub_stream: bool=False) -> _owner.HcNetSdkConfiguredMedia | None:
@@ -127,22 +126,22 @@ class HcNetSdkStreamDetails:
             return {key: value for key, value in _owner.asdict(block).items() if key != 'raw'}
         return {'channel': self.channel, 'reported_login_serial': self.reported_login_serial, 'source': 'hcnetsdk_command_port', 'observed_media': False, 'transport_protocol': None, 'main': configured(self.configuration.normal_record), 'sub': configured(self.configuration.network), 'main_configured_media': _owner.asdict(p) if (p := self.configured_media()) is not None else None, 'sub_configured_media': _owner.asdict(p) if (p := self.configured_media(sub_stream=True)) is not None else None, 'main_resolution': _owner.asdict(r) if (r := self.configured_resolution()) is not None else None, 'sub_resolution': _owner.asdict(r) if (r := self.configured_resolution(sub_stream=True)) is not None else None, 'capabilities': _owner.asdict(self.capabilities), 'capabilities_error': self.capabilities_error}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanPlaybackConvertResolution:
     """One playback conversion resolution entry from ``RecordAbility`` XML."""
     index: int
     frame_rates: tuple[int, ...] = ()
     bitrates: tuple[int, ...] = ()
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkPtzControlRequest:
     """Native ``NET_DVR_PTZControlWithSpeed_Other`` call shape."""
     login_id: int
     channel: int
     command: int
     stop: int
-    speed: int = _owner.EZVIZ_LAN_PTZ_SPEED_DEFAULT
-    api: str = _owner.HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER
+    speed: int = _constants.EZVIZ_LAN_PTZ_SPEED_DEFAULT
+    api: str = _constants.HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER
 
     def to_native_args_hint(self) -> dict[str, int | str]:
         """Return the native argument names for a local HCNetSDK bridge."""
@@ -158,14 +157,14 @@ class HcNetSdkPtzControlRequest:
             raise _owner.PyEzvizError('HCNetSDK PTZ control speed must be non-negative')
         return {'api': self.api, 'lUserID': self.login_id, 'lChannel': self.channel, 'dwPTZCommand': self.command, 'dwStop': self.stop, 'dwSpeed': self.speed}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkPtzPresetRequest:
     """Native ``NET_DVR_PTZPreset_Other`` call shape."""
     login_id: int
     channel: int
     command: int
     preset_index: int = 0
-    api: str = _owner.HCNETSDK_PTZ_PRESET_OTHER
+    api: str = _constants.HCNETSDK_PTZ_PRESET_OTHER
 
     def to_native_args_hint(self) -> dict[str, int | str]:
         """Return the native argument names for a local HCNetSDK bridge."""
@@ -179,20 +178,20 @@ class HcNetSdkPtzPresetRequest:
             raise _owner.PyEzvizError('HCNetSDK PTZ preset index must be non-negative')
         return {'api': self.api, 'lUserID': self.login_id, 'lChannel': self.channel, 'dwPTZPresetCmd': self.command, 'dwPresetIndex': self.preset_index}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanPlaybackIntent:
     """Intent extras used to hand a LAN HCNetSDK login to the player UI."""
     serial: str
     channel_number: int
     lan_user_id: int = -1
     ssid: str = ''
-    lan_flag: int = _owner.EZVIZ_PLAYER_LAN_FLAG_HCNETSDK
+    lan_flag: int = _constants.EZVIZ_PLAYER_LAN_FLAG_HCNETSDK
 
     def to_extra_dict(self) -> dict[str, int | str]:
         """Return the exact extras written by startLanVideoPlay(...)."""
         return {_owner.EZVIZ_PLAYER_EXTRA_DEVICE_ID: self.serial, _owner.EZVIZ_PLAYER_EXTRA_CHANNEL_NO: self.channel_number, _owner.EZVIZ_PLAYER_EXTRA_LAN_FLAG: self.lan_flag, _owner.EZVIZ_PLAYER_EXTRA_LAN_USERID: self.lan_user_id, _owner.EZVIZ_PLAYER_EXTRA_WIFI_SSID: self.ssid}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanVideoQuality:
     """LAN quality pair exposed by ``LanItemDataHolder.getVideoQualityInfo()``."""
     stream_type: int
@@ -203,14 +202,14 @@ class EzvizLanVideoQuality:
         """Return the value written to ``InitParam.iVideoLevel`` by the player."""
         return _owner.ezviz_native_video_level(self.video_level)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanKeyframeRequest:
     """HCNetSDK I-frame request made after LAN native preview starts."""
     api: str
     netsdk_login_id: int
     netsdk_channel_number: int
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkRealDataPacket:
     """One packet emitted by an HCNetSDK real-play data callback."""
     real_handle: int
@@ -227,14 +226,14 @@ class HcNetSdkRealDataPacket:
         """Return a small, non-secret classification of the callback body."""
         return _owner.classify_hcnetsdk_real_data_payload(self.body)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkSemanticLogEvent:
     """One secret-safe semantic HCNetSDK event."""
     name: str
     phase: str | None = None
     fields: _owner.Mapping[str, str] | None = None
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkCommandTraceSummary:
     """Secret-safe summary of one mixed HCNetSDK command-port trace.
 
@@ -250,7 +249,7 @@ class HcNetSdkCommandTraceSummary:
     keyframe_requested: bool = False
     media_on_command_socket: bool = False
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkClientInfo:
     """Python model of the Java/native ``NET_DVR_CLIENTINFO`` preview input."""
     channel: int = 1
@@ -265,14 +264,14 @@ class HcNetSdkClientInfo:
             raise _owner.PyEzvizError('HCNetSDK client link mode must be non-negative')
         return {'lChannel': self.channel, 'lLinkMode': self.link_mode, 'sMultiCastIP': self.multicast_ip}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkRealPlayRequest:
     """Arguments needed for ``EZ_NET_DVR_RealPlay_V30`` plus callback metadata."""
     login_id: int
     client_info: HcNetSdkClientInfo
     blocked: bool = False
-    callback_api: str = _owner.HCNETSDK_REALDATA_CALLBACK_V30
-    api: str = _owner.HCNETSDK_REALPLAY_V30
+    callback_api: str = _constants.HCNETSDK_REALDATA_CALLBACK_V30
+    api: str = _constants.HCNETSDK_REALPLAY_V30
 
     def to_native_args_hint(self) -> dict[str, int | str | dict[str, int | str]]:
         """Return a serializable hint for HCNetSDK-compatible real-play calls."""
@@ -280,7 +279,7 @@ class HcNetSdkRealPlayRequest:
             raise _owner.PyEzvizError('HCNetSDK real-play requires a successful login id')
         return {'api': self.api, 'login_id': self.login_id, 'client_info': self.client_info.to_native_dict(), 'callback': self.callback_api, 'blocked': int(self.blocked)}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanPlaybackPath:
     """Complete LAN Live View path observed in the EZVIZ Android app."""
     settings_login_candidates: tuple[_owner.HcNetSdkLoginCandidate, ...]
@@ -290,8 +289,8 @@ class EzvizLanPlaybackPath:
     play_device_login: _owner.EzvizLanPlayDeviceLogin
     play_device_login_id: int
     live_view: _owner.EzvizLanLiveViewParams
-    create_client_api: str = _owner.EZVIZ_NATIVE_CREATE_CLIENT
-    start_preview_api: str = _owner.EZVIZ_NATIVE_START_PREVIEW
+    create_client_api: str = _constants.EZVIZ_NATIVE_CREATE_CLIENT
+    start_preview_api: str = _constants.EZVIZ_NATIVE_START_PREVIEW
 
     @property
     def post_start_keyframe_request(self) -> _owner.EzvizLanKeyframeRequest | None:
@@ -305,7 +304,7 @@ class EzvizLanPlaybackPath:
             calls.append(self.post_start_keyframe_request.api)
         return tuple(calls)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkNoArgRequest:
     """Native no-argument HCNetSDK call shape."""
     api: str
@@ -316,11 +315,11 @@ class HcNetSdkNoArgRequest:
             raise _owner.PyEzvizError('HCNetSDK no-argument API is unsupported')
         return {'api': self.api}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkInitRequest:
     """Native ``NET_DVR_Init`` call shape."""
     playctrl_library: str | None = 'libPlayCtrl.so'
-    api: str = _owner.HCNETSDK_INIT
+    api: str = _constants.HCNETSDK_INIT
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for SDK initialization."""
@@ -333,12 +332,12 @@ class HcNetSdkInitRequest:
             raise _owner.PyEzvizError('HCNetSDK PlayCtrl library name is invalid')
         return {'api': self.api, 'sPlayCtrlPath': playctrl_library}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkSetConnectTimeRequest:
     """Native ``NET_DVR_SetConnectTime`` call shape used by the APK."""
     connect_time_ms: int = 5000
     retry_count: int = 3
-    api: str = _owner.HCNETSDK_SET_CONNECT_TIME
+    api: str = _constants.HCNETSDK_SET_CONNECT_TIME
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for setting SDK connect timeout."""
@@ -350,11 +349,11 @@ class HcNetSdkSetConnectTimeRequest:
             raise _owner.PyEzvizError('HCNetSDK connect-time API is unsupported')
         return {'api': self.api, 'dwWaitTime': self.connect_time_ms, 'dwTryTimes': self.retry_count}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkGetErrorMsgRequest:
     """Native ``NET_DVR_GetErrorMsg`` call shape."""
     error_code: int | None = None
-    api: str = _owner.HCNETSDK_GET_ERROR_MSG
+    api: str = _constants.HCNETSDK_GET_ERROR_MSG
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for resolving an HCNetSDK error."""
@@ -367,11 +366,11 @@ class HcNetSdkGetErrorMsgRequest:
             hint['intPointerValue'] = self.error_code
         return hint
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkLogoutRequest:
     """Native ``NET_DVR_Logout_V30`` call shape."""
     login_id: int
-    api: str = _owner.HCNETSDK_LOGOUT_V30
+    api: str = _constants.HCNETSDK_LOGOUT_V30
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for logging out a local SDK session."""
@@ -381,7 +380,7 @@ class HcNetSdkLogoutRequest:
             raise _owner.PyEzvizError('HCNetSDK logout API is unsupported')
         return {'api': self.api, 'lUserID': self.login_id}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkTime:
     """Native ``NET_DVR_TIME`` field set."""
     year: int
@@ -417,14 +416,14 @@ class HcNetSdkTime:
             raise _owner.PyEzvizError('HCNetSDK time second must be between 0 and 59')
         return {'structure': 'NET_DVR_TIME', 'fieldOrder': _owner.HCNETSDK_TIME_FIELD_ORDER, 'dwYear': self.year, 'dwMonth': self.month, 'dwDay': self.day, 'dwHour': self.hour, 'dwMinute': self.minute, 'dwSecond': self.second}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkFileCond:
     """Native ``NET_DVR_FILECOND`` search condition used by LAN playback."""
     channel: int
     start_time: HcNetSdkTime
     stop_time: HcNetSdkTime
-    file_type: int = _owner.HCNETSDK_PLAYBACK_FILE_TYPE_ALL
-    is_locked: int = _owner.HCNETSDK_PLAYBACK_LOCK_STATE_ALL
+    file_type: int = _constants.HCNETSDK_PLAYBACK_FILE_TYPE_ALL
+    is_locked: int = _constants.HCNETSDK_PLAYBACK_LOCK_STATE_ALL
     use_card_no: int = 0
     card_number: str | bytes = b''
 
@@ -441,12 +440,12 @@ class HcNetSdkFileCond:
         card_number = _owner._bounded_bytes('HCNetSDK file search card number', self.card_number, 32)
         return {'structure': 'NET_DVR_FILECOND', 'fieldOrder': _owner.HCNETSDK_FILECOND_FIELD_ORDER, 'lChannel': self.channel, 'dwFileType': self.file_type, 'dwIsLocked': self.is_locked, 'dwUseCardNo': self.use_card_no, 'sCardNumber': card_number if include_buffers else _owner._nul_stripped_text(card_number), 'sCardNumberBufferSize': 32, 'struStartTime': self.start_time.to_native_dict(), 'struStopTime': self.stop_time.to_native_dict()}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkFindFileRequest:
     """Native ``NET_DVR_FindFile_V30`` call shape."""
     login_id: int
     file_cond: HcNetSdkFileCond
-    api: str = _owner.HCNETSDK_FIND_FILE_V30
+    api: str = _constants.HCNETSDK_FIND_FILE_V30
 
     def to_native_args_hint(self, *, include_buffers: bool=False) -> dict[str, _owner.Any]:
         """Return native argument names for starting playback file search."""
@@ -456,7 +455,7 @@ class HcNetSdkFindFileRequest:
             raise _owner.PyEzvizError('HCNetSDK find-file API is unsupported')
         return {'api': self.api, 'lUserID': self.login_id, 'lpFindCond': self.file_cond.to_native_dict(include_buffers=include_buffers), 'failureHandle': _owner.HCNETSDK_FIND_FILE_FAILED}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkFindDataV30:
     """Native ``NET_DVR_FINDDATA_V30`` output-buffer shape."""
     file_name: str | bytes = b''
@@ -475,12 +474,12 @@ class HcNetSdkFindDataV30:
         card_number = _owner._bounded_bytes('HCNetSDK find data card number', self.card_number, 32)
         return {'structure': 'NET_DVR_FINDDATA_V30', 'fieldOrder': _owner.HCNETSDK_FINDDATA_V30_FIELD_ORDER, 'sFileName': file_name if include_buffers else _owner._nul_stripped_text(file_name), 'sFileNameBufferSize': 100, 'struStartTime': (self.start_time or _owner.HcNetSdkTime(0, 1, 1)).to_native_dict(), 'struStopTime': (self.stop_time or _owner.HcNetSdkTime(0, 1, 1)).to_native_dict(), 'dwFileSize': self.file_size, 'sCardNum': card_number if include_buffers else _owner._nul_stripped_text(card_number), 'sCardNumBufferSize': 32, 'byLocked': _owner._byte_value('find data locked', self.locked), 'byFileType': _owner._byte_value('find data file type', self.file_type), 'byResLength': 2}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkFindNextFileRequest:
     """Native ``NET_DVR_FindNextFile_V30`` call shape."""
     find_handle: int
     find_data: HcNetSdkFindDataV30 | None = None
-    api: str = _owner.HCNETSDK_FIND_NEXT_FILE_V30
+    api: str = _constants.HCNETSDK_FIND_NEXT_FILE_V30
 
     def to_native_args_hint(self, *, include_buffers: bool=False) -> dict[str, _owner.Any]:
         """Return native argument names for polling playback file search."""
@@ -491,11 +490,11 @@ class HcNetSdkFindNextFileRequest:
         find_data = self.find_data or _owner.HcNetSdkFindDataV30()
         return {'api': self.api, 'lFindHandle': self.find_handle, 'lpFindData': find_data.to_native_dict(include_buffers=include_buffers)}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkFindCloseRequest:
     """Native ``NET_DVR_FindClose_V30`` call shape."""
     find_handle: int
-    api: str = _owner.HCNETSDK_FIND_CLOSE_V30
+    api: str = _constants.HCNETSDK_FIND_CLOSE_V30
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for closing a playback file search."""
@@ -505,7 +504,7 @@ class HcNetSdkFindCloseRequest:
             raise _owner.PyEzvizError('HCNetSDK find-close API is unsupported')
         return {'api': self.api, 'lFindHandle': self.find_handle}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkPlayCond:
     """Native ``NET_DVR_PLAYCOND`` time-playback condition."""
     channel: int
@@ -522,12 +521,12 @@ class HcNetSdkPlayCond:
         stream_id = _owner._bounded_bytes('HCNetSDK playback stream id', self.stream_id, 32)
         return {'structure': 'NET_DVR_PLAYCOND', 'fieldOrder': _owner.HCNETSDK_PLAYCOND_FIELD_ORDER, 'dwChannel': self.channel, 'struStartTime': self.start_time.to_native_dict(), 'struStopTime': self.stop_time.to_native_dict(), 'byDrawFrame': _owner._byte_value('playback draw-frame flag', self.draw_frame), 'byStreamType': _owner._byte_value('playback stream type', self.stream_type), 'byStreamID': stream_id if include_buffers else _owner._nul_stripped_text(stream_id), 'byStreamIDBufferSize': 32, 'byResLength': 30}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkPlayBackByTimeRequest:
     """Native ``NET_DVR_PlayBackByTime_V40`` call shape."""
     login_id: int
     play_cond: HcNetSdkPlayCond
-    api: str = _owner.HCNETSDK_PLAYBACK_BY_TIME_V40
+    api: str = _constants.HCNETSDK_PLAYBACK_BY_TIME_V40
 
     def to_native_args_hint(self, *, include_buffers: bool=False) -> dict[str, _owner.Any]:
         """Return native argument names for time-based playback start."""
@@ -537,14 +536,14 @@ class HcNetSdkPlayBackByTimeRequest:
             raise _owner.PyEzvizError('HCNetSDK playback-by-time API is unsupported')
         return {'api': self.api, 'lUserID': self.login_id, 'lpPlayCond': self.play_cond.to_native_dict(include_buffers=include_buffers), 'failureHandle': _owner.HCNETSDK_PLAYBACK_FAILED}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkPlayBackControlRequest:
     """Native ``NET_DVR_PlayBackControl_V40`` call shape."""
     play_handle: int
     command: int
     in_buffer: str | bytes | None = None
     out_buffer_size: int = 0
-    api: str = _owner.HCNETSDK_PLAYBACK_CONTROL_V40
+    api: str = _constants.HCNETSDK_PLAYBACK_CONTROL_V40
 
     def to_native_args_hint(self, *, include_buffers: bool=False) -> dict[str, _owner.Any]:
         """Return native argument names for playback control."""
@@ -559,11 +558,11 @@ class HcNetSdkPlayBackControlRequest:
         in_buffer = _owner._optional_native_bytes('HCNetSDK playback control input buffer', self.in_buffer)
         return {'api': self.api, 'lPlayHandle': self.play_handle, 'dwControlCode': int(self.command), 'lpInBuffer': in_buffer if include_buffers and in_buffer else '<input-buffer>' if in_buffer else None, 'dwInLen': len(in_buffer), 'lpOutBuffer': '<output-buffer>' if self.out_buffer_size else None, 'dwOutLen': self.out_buffer_size, 'lpOutLen': '<DWORD_PTR>' if self.out_buffer_size else None}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkStopPlayBackRequest:
     """Native ``NET_DVR_StopPlayBack`` call shape."""
     play_handle: int
-    api: str = _owner.HCNETSDK_STOP_PLAYBACK
+    api: str = _constants.HCNETSDK_STOP_PLAYBACK
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for stopping playback."""
@@ -573,12 +572,12 @@ class HcNetSdkStopPlayBackRequest:
             raise _owner.PyEzvizError('HCNetSDK stop-playback API is unsupported')
         return {'api': self.api, 'lPlayHandle': self.play_handle}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkPlayBackCaptureFileRequest:
     """Native ``NET_DVR_PlayBackCaptureFile`` call shape."""
     play_handle: int
     saved_file_name: str | bytes
-    api: str = _owner.HCNETSDK_PLAYBACK_CAPTURE_FILE
+    api: str = _constants.HCNETSDK_PLAYBACK_CAPTURE_FILE
 
     def to_native_args_hint(self, *, include_buffers: bool=False) -> dict[str, _owner.Any]:
         """Return native argument names for a playback snapshot."""
@@ -588,13 +587,13 @@ class HcNetSdkPlayBackCaptureFileRequest:
             raise _owner.PyEzvizError('HCNetSDK playback-capture API is unsupported')
         return {'api': self.api, 'lPlayHandle': self.play_handle, 'sFileName': _owner._native_path_value('playback capture file name', self.saved_file_name, include_buffers=include_buffers)}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkPlayDataCallbackRequest:
     """Native ``NET_DVR_SetPlayDataCallBack`` / ``V40`` call shape."""
     play_handle: int
     callback: str | None = None
     user_data: str | int | None = None
-    api: str = _owner.HCNETSDK_SET_PLAY_DATA_CALLBACK
+    api: str = _constants.HCNETSDK_SET_PLAY_DATA_CALLBACK
 
     @property
     def is_v40(self) -> bool:
@@ -611,13 +610,13 @@ class HcNetSdkPlayDataCallbackRequest:
             return {'api': self.api, 'lPlayHandle': self.play_handle, 'fPlayDataCallBack_V40': self.callback or '<PlayDataCallBack_V40>', 'pUser': self.user_data if self.user_data is not None else None, 'callbackSignature': 'void(int playHandle, int dataType, byte* buffer, uint length, void* user)'}
         return {'api': self.api, 'lPlayHandle': self.play_handle, 'fPlayDataCallBack': self.callback or '<PlayDataCallBack>', 'dwUser': self.user_data if self.user_data is not None else 0, 'callbackSignature': 'void(int playHandle, uint dataType, byte* buffer, uint length, uint user)'}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkPlaybackCallbackRequest:
     """Native playback response / elementary-stream callback setter shape."""
     play_handle: int
     callback: str | None = None
     user_data: str | int | None = None
-    api: str = _owner.HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK
+    api: str = _constants.HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for playback callback registration."""
@@ -629,13 +628,13 @@ class HcNetSdkPlaybackCallbackRequest:
         arg_name, placeholder = callback_names[self.api]
         return {'api': self.api, 'lPlayHandle': self.play_handle, arg_name: self.callback or placeholder, 'pUser': self.user_data if self.user_data is not None else None}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkPlayBackSecretKeyRequest:
     """Native ``NET_DVR_SetPlayBackSecretKey`` call shape."""
     play_handle: int
     secret_key: str | bytes
-    secret_key_type: int = _owner.HCNETSDK_SECRET_KEY_TYPE_AES
-    api: str = _owner.HCNETSDK_SET_PLAYBACK_SECRET_KEY
+    secret_key_type: int = _constants.HCNETSDK_SECRET_KEY_TYPE_AES
+    api: str = _constants.HCNETSDK_SET_PLAYBACK_SECRET_KEY
 
     def to_native_args_hint(self, *, include_secret: bool=False) -> dict[str, _owner.Any]:
         """Return native argument names for setting a playback stream key."""
@@ -648,13 +647,13 @@ class HcNetSdkPlayBackSecretKeyRequest:
         secret_key = _owner._native_secret_key_bytes('HCNetSDK playback secret key', self.secret_key)
         return {'api': self.api, 'lPlayHandle': self.play_handle, 'dwSecretKeyType': self.secret_key_type, 'pSecretKey': secret_key if include_secret else '<secret-key>', 'dwSecretKeyLen': len(secret_key)}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkGetFileByNameRequest:
     """Native ``NET_DVR_GetFileByName`` download-start call shape."""
     login_id: int
     dvr_file_name: str | bytes
     saved_file_name: str | bytes
-    api: str = _owner.HCNETSDK_GET_FILE_BY_NAME
+    api: str = _constants.HCNETSDK_GET_FILE_BY_NAME
 
     def to_native_args_hint(self, *, include_buffers: bool=False) -> dict[str, _owner.Any]:
         """Return native argument names for file-name based download."""
@@ -664,7 +663,7 @@ class HcNetSdkGetFileByNameRequest:
             raise _owner.PyEzvizError('HCNetSDK get-file-by-name API is unsupported')
         return {'api': self.api, 'lUserID': self.login_id, 'sDVRFileName': _owner._native_path_value('DVR file name', self.dvr_file_name, include_buffers=include_buffers), 'sSavedFileName': _owner._native_path_value('saved file name', self.saved_file_name, include_buffers=include_buffers), 'failureHandle': _owner.HCNETSDK_GET_FILE_FAILED}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkGetFileByTimeRequest:
     """Native ``NET_DVR_GetFileByTime`` download-start call shape."""
     login_id: int
@@ -672,7 +671,7 @@ class HcNetSdkGetFileByTimeRequest:
     start_time: HcNetSdkTime
     stop_time: HcNetSdkTime
     saved_file_name: str | bytes
-    api: str = _owner.HCNETSDK_GET_FILE_BY_TIME
+    api: str = _constants.HCNETSDK_GET_FILE_BY_TIME
 
     def to_native_args_hint(self, *, include_buffers: bool=False) -> dict[str, _owner.Any]:
         """Return native argument names for time-based download."""
@@ -684,11 +683,11 @@ class HcNetSdkGetFileByTimeRequest:
             raise _owner.PyEzvizError('HCNetSDK get-file-by-time API is unsupported')
         return {'api': self.api, 'lUserID': self.login_id, 'lChannel': self.channel, 'lpStartTime': self.start_time.to_native_dict(), 'lpStopTime': self.stop_time.to_native_dict(), 'sSavedFileName': _owner._native_path_value('saved file name', self.saved_file_name, include_buffers=include_buffers), 'failureHandle': _owner.HCNETSDK_GET_FILE_FAILED}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkStopGetFileRequest:
     """Native ``NET_DVR_StopGetFile`` call shape."""
     file_handle: int
-    api: str = _owner.HCNETSDK_STOP_GET_FILE
+    api: str = _constants.HCNETSDK_STOP_GET_FILE
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for stopping a file download."""
@@ -698,11 +697,11 @@ class HcNetSdkStopGetFileRequest:
             raise _owner.PyEzvizError('HCNetSDK stop-get-file API is unsupported')
         return {'api': self.api, 'lFileHandle': self.file_handle}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkGetDownloadPosRequest:
     """Native ``NET_DVR_GetDownloadPos`` call shape."""
     file_handle: int
-    api: str = _owner.HCNETSDK_GET_DOWNLOAD_POS
+    api: str = _constants.HCNETSDK_GET_DOWNLOAD_POS
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return native argument names for polling download progress."""
@@ -712,12 +711,12 @@ class HcNetSdkGetDownloadPosRequest:
             raise _owner.PyEzvizError('HCNetSDK get-download-position API is unsupported')
         return {'api': self.api, 'lFileHandle': self.file_handle}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class SadpActivateDeviceRequest:
     """Android ``SADP_ActivateDevice`` call shape."""
     serial: str
     password: str
-    api: str = _owner.SADP_ACTIVATE_DEVICE
+    api: str = _constants.SADP_ACTIVATE_DEVICE
 
     def to_native_args_hint(self, *, include_password: bool=False) -> dict[str, _owner.Any]:
         """Return the native argument names for a local SADP bridge."""
@@ -729,7 +728,7 @@ class SadpActivateDeviceRequest:
             raise _owner.PyEzvizError('SADP activation password cannot be empty')
         return {'api': self.api, 'serial': serial, 'password': password if include_password else '<password>', 'passwordLength': len(password.encode('utf-8')), 'lastErrorApi': _owner.SADP_GET_LAST_ERROR}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class SadpNoArgRequest:
     """Native no-argument SADP call shape."""
     api: str
@@ -740,7 +739,7 @@ class SadpNoArgRequest:
             raise _owner.PyEzvizError('SADP no-argument API is unsupported')
         return {'api': self.api}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class SadpStartRequest:
     """Native ``SADP_Start_V30`` / ``V40`` call shape."""
     version: int = 40
@@ -757,13 +756,13 @@ class SadpStartRequest:
             return {'api': _owner.SADP_START_V30, 'pDeviceFindCallBack': self.callback or '<DeviceFindCallBack>', 'bInstallNPF': install_npf, 'pUserData': self.user_data or '<Pointer.NULL>'}
         return {'api': _owner.SADP_START_V40, 'pDeviceFindCallBack_v40': self.callback or '<DeviceFindCallBack_V40>', 'bInstallNPF': install_npf, 'pUserData': self.user_data or '<Pointer.NULL>'}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class SadpSetLogToFileRequest:
     """Native ``SADP_SetLogToFile`` call shape."""
     log_level: int
     log_dir: str | bytes
     auto_delete: int | bool = True
-    api: str = _owner.SADP_SET_LOG_TO_FILE
+    api: str = _constants.SADP_SET_LOG_TO_FILE
 
     def to_native_args_hint(self, *, include_buffer: bool=False) -> dict[str, _owner.Any]:
         """Return native argument names for SADP file logging."""
@@ -776,7 +775,7 @@ class SadpSetLogToFileRequest:
             raise _owner.PyEzvizError('SADP log directory cannot contain NUL bytes')
         return {'api': self.api, 'nLogLevel': self.log_level, 'strLogDir': log_dir + _owner.SADP_NUL_BYTE if include_buffer else log_dir.decode('utf-8', errors='replace'), 'bAutoDel': _owner._byte_value('SADP auto-delete flag', int(self.auto_delete))}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class SadpBatchResult:
     """RN-style batch operation result for SADP activation/network edits."""
     identifier: str
@@ -795,3 +794,6 @@ class SadpBatchResult:
         if not self.password:
             raise _owner.PyEzvizError('SADP batch result password cannot be empty')
         return {self.identifier_key: identifier, 'password': self.password if include_password else '<password>', 'code': self.code, 'error': self.error}
+
+# Late owner reference preserves legacy model hook and annotation resolution.
+import pyezvizapi.streaming.local.hcnetsdk.protocol as _owner

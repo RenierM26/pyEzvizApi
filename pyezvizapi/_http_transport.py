@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.transport`.
 
@@ -12,13 +13,12 @@ from typing import TYPE_CHECKING
 from pyezvizapi.cloud import transport as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.cloud.transport import (
-    CaseInsensitiveDict as CaseInsensitiveDict,
-    OrderedDict as OrderedDict,
-    copy as copy,
-    deepcopy as deepcopy,
-    isolated_session as isolated_session,
-    requests as requests,
-    )
+    import pyezvizapi.cloud.transport as _compat_module_0
+    CaseInsensitiveDict = _compat_module_0.CaseInsensitiveDict
+    OrderedDict = _compat_module_0.OrderedDict
+    copy = _compat_module_0.copy
+    deepcopy = _compat_module_0.deepcopy
+    isolated_session = _compat_module_0.isolated_session
+    requests = _compat_module_0.requests
 
 sys.modules[__name__] = _implementation

@@ -1,17 +1,17 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""payloads implementation; legacy runtime hooks remain on the owner module.
-
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
+'payloads implementation; legacy runtime hooks remain on the owner module.\n\nAccess through _owner is deliberate: callers that patch the compatibility\nmodule must still affect dependent operations. No copied hook snapshots.\n'
 from __future__ import annotations
 
-import pyezvizapi.streaming.local.session as _owner
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+from pyezvizapi.streaming.media.remux import BoundedStderrTail as _StaticBoundedStderrTail
 
-def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int) -> _owner.RtpPacket | None:
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.local.session as _owner_types
+
+def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int, *, _owner: _ModuleType) -> _owner_types.RtpPacket | None:
     """Normalize standards-shaped and legacy IDMX headers into one RTP model."""
     rtp_frame = _owner._idmx_local_rtp_frame(frame)
     if rtp_frame is not None:
@@ -25,11 +25,11 @@ def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int) -> _owner.RtpPa
     timestamp = transport.get('rtp_timestamp')
     if not all(isinstance(value, int) for value in (payload_type, sequence, timestamp)):
         return None
-    return _owner._strip_legacy_idmx_video_wrapper(_owner.RtpPacket(payload=_owner._idmx_local_frame_media_body(frame, header_size), payload_type=_owner.cast(int, payload_type), sequence=_owner.cast(int, sequence), timestamp=_owner.cast(int, timestamp), ssrc=0, marker=bool(transport.get('rtp_marker'))))
+    return _owner._strip_legacy_idmx_video_wrapper(_owner.RtpPacket(payload=_owner._idmx_local_frame_media_body(frame, header_size), payload_type=_owner.cast('int', payload_type), sequence=_owner.cast('int', sequence), timestamp=_owner.cast('int', timestamp), ssrc=0, marker=bool(transport.get('rtp_marker'))))
 
-def _summarize_idmx_h264_local_frame(frame: bytes, frame_index: int, *, h264_payload_types: frozenset[int]) -> dict[str, _owner.Any]:  # noqa: PLR0911
+def _summarize_idmx_h264_local_frame(frame: bytes, frame_index: int, *, h264_payload_types: frozenset[int], _owner: _ModuleType) -> dict[str, _owner_types.Any]:  # noqa: PLR0911 -- explicit runtime context plus retained signature
     header_size = _owner._idmx_local_frame_header_size(frame)
-    sample: dict[str, _owner.Any] = {'index': frame_index, 'frame_length': len(frame), 'header_size': header_size}
+    sample: dict[str, _owner_types.Any] = {'index': frame_index, 'frame_length': len(frame), 'header_size': header_size}
     if header_size is None:
         sample['kind'] = 'unknown'
         sample['body_length'] = len(frame)
@@ -65,7 +65,7 @@ def _summarize_idmx_h264_local_frame(frame: bytes, frame_index: int, *, h264_pay
     sample['kind'] = 'unknown'
     return sample
 
-def _idmx_local_frame_transport_fields(frame: bytes, header_size: int) -> dict[str, _owner.Any]:
+def _idmx_local_frame_transport_fields(frame: bytes, header_size: int, *, _owner: _ModuleType) -> dict[str, _owner_types.Any]:
     """Return sanitized RTP-like fields from an IDMX local frame header."""
     if _owner._is_complete_idmx_rtp_frame(frame):
         packet = _owner._idmx_local_frame_rtp_packet(frame, header_size)
@@ -80,22 +80,22 @@ def _idmx_local_frame_transport_fields(frame: bytes, header_size: int) -> dict[s
         return {}
     return {'rtp_marker': bool(header[1] & 128), 'rtp_payload_type': header[1] & 127, 'sequence_number': int.from_bytes(header[2:4], 'big'), 'rtp_timestamp': int.from_bytes(header[4:8], 'big')}
 
-def _idmx_local_frame_is_h264_transport(frame: bytes, header_size: int, *, payload_types: frozenset[int]=frozenset({_owner.IDMX_H264_RTP_PAYLOAD_TYPE})) -> bool:
+def _idmx_local_frame_is_h264_transport(frame: bytes, header_size: int, *, payload_types: frozenset[int], _owner: _ModuleType) -> bool:
     transport = _owner._idmx_local_frame_transport_fields(frame, header_size)
     return transport.get('rtp_payload_type') in payload_types
 
-def _idmx_local_frame_sequence_number(frame: bytes, header_size: int) -> int | None:
+def _idmx_local_frame_sequence_number(frame: bytes, header_size: int, *, _owner: _ModuleType) -> int | None:
     value = _owner._idmx_local_frame_transport_fields(frame, header_size).get('sequence_number')
     return value if isinstance(value, int) else None
 
-def _idmx_local_frame_rtp_timestamp(frame: bytes, header_size: int) -> int | None:
+def _idmx_local_frame_rtp_timestamp(frame: bytes, header_size: int, *, _owner: _ModuleType) -> int | None:
     value = _owner._idmx_local_frame_transport_fields(frame, header_size).get('rtp_timestamp')
     return value if isinstance(value, int) else None
 
-def _idmx_local_frame_rtp_marker(frame: bytes, header_size: int) -> bool:
+def _idmx_local_frame_rtp_marker(frame: bytes, header_size: int, *, _owner: _ModuleType) -> bool:
     return bool(_owner._idmx_local_frame_transport_fields(frame, header_size).get('rtp_marker'))
 
-def _idmx_rtp_extension(frame: bytes) -> tuple[int, bytes] | None:
+def _idmx_rtp_extension(frame: bytes, *, _owner: _ModuleType) -> tuple[int, bytes] | None:
     """Return the profile and bytes from a complete RTP header extension."""
     if not _owner._is_complete_idmx_rtp_frame(frame):
         return None
@@ -104,7 +104,7 @@ def _idmx_rtp_extension(frame: bytes) -> tuple[int, bytes] | None:
         return None
     return (packet.extension_profile, packet.extension_data)
 
-def _idmx_audio_descriptor(packets: list[bytes]) -> tuple[int, int] | None:
+def _idmx_audio_descriptor(packets: list[bytes], *, _owner: _ModuleType) -> tuple[int, int] | None:
     """Read sample rate and channels from an IDMX 0x43 audio descriptor."""
     profile = _owner.RtpRouteProfile()
     for frame in _owner._iter_idmx_local_packet_frames(packets):
@@ -116,11 +116,11 @@ def _idmx_audio_descriptor(packets: list[bytes]) -> tuple[int, int] | None:
             profile.absorb(packet)
     return profile.audio_metadata
 
-def _idmx_audio_metadata(packets: list[bytes], _media_key: str | bytes) -> tuple[int, int] | None:
+def _idmx_audio_metadata(packets: list[bytes], _media_key: str | bytes, *, _owner: _ModuleType) -> tuple[int, int] | None:
     """Return authoritative AAC metadata from the native stream descriptor."""
     return _owner._idmx_audio_descriptor(packets)
 
-def _idmx_audio_payload_types(packets: list[bytes]) -> frozenset[int]:
+def _idmx_audio_payload_types(packets: list[bytes], *, _owner: _ModuleType) -> frozenset[int]:
     """Return the AAC payload route advertised by startup stream metadata."""
     profile = _owner.RtpRouteProfile()
     for frame in _owner._iter_idmx_local_packet_frames(packets):
@@ -132,7 +132,7 @@ def _idmx_audio_payload_types(packets: list[bytes]) -> frozenset[int]:
             profile.absorb(packet)
     return profile.codec_payload_types('aac', fallback_payload_types=_owner.DEFAULT_AAC_PAYLOAD_TYPES)
 
-def _idmx_local_packets_have_aac(packets: list[bytes]) -> bool:
+def _idmx_local_packets_have_aac(packets: list[bytes], *, _owner: _ModuleType) -> bool:
     for frame in _owner._iter_idmx_local_packet_frames(packets):
         header_size = _owner._idmx_local_frame_header_size(frame)
         if header_size is None:
@@ -142,9 +142,9 @@ def _idmx_local_packets_have_aac(packets: list[bytes]) -> bool:
             return True
     return False
 
-def _idmx_local_video_frame_rate(packets: list[bytes]) -> str | None:
+def _idmx_local_video_frame_rate(packets: list[bytes], *, _owner: _ModuleType) -> str | None:
     """Estimate video frame rate from the standard 90 kHz RTP timestamp clock."""
-    rtp_packets: list[_owner.RtpPacket] = []
+    rtp_packets: list[_owner_types.RtpPacket] = []
     native_wrapper = False
     for frame in _owner._iter_idmx_local_packet_frames(packets):
         header_size = _owner._idmx_local_frame_header_size(frame)
@@ -176,7 +176,7 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str | None:
     rate = _owner.Fraction(_owner.IDMX_VIDEO_RTP_CLOCK_RATE, median_delta).limit_denominator(1001)
     return str(rate.numerator) if rate.denominator == 1 else f'{rate.numerator}/{rate.denominator}'
 
-def _merge_idmx_h264_frame_summary(summary: dict[str, _owner.Any], frame_summary: dict[str, _owner.Any]) -> None:
+def _merge_idmx_h264_frame_summary(summary: dict[str, _owner_types.Any], frame_summary: dict[str, _owner_types.Any], *, _owner: _ModuleType) -> None:
     h264 = summary['h264']
     hevc = summary['hevc']
     assert isinstance(h264, dict)
@@ -202,7 +202,7 @@ def _merge_idmx_h264_frame_summary(summary: dict[str, _owner.Any], frame_summary
         return
     h264['unknown'] = int(h264['unknown']) + 1
 
-def _increment_h264_nal_type_count(h264: dict[str, _owner.Any], nal_type: _owner.Any) -> None:
+def _increment_h264_nal_type_count(h264: dict[str, _owner_types.Any], nal_type: _owner_types.Any, *, _owner: _ModuleType) -> None:
     names = {1: 'non_idr', 5: 'idr', 6: 'sei', 7: 'sps', 8: 'pps', 9: 'aud'}
     name = names.get(nal_type)
     if name is None:
@@ -210,7 +210,7 @@ def _increment_h264_nal_type_count(h264: dict[str, _owner.Any], nal_type: _owner
         return
     h264[name] = int(h264[name]) + 1
 
-def _record_idmx_h264_nal_unit_summary(summary: dict[str, _owner.Any], frame: bytes, frame_summary: dict[str, _owner.Any], *, active_fu: dict[str, _owner.Any] | None, h264_payload_types: frozenset[int]) -> dict[str, _owner.Any] | None:  # noqa: PLR0911, PLR0912
+def _record_idmx_h264_nal_unit_summary(summary: dict[str, _owner_types.Any], frame: bytes, frame_summary: dict[str, _owner_types.Any], *, active_fu: dict[str, _owner_types.Any] | None, h264_payload_types: frozenset[int], _owner: _ModuleType) -> dict[str, _owner_types.Any] | None:  # noqa: PLR0911, PLR0912 -- explicit runtime context plus retained signature
     header_size = frame_summary.get('header_size')
     if not isinstance(header_size, int):
         return active_fu
@@ -264,12 +264,12 @@ def _record_idmx_h264_nal_unit_summary(summary: dict[str, _owner.Any], frame: by
         return None
     return active_fu
 
-def _increment_idmx_h264_nal_unit_counter(summary: dict[str, _owner.Any], name: str) -> None:
+def _increment_idmx_h264_nal_unit_counter(summary: dict[str, _owner_types.Any], name: str, *, _owner: _ModuleType) -> None:
     nal_units = summary['h264_nal_units']
     assert isinstance(nal_units, dict)
     nal_units[name] = int(nal_units.get(name, 0)) + 1
 
-def _append_idmx_h264_nal_unit_sample(summary: dict[str, _owner.Any], unit: dict[str, _owner.Any], *, complete: bool, end_frame_index: _owner.Any) -> None:
+def _append_idmx_h264_nal_unit_sample(summary: dict[str, _owner_types.Any], unit: dict[str, _owner_types.Any], *, complete: bool, end_frame_index: _owner_types.Any, _owner: _ModuleType) -> None:
     nal_units = summary['h264_nal_units']
     assert isinstance(nal_units, dict)
     samples = nal_units['samples']
@@ -281,10 +281,10 @@ def _append_idmx_h264_nal_unit_sample(summary: dict[str, _owner.Any], unit: dict
     assert hasattr(hasher, 'hexdigest')
     samples.append({'nal_type': unit['nal_type'], 'start_frame_index': unit['start_frame_index'], 'end_frame_index': end_frame_index, 'start_sequence': unit.get('start_sequence'), 'end_sequence': unit.get('end_sequence'), 'rtp_timestamp': unit.get('rtp_timestamp'), 'sequence_gap_count': unit.get('sequence_gap_count'), 'fragment_count': unit['fragment_count'], 'payload_bytes': unit['payload_bytes'], 'complete': complete, 'sha256': hasher.hexdigest()})
 
-def _looks_like_idmx_local_payload(payload: bytes) -> bool:
+def _looks_like_idmx_local_payload(payload: bytes, *, _owner: _ModuleType) -> bool:
     return _owner._idmx_local_frame_header_size(payload) is not None or any(_owner._iter_idmx_local_frames(payload))
 
-def _looks_like_length_prefixed_idmx_local_payload(payload: bytes) -> bool:
+def _looks_like_length_prefixed_idmx_local_payload(payload: bytes, *, _owner: _ModuleType) -> bool:
     if len(payload) < 4:
         return False
     prefixed_length = int.from_bytes(payload[:4], 'little')
@@ -292,7 +292,7 @@ def _looks_like_length_prefixed_idmx_local_payload(payload: bytes) -> bool:
     header_size = _owner._idmx_local_frame_header_size(frame)
     return header_size is not None and prefixed_length >= header_size and (prefixed_length <= len(frame)) and (_owner._idmx_local_frame_header_score(frame, header_size) is not None)
 
-def _iter_idmx_local_frames(payload: bytes) -> _owner.Iterator[bytes]:  # noqa: PLR0912
+def _iter_idmx_local_frames(payload: bytes, *, _owner: _ModuleType) -> _owner_types.Iterator[bytes]:  # noqa: PLR0912 -- explicit runtime context plus retained signature
     search_start = 0
     while True:
         sentinel_offset = payload.find(_owner.IDMX_LOCAL_FRAME_SENTINEL, search_start)
@@ -345,7 +345,7 @@ def _iter_idmx_local_frames(payload: bytes) -> _owner.Iterator[bytes]:  # noqa: 
             continue
         search_start = sentinel_offset + 1
 
-def _iter_idmx_local_frame_or_nested(frame: bytes, *, video_payload_types: frozenset[int]=frozenset()) -> _owner.Iterator[bytes]:
+def _iter_idmx_local_frame_or_nested(frame: bytes, *, video_payload_types: frozenset[int], _owner: _ModuleType) -> _owner_types.Iterator[bytes]:
     """Yield one IDMX frame, or nested frames from command-port aggregate records."""
     header_size = _owner._idmx_local_frame_header_size(frame)
     if header_size is None:
@@ -363,7 +363,7 @@ def _iter_idmx_local_frame_or_nested(frame: bytes, *, video_payload_types: froze
         return
     yield from nested_frames
 
-def _iter_idmx_local_packet_frame(packet: bytes, *, video_payload_types: frozenset[int]=frozenset()) -> _owner.Iterator[bytes]:
+def _iter_idmx_local_packet_frame(packet: bytes, *, video_payload_types: frozenset[int], _owner: _ModuleType) -> _owner_types.Iterator[bytes]:
     if len(packet) >= 4:
         prefixed_length = int.from_bytes(packet[:4], 'little')
         prefixed_frame = packet[4:4 + prefixed_length]
@@ -384,7 +384,7 @@ def _iter_idmx_local_packet_frame(packet: bytes, *, video_payload_types: frozens
     for frame in _owner._iter_idmx_local_frames(packet):
         yield from _owner._iter_idmx_local_frame_or_nested(frame, video_payload_types=video_payload_types)
 
-def _idmx_local_packet_contains_aggregate_media_frame(packet: bytes, *, video_payload_types: frozenset[int]=frozenset()) -> bool:
+def _idmx_local_packet_contains_aggregate_media_frame(packet: bytes, *, video_payload_types: frozenset[int], _owner: _ModuleType) -> bool:
     frames = tuple(_owner._iter_idmx_local_frames(packet))
     if len(frames) <= 1:
         return False
@@ -396,15 +396,15 @@ def _idmx_local_packet_contains_aggregate_media_frame(packet: bytes, *, video_pa
         previous_sequence = sequence
     return _owner._idmx_local_frames_contain_routed_media(frames, video_payload_types=video_payload_types)
 
-def _idmx_local_packet_contains_aggregate_descriptors(packet: bytes) -> bool:
+def _idmx_local_packet_contains_aggregate_descriptors(packet: bytes, *, _owner: _ModuleType) -> bool:
     frames = tuple(_owner._iter_idmx_local_frames(packet))
     if len(frames) <= 1:
         return False
     return any(_owner.idmx_rtp_stream_descriptors((parsed,)) for frame in frames[1:] if (header_size := _owner._idmx_local_frame_header_size(frame)) is not None if (parsed := _owner._idmx_local_frame_rtp_packet(frame, header_size)) is not None)
 
-def _idmx_local_frames_contain_routed_media(frames: tuple[bytes, ...], *, video_payload_types: frozenset[int]=frozenset()) -> bool:
+def _idmx_local_frames_contain_routed_media(frames: tuple[bytes, ...], *, video_payload_types: frozenset[int], _owner: _ModuleType) -> bool:
     """Return whether nested frames contain video under their final route profile."""
-    parsed: list[tuple[_owner.RtpPacket, bytes]] = []
+    parsed: list[tuple[_owner_types.RtpPacket, bytes]] = []
     profile = _owner.RtpRouteProfile()
     for frame in frames:
         header_size = _owner._idmx_local_frame_header_size(frame)
@@ -417,13 +417,13 @@ def _idmx_local_frames_contain_routed_media(frames: tuple[bytes, ...], *, video_
         profile.absorb(packet)
     return any(((profile.media_kind(packet) == 'video' or packet.payload_type in video_payload_types) and (_owner._looks_like_idmx_hevc_direct_frame(body) or _owner._looks_like_idmx_h264_fu_a_frame(body) or _owner._looks_like_idmx_h264_clear_nal(body)) for packet, body in parsed)) or any(_owner._idmx_local_frame_contains_media(frame) for frame in frames)
 
-def _idmx_local_packet_frame_sequence_number(frame: bytes) -> int | None:
+def _idmx_local_packet_frame_sequence_number(frame: bytes, *, _owner: _ModuleType) -> int | None:
     header_size = _owner._idmx_local_frame_header_size(frame)
     if header_size is None:
         return None
     return _owner._idmx_local_frame_sequence_number(frame, header_size)
 
-def _iter_idmx_local_packet_frames(packets: list[bytes]) -> _owner.Iterator[bytes]:
+def _iter_idmx_local_packet_frames(packets: list[bytes], *, _owner: _ModuleType) -> _owner_types.Iterator[bytes]:
     profile = _owner.RtpRouteProfile()
     for packet in packets:
         for frame in _owner._iter_idmx_local_packet_frame(packet):
@@ -436,7 +436,7 @@ def _iter_idmx_local_packet_frames(packets: list[bytes]) -> _owner.Iterator[byte
     for packet in packets:
         yield from _owner._iter_idmx_local_packet_frame(packet, video_payload_types=video_payload_types)
 
-def _idmx_local_frame_contains_media(frame: bytes) -> bool:
+def _idmx_local_frame_contains_media(frame: bytes, *, _owner: _ModuleType) -> bool:
     header_size = _owner._idmx_local_frame_header_size(frame)
     if header_size is None:
         return False
@@ -444,23 +444,23 @@ def _idmx_local_frame_contains_media(frame: bytes) -> bool:
     h264_transport = _owner._idmx_local_frame_is_h264_transport(frame, header_size)
     return _owner._looks_like_idmx_hevc_parameter_frame(body) or _owner._looks_like_idmx_hevc_media_frame(body) or (h264_transport and _owner._looks_like_idmx_hevc_direct_frame(body)) or (h264_transport and _owner._looks_like_idmx_h264_fu_a_frame(body)) or (h264_transport and _owner._looks_like_idmx_h264_clear_nal(body))
 
-def _local_stream_packets_are_idmx(packets: list[bytes]) -> bool:
+def _local_stream_packets_are_idmx(packets: list[bytes], *, _owner: _ModuleType) -> bool:
     return bool(packets) and _owner._looks_like_idmx_local_payload(packets[0])
 
-def _unsupported_idmx_local_payload_error() -> _owner.PyEzvizError:
+def _unsupported_idmx_local_payload_error(*, _owner: _ModuleType) -> _owner_types.PyEzvizError:
     return _owner.PyEzvizError('Unsupported encrypted EZVIZ local IDMX stream payload: decrypt-video is required')
 
-def _decrypt_idmx_local_packets_to_annexb(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None=None, decrypt_hevc_parameter_sets: bool=False) -> bytes:
+def _decrypt_idmx_local_packets_to_annexb(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, decrypt_hevc_parameter_sets: bool, _owner: _ModuleType) -> bytes:
     annexb, _authoritative_codec = _owner._decrypt_idmx_local_packets_to_annexb_with_codec(packets, media_key, nalu_header_size=nalu_header_size, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets)
     return annexb
 
-def _decrypt_idmx_local_packets_to_annexb_with_codec(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None=None, decrypt_hevc_parameter_sets: bool=False) -> tuple[bytes, _owner.RtpVideoCodec | None]:  # noqa: PLR0912, PLR0915
+def _decrypt_idmx_local_packets_to_annexb_with_codec(packets: list[bytes], media_key: str | bytes, *, nalu_header_size: int | None, decrypt_hevc_parameter_sets: bool, _owner: _ModuleType) -> tuple[bytes, _owner_types.RtpVideoCodec | None]:  # noqa: PLR0912, PLR0915 -- explicit runtime context plus retained signature
     """Decrypt local video and retain an authoritative descriptor codec."""
     routed_h264_payload_types, routed_hevc_payload_types = _owner._idmx_local_supported_video_payload_types(packets)
     if routed_h264_payload_types and routed_hevc_payload_types and (routed_h264_payload_types != routed_hevc_payload_types):
         raise _owner.PyEzvizError('Conflicting H.264 and HEVC routes in encrypted EZVIZ local stream')
     final_route_is_authoritative_hevc = bool(routed_hevc_payload_types and (not routed_h264_payload_types))
-    authoritative_codec: _owner.RtpVideoCodec | None = None
+    authoritative_codec: _owner_types.RtpVideoCodec | None = None
     if final_route_is_authoritative_hevc:
         authoritative_codec = 'hevc'
     elif routed_h264_payload_types and (not routed_hevc_payload_types):
@@ -468,8 +468,8 @@ def _decrypt_idmx_local_packets_to_annexb_with_codec(packets: list[bytes], media
     aes_key = _owner._local_media_aes_key(media_key)
     h264_nalu_header_size = _owner.H264_NAL_HEADER_SIZE if nalu_header_size is None else nalu_header_size
     output = bytearray()
-    active_fu: _owner._RtpFragmentedNal | None = None
-    active_h264_fu: _owner._RtpFragmentedNal | None = None
+    active_fu: _owner_types._RtpFragmentedNal | None = None
+    active_h264_fu: _owner_types._RtpFragmentedNal | None = None
     hevc_evidence_seen = False
     route_epoch_profile = _owner.RtpRouteProfile()
     for frame in _owner._iter_idmx_local_packet_frames(packets):
@@ -514,12 +514,12 @@ def _decrypt_idmx_local_packets_to_annexb_with_codec(packets: list[bytes], media
         raise _owner.PyEzvizError('EZVIZ local IDMX stream did not include media frames')
     return (bytes(output), authoritative_codec)
 
-def _decrypt_idmx_local_packets_to_adts_aac(packets: list[bytes], media_key: str | bytes, *, audio_metadata: tuple[int, int] | None=None, audio_payload_types: frozenset[int] | None=None, require_contiguous: bool=True, decrypt_audio: bool=True, allow_timestamp_jitter: bool=False) -> _owner._IdmxAacStream | None:
+def _decrypt_idmx_local_packets_to_adts_aac(packets: list[bytes], media_key: str | bytes, *, audio_metadata: tuple[int, int] | None, audio_payload_types: frozenset[int] | None, require_contiguous: bool, decrypt_audio: bool, allow_timestamp_jitter: bool, _owner: _ModuleType) -> _owner_types._IdmxAacStream | None:
     """Return supported encrypted IDMX AAC as ADTS, or None for other audio."""
     final_profile = _owner._idmx_local_route_profile(packets)
     descriptor_aac_payload_types = final_profile.codec_payload_types('aac')
     selected_audio_payload_types = audio_payload_types if audio_payload_types is not None else final_profile.codec_payload_types('aac', fallback_payload_types=_owner.DEFAULT_AAC_PAYLOAD_TYPES)
-    rtp_packets: list[_owner.RtpPacket] = []
+    rtp_packets: list[_owner_types.RtpPacket] = []
     route_epoch_profile = _owner.RtpRouteProfile()
     for frame in _owner._iter_idmx_local_packet_frames(packets):
         header_size = _owner._idmx_local_frame_header_size(frame)
@@ -539,7 +539,7 @@ def _decrypt_idmx_local_packets_to_adts_aac(packets: list[bytes], media_key: str
         rtp_packets.append(packet)
     return _owner.decrypt_idmx_aac_packets(rtp_packets, media_key, audio_metadata=audio_metadata, audio_payload_types=selected_audio_payload_types, require_contiguous=require_contiguous, decrypt_audio=decrypt_audio, allow_timestamp_jitter=allow_timestamp_jitter, preserve_clear_timestamps=not decrypt_audio and (not require_contiguous))
 
-def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
+def _idmx_local_packets_to_h264_annexb(packets: list[bytes], *, _owner: _ModuleType) -> bytes:
     output = bytearray()
     depacketizer = _owner.RtpVideoDepacketizer('h264')
     routed_payload_types = _owner._idmx_local_video_payload_types(packets, codec='h264')
@@ -563,7 +563,7 @@ def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
         raise _owner.PyEzvizError('EZVIZ local IDMX stream did not include clear H.264 media frames')
     return _owner._trim_trailing_h264_non_vcl_nals(bytes(output))
 
-def _h264_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
+def _h264_annexb_packet_end_offsets(packets: list[bytes], *, _owner: _ModuleType) -> list[int]:
     output = bytearray()
     depacketizer = _owner.RtpVideoDepacketizer('h264')
     end_offsets: list[int] = []
@@ -588,7 +588,7 @@ def _h264_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
         end_offsets.append(len(output))
     return end_offsets
 
-def _idmx_local_packets_to_hevc_annexb(packets: list[bytes], *, trim_trailing_non_vcl: bool=True) -> bytes:
+def _idmx_local_packets_to_hevc_annexb(packets: list[bytes], *, trim_trailing_non_vcl: bool, _owner: _ModuleType) -> bytes:
     output = bytearray()
     depacketizer = _owner.RtpVideoDepacketizer('hevc', allow_ezviz_headerless_hevc_fu=True)
     routed_payload_types = _owner._idmx_local_video_payload_types(packets, codec='hevc')
@@ -613,7 +613,7 @@ def _idmx_local_packets_to_hevc_annexb(packets: list[bytes], *, trim_trailing_no
         return _owner._trim_trailing_hevc_non_vcl_nals(annexb)
     return annexb
 
-def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
+def _hevc_annexb_packet_end_offsets(packets: list[bytes], *, _owner: _ModuleType) -> list[int]:
     output = bytearray()
     depacketizer = _owner.RtpVideoDepacketizer('hevc', allow_ezviz_headerless_hevc_fu=True)
     end_offsets: list[int] = []
@@ -634,7 +634,7 @@ def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
         end_offsets.append(len(output))
     return end_offsets
 
-def _idmx_local_video_payload_types(packets: list[bytes], *, codec: _owner.RtpVideoCodec | None=None) -> frozenset[int]:
+def _idmx_local_video_payload_types(packets: list[bytes], *, codec: _owner_types.RtpVideoCodec | None, _owner: _ModuleType) -> frozenset[int]:
     """Return descriptor-owned local video routes with legacy PT 96 fallback."""
     if codec is not None:
         h264_types, hevc_types = _owner._idmx_local_supported_video_payload_types(packets)
@@ -646,7 +646,7 @@ def _idmx_local_video_payload_types(packets: list[bytes], *, codec: _owner.RtpVi
     assigned = frozenset(descriptor.payload_type for descriptor in profile.descriptors)
     return frozenset({_owner.IDMX_H264_RTP_PAYLOAD_TYPE}) - assigned
 
-def _idmx_local_route_profile(packets: list[bytes]) -> _owner.RtpRouteProfile:
+def _idmx_local_route_profile(packets: list[bytes], *, _owner: _ModuleType) -> _owner_types.RtpRouteProfile:
     """Return the final authoritative route snapshot for local IDMX packets."""
     profile = _owner.RtpRouteProfile()
     for frame in _owner._iter_idmx_local_packet_frames(packets):
@@ -658,7 +658,7 @@ def _idmx_local_route_profile(packets: list[bytes]) -> _owner.RtpRouteProfile:
             profile.absorb(packet)
     return profile
 
-def _idmx_local_supported_video_payload_types(packets: list[bytes]) -> tuple[frozenset[int], frozenset[int]]:
+def _idmx_local_supported_video_payload_types(packets: list[bytes], *, _owner: _ModuleType) -> tuple[frozenset[int], frozenset[int]]:
     """Return H.264/HEVC routes, rejecting unsupported-only video profiles."""
     profile = _owner._idmx_local_route_profile(packets)
     video_descriptors = tuple(descriptor for descriptor in profile.descriptors if descriptor.media_kind == 'video')
@@ -700,11 +700,11 @@ def _idmx_local_supported_video_payload_types(packets: list[bytes]) -> tuple[fro
         raise _owner.PyEzvizError(f'Unsupported encrypted EZVIZ local video codec: {codecs}')
     return (h264_payload_types, hevc_payload_types)
 
-def _idmx_local_packets_to_annexb(packets: list[bytes]) -> bytes:
+def _idmx_local_packets_to_annexb(packets: list[bytes], *, _owner: _ModuleType) -> bytes:
     annexb, _codec = _owner._idmx_local_packets_to_annexb_with_codec(packets)
     return annexb
 
-def _idmx_local_packets_to_annexb_with_codec(packets: list[bytes]) -> tuple[bytes, str]:
+def _idmx_local_packets_to_annexb_with_codec(packets: list[bytes], *, _owner: _ModuleType) -> tuple[bytes, str]:
     route_profile = _owner._idmx_local_route_profile(packets)
     authoritative_hevc = any(descriptor.media_kind == 'video' and descriptor.codec == 'hevc' for descriptor in route_profile.descriptors)
     try:
@@ -724,7 +724,7 @@ def _idmx_local_packets_to_annexb_with_codec(packets: list[bytes]) -> tuple[byte
         return (hevc_annexb, 'hevc')
     return (h264_annexb, 'h264')
 
-def _idmx_local_packets_to_h264_annexb_with_codec(packets: list[bytes]) -> tuple[bytes, str]:
+def _idmx_local_packets_to_h264_annexb_with_codec(packets: list[bytes], *, _owner: _ModuleType) -> tuple[bytes, str]:
     try:
         h264_annexb = _owner._idmx_local_packets_to_h264_annexb(packets)
     except _owner.PyEzvizError:
@@ -733,7 +733,7 @@ def _idmx_local_packets_to_h264_annexb_with_codec(packets: list[bytes]) -> tuple
         return (h264_annexb, 'h264')
     return _owner._idmx_local_packets_to_annexb_with_codec(packets)
 
-def _idmx_local_packets_have_direct_hevc_media(packets: list[bytes]) -> bool:
+def _idmx_local_packets_have_direct_hevc_media(packets: list[bytes], *, _owner: _ModuleType) -> bool:
     for frame in _owner._iter_idmx_local_packet_frames(packets):
         header_size = _owner._idmx_local_frame_header_size(frame)
         if header_size is None:
@@ -745,16 +745,16 @@ def _idmx_local_packets_have_direct_hevc_media(packets: list[bytes]) -> bool:
             return True
     return False
 
-def _local_media_aes_key(media_key: str | bytes) -> bytes:
+def _local_media_aes_key(media_key: str | bytes, *, _owner: _ModuleType) -> bytes:
     key_bytes = media_key.encode() if isinstance(media_key, str) else media_key
     return key_bytes.ljust(16, b'\x00')[:16]
 
-def _idmx_hevc_direct_frame_matches_route(body: bytes, *, authoritative_hevc: bool, conflicting_h264_route: bool=False) -> bool:
+def _idmx_hevc_direct_frame_matches_route(body: bytes, *, authoritative_hevc: bool, conflicting_h264_route: bool, _owner: _ModuleType) -> bool:
     if not _owner._looks_like_idmx_hevc_direct_frame(body):
         return False
     return not authoritative_hevc or (not conflicting_h264_route and _owner.rtp_payload_video_codec(body) != 'h264')
 
-def _append_idmx_hevc_media_payload(output: bytearray, payload: bytes, aes_key: bytes, *, active_fu: _owner._RtpFragmentedNal | None, sequence_number: int | None=None, rtp_timestamp: int | None=None, rtp_marker: bool=False, decrypt_parameter_sets: bool=True) -> _owner._RtpFragmentedNal | None:
+def _append_idmx_hevc_media_payload(output: bytearray, payload: bytes, aes_key: bytes, *, active_fu: _owner_types._RtpFragmentedNal | None, sequence_number: int | None, rtp_timestamp: int | None, rtp_marker: bool, decrypt_parameter_sets: bool, _owner: _ModuleType) -> _owner_types._RtpFragmentedNal | None:
     if len(payload) < _owner.HEVC_NAL_HEADER_SIZE:
         return active_fu
     nal_type = payload[0] >> 1 & 63
@@ -788,7 +788,7 @@ def _append_idmx_hevc_media_payload(output: bytearray, payload: bytes, aes_key: 
         return None
     return active_fu
 
-def _append_idmx_h264_fu_a_payload(output: bytearray, payload: bytes, *, active_fu: _owner._RtpFragmentedNal | None, sequence_number: int | None=None, rtp_timestamp: int | None=None, aes_key: bytes | None=None, nalu_header_size: int=_owner.H264_NAL_HEADER_SIZE) -> _owner._RtpFragmentedNal | None:
+def _append_idmx_h264_fu_a_payload(output: bytearray, payload: bytes, *, active_fu: _owner_types._RtpFragmentedNal | None, sequence_number: int | None, rtp_timestamp: int | None, aes_key: bytes | None, nalu_header_size: int, _owner: _ModuleType) -> _owner_types._RtpFragmentedNal | None:
     fu_header = payload[1]
     is_start = bool(fu_header & 128)
     is_end = bool(fu_header & 64)
@@ -809,13 +809,13 @@ def _append_idmx_h264_fu_a_payload(output: bytearray, payload: bytes, *, active_
         return None
     return active_fu
 
-def _append_decrypted_hevc_nal(output: bytearray, nal: bytes, aes_key: bytes) -> None:
+def _append_decrypted_hevc_nal(output: bytearray, nal: bytes, aes_key: bytes, *, _owner: _ModuleType) -> None:
     if not _owner._is_plausible_hevc_nal(nal):
         return
     output.extend(_owner.ANNEX_B_LONG_START_CODE)
     output.extend(_owner._decrypt_hevc_nal_prefix(nal, aes_key))
 
-def _append_decrypted_h264_nal(output: bytearray, nal: bytes, aes_key: bytes, *, nalu_header_size: int=_owner.H264_NAL_HEADER_SIZE) -> None:
+def _append_decrypted_h264_nal(output: bytearray, nal: bytes, aes_key: bytes, *, nalu_header_size: int, _owner: _ModuleType) -> None:
     if nalu_header_size != 0 and (not _owner._is_plausible_h264_nal(nal)):
         return
     if _owner._is_plausible_h264_nal(nal) and _owner._h264_nal_type(nal) not in {1, 5}:
@@ -828,13 +828,13 @@ def _append_decrypted_h264_nal(output: bytearray, nal: bytes, aes_key: bytes, *,
     output.extend(_owner.ANNEX_B_LONG_START_CODE)
     output.extend(decrypted)
 
-def _append_hevc_nal(output: bytearray, nal: bytes) -> None:
+def _append_hevc_nal(output: bytearray, nal: bytes, *, _owner: _ModuleType) -> None:
     if not _owner._is_plausible_hevc_nal(nal):
         return
     output.extend(_owner.ANNEX_B_LONG_START_CODE)
     output.extend(nal)
 
-def _trim_trailing_h264_non_vcl_nals(data: bytes) -> bytes:
+def _trim_trailing_h264_non_vcl_nals(data: bytes, *, _owner: _ModuleType) -> bytes:
     spans = _owner._h264_annexb_nal_spans(data)
     if not spans:
         return data
@@ -851,7 +851,7 @@ def _trim_trailing_h264_non_vcl_nals(data: bytes) -> bytes:
         return data
     return data[:last_vcl_end]
 
-def _trim_trailing_hevc_non_vcl_nals(data: bytes) -> bytes:
+def _trim_trailing_hevc_non_vcl_nals(data: bytes, *, _owner: _ModuleType) -> bytes:
     spans = _owner._h264_annexb_nal_spans(data)
     if not spans:
         return data
@@ -868,7 +868,7 @@ def _trim_trailing_hevc_non_vcl_nals(data: bytes) -> bytes:
         return data
     return data[:last_vcl_end]
 
-def _decrypt_hevc_nal_prefix(nal: bytes, aes_key: bytes) -> bytes:
+def _decrypt_hevc_nal_prefix(nal: bytes, aes_key: bytes, *, _owner: _ModuleType) -> bytes:
     frame = bytearray(nal)
     decrypt_length = min(_owner.HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH, len(frame) - _owner.HEVC_NAL_HEADER_SIZE)
     decrypt_length -= decrypt_length % _owner.AES.block_size
@@ -878,7 +878,7 @@ def _decrypt_hevc_nal_prefix(nal: bytes, aes_key: bytes) -> bytes:
         frame[_owner.HEVC_NAL_HEADER_SIZE:decrypt_end] = cipher.decrypt(bytes(frame[_owner.HEVC_NAL_HEADER_SIZE:decrypt_end]))
     return bytes(frame)
 
-def _decrypt_h264_nal_prefix(nal: bytes, aes_key: bytes, *, nalu_header_size: int=_owner.H264_NAL_HEADER_SIZE) -> bytes:
+def _decrypt_h264_nal_prefix(nal: bytes, aes_key: bytes, *, nalu_header_size: int, _owner: _ModuleType) -> bytes:
     frame = bytearray(nal)
     decrypt_length = min(_owner.HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH, len(frame) - nalu_header_size)
     decrypt_length -= decrypt_length % _owner.AES.block_size
@@ -888,7 +888,7 @@ def _decrypt_h264_nal_prefix(nal: bytes, aes_key: bytes, *, nalu_header_size: in
         frame[nalu_header_size:decrypt_end] = cipher.decrypt(bytes(frame[nalu_header_size:decrypt_end]))
     return bytes(frame)
 
-def _iter_local_stream_payloads(stream: _owner.Any, *, max_packets: int | None, duration_seconds: float | None, monotonic: _owner.Callable[[], float]) -> _owner.Iterator[bytes]:
+def _iter_local_stream_payloads(stream: _owner_types.Any, *, max_packets: int | None, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], _owner: _ModuleType) -> _owner_types.Iterator[bytes]:
     if getattr(stream, 'supports_deadline_iter_packets', False):
         for packet in stream.iter_packets(max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic):
             yield packet.body
@@ -903,15 +903,15 @@ def _iter_local_stream_payloads(stream: _owner.Any, *, max_packets: int | None, 
                 break
         yield packet.body
 
-def _copy_mpegps_payloads_to_mpegts(payloads: _owner.Iterable[bytes], output: _owner.BinaryIO, *, process: _owner.subprocess.Popen[bytes]) -> None:
+def _copy_mpegps_payloads_to_mpegts(payloads: _owner_types.Iterable[bytes], output: _owner_types.BinaryIO, *, process: _owner_types.subprocess.Popen[bytes], _owner: _ModuleType) -> None:
 
-    def _write_input(stdin: _owner.BinaryIO) -> None:
+    def _write_input(stdin: _owner_types.BinaryIO) -> None:
         for payload in payloads:
             stdin.write(payload)
             stdin.flush()
     _owner.copy_remuxed_output(process, output, write_input=_write_input)
 
-def _copy_idmx_audio_video_to_mpegts(annexb: bytes, audio: _owner._IdmxAacStream, output: _owner.BinaryIO, *, ffmpeg_path: str, video_input_format: str, video_frame_rate: str | None) -> None:
+def _copy_idmx_audio_video_to_mpegts(annexb: bytes, audio: _owner_types._IdmxAacStream, output: _owner_types.BinaryIO, *, ffmpeg_path: str, video_input_format: str, video_frame_rate: str | None, _owner: _ModuleType) -> None:
     """Mux decrypted IDMX elementary video and AAC into MPEG-TS."""
     with _owner.tempfile.TemporaryDirectory(prefix='pyezvizapi-idmx-') as directory:
         audio_path, audio_format = _owner.write_aac_remux_input(audio, _owner.Path(directory))
@@ -922,17 +922,17 @@ def _copy_idmx_audio_video_to_mpegts(annexb: bytes, audio: _owner._IdmxAacStream
         process = _owner._open_local_idmx_audio_video_mpegts_remux_process(ffmpeg_path, video_input_format=video_input_format, audio_path=str(audio_path), video_frame_rate=video_frame_rate)
         _owner._copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
 
-def _start_ffmpeg_stderr_drain(process: _owner.subprocess.Popen[bytes], *, max_bytes: int=65536) -> tuple[_owner.BoundedStderrTail, _owner.Thread | None]:
+def _start_ffmpeg_stderr_drain(process: _owner_types.subprocess.Popen[bytes], *, max_bytes: int, _owner: _ModuleType) -> tuple[_owner_types.BoundedStderrTail, _owner_types.Thread | None]:
     tail, reader = _owner.start_stderr_drain(process, max_bytes=max_bytes)
     return (tail, reader)
 
-def _ffmpeg_stderr_tail(chunks: list[bytes] | _owner.BoundedStderrTail, *, max_chars: int=1200) -> str:
-    if isinstance(chunks, _owner.BoundedStderrTail):
+def _ffmpeg_stderr_tail(chunks: list[bytes] | _owner_types.BoundedStderrTail, *, max_chars: int, _owner: _ModuleType) -> str:
+    if isinstance(chunks, _StaticBoundedStderrTail):
         return chunks.text(max_chars=max_chars)
     text = b''.join(chunks).decode('utf-8', errors='replace').strip()
     return text[-max_chars:]
 
-def _write_local_stream_payloads(stream: _owner.Any, output: _owner.BinaryIO, *, max_packets: int | None, duration_seconds: float | None, monotonic: _owner.Callable[[], float]) -> None:
+def _write_local_stream_payloads(stream: _owner_types.Any, output: _owner_types.BinaryIO, *, max_packets: int | None, duration_seconds: float | None, monotonic: _owner_types.Callable[[], float], _owner: _ModuleType) -> None:
     for payload in _owner._iter_local_stream_payloads(stream, max_packets=max_packets, duration_seconds=duration_seconds, monotonic=monotonic):
         output.write(payload)
         output.flush()

@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi._shared.utils`.
 
@@ -12,40 +14,40 @@ from typing import TYPE_CHECKING
 from pyezvizapi._shared import utils as _implementation
 
 if TYPE_CHECKING:
-    from Crypto.Cipher import AES as AES
+    import Crypto.Cipher as _compat_module_0
+    AES = _compat_module_0.AES
 
-    from pyezvizapi._shared.utils import (
-        HIK_ENCRYPTION_HEADER as HIK_ENCRYPTION_HEADER,
-        MILLISECONDS_THRESHOLD as MILLISECONDS_THRESHOLD,
-        WILDCARD_STEP as WILDCARD_STEP,
-        Any as Any,
-        Iterable as Iterable,
-        Iterator as Iterator,
-        PathComponent as PathComponent,
-        PyEzvizError as PyEzvizError,
-        ZoneInfo as ZoneInfo,
-        ZoneInfoNotFoundError as ZoneInfoNotFoundError,
-        _decrypt_single_block as _decrypt_single_block,
-        _image_crypto as _image_crypto,
-        _split_encrypted_blocks as _split_encrypted_blocks,
-        annotations as annotations,
-        coerce_int as coerce_int,
-        compute_motion_from_alarm as compute_motion_from_alarm,
-        convert_to_dict as convert_to_dict,
-        datetime as datetime,
-        decode_json as decode_json,
-        decrypt_image as decrypt_image,
-        deep_merge as deep_merge,
-        fetch_nested_value as fetch_nested_value,
-        first_nested as first_nested,
-        iter_nested as iter_nested,
-        json as json,
-        logging as logging,
-        md5 as md5,
-        normalize_alarm_time as normalize_alarm_time,
-        parse_timezone_value as parse_timezone_value,
-        return_password_hash as return_password_hash,
-        string_to_list as string_to_list,
-    )
+    import pyezvizapi._shared.utils as _compat_module_1
+    HIK_ENCRYPTION_HEADER = _compat_module_1.HIK_ENCRYPTION_HEADER
+    MILLISECONDS_THRESHOLD = _compat_module_1.MILLISECONDS_THRESHOLD
+    WILDCARD_STEP = _compat_module_1.WILDCARD_STEP
+    Any = _compat_module_1.Any
+    Iterable = _compat_module_1.Iterable
+    Iterator = _compat_module_1.Iterator
+    PathComponent = _compat_module_1.PathComponent
+    PyEzvizError = _compat_module_1.PyEzvizError
+    ZoneInfo = _compat_module_1.ZoneInfo
+    ZoneInfoNotFoundError = _compat_module_1.ZoneInfoNotFoundError
+    _decrypt_single_block = _compat_module_1._decrypt_single_block
+    _image_crypto = _compat_module_1._image_crypto
+    _split_encrypted_blocks = _compat_module_1._split_encrypted_blocks
+    annotations = _compat_module_1.annotations
+    coerce_int = _compat_module_1.coerce_int
+    compute_motion_from_alarm = _compat_module_1.compute_motion_from_alarm
+    convert_to_dict = _compat_module_1.convert_to_dict
+    datetime = _compat_module_1.datetime
+    decode_json = _compat_module_1.decode_json
+    decrypt_image = _compat_module_1.decrypt_image
+    deep_merge = _compat_module_1.deep_merge
+    fetch_nested_value = _compat_module_1.fetch_nested_value
+    first_nested = _compat_module_1.first_nested
+    iter_nested = _compat_module_1.iter_nested
+    json = _compat_module_1.json
+    logging = _compat_module_1.logging
+    md5 = _compat_module_1.md5
+    normalize_alarm_time = _compat_module_1.normalize_alarm_time
+    parse_timezone_value = _compat_module_1.parse_timezone_value
+    return_password_hash = _compat_module_1.return_password_hash
+    string_to_list = _compat_module_1.string_to_list
 
 sys.modules[__name__] = _implementation

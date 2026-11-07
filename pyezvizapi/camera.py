@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.devices.camera`.
 
@@ -12,32 +14,31 @@ from typing import TYPE_CHECKING
 from pyezvizapi.devices import camera as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.devices.camera import (
-        _LOGGER as _LOGGER,
-        DEFAULT_ALARM_IMAGE_URL as DEFAULT_ALARM_IMAGE_URL,
-        UNIFIEDMSG_LOOKBACK_DAYS as UNIFIEDMSG_LOOKBACK_DAYS,
-        Any as Any,
-        BatteryCameraWorkMode as BatteryCameraWorkMode,
-        CameraStatus as CameraStatus,
-        DeviceSwitchType as DeviceSwitchType,
-        EzvizCamera as EzvizCamera,
-        EzvizChimeMusic as EzvizChimeMusic,
-        EzvizDeviceChimeInfo as EzvizDeviceChimeInfo,
-        EzvizDeviceRecord as EzvizDeviceRecord,
-        Literal as Literal,
-        PyEzvizError as PyEzvizError,
-        SoundMode as SoundMode,
-        TypedDict as TypedDict,
-        annotations as annotations,
-        cast as cast,
-        compute_motion_from_alarm as compute_motion_from_alarm,
-        datetime as datetime,
-        fetch_nested_value as fetch_nested_value,
-        local_ip_address as local_ip_address,
-        logging as logging,
-        parse_timezone_value as parse_timezone_value,
-        string_to_list as string_to_list,
-        switch_values as switch_values,
-    )
+    import pyezvizapi.devices.camera as _compat_module_0
+    _LOGGER = _compat_module_0._LOGGER
+    DEFAULT_ALARM_IMAGE_URL = _compat_module_0.DEFAULT_ALARM_IMAGE_URL
+    UNIFIEDMSG_LOOKBACK_DAYS = _compat_module_0.UNIFIEDMSG_LOOKBACK_DAYS
+    Any = _compat_module_0.Any
+    BatteryCameraWorkMode = _compat_module_0.BatteryCameraWorkMode
+    CameraStatus = _compat_module_0.CameraStatus
+    DeviceSwitchType = _compat_module_0.DeviceSwitchType
+    EzvizCamera = _compat_module_0.EzvizCamera
+    EzvizChimeMusic = _compat_module_0.EzvizChimeMusic
+    EzvizDeviceChimeInfo = _compat_module_0.EzvizDeviceChimeInfo
+    EzvizDeviceRecord = _compat_module_0.EzvizDeviceRecord
+    Literal = _compat_module_0.Literal
+    PyEzvizError = _compat_module_0.PyEzvizError
+    SoundMode = _compat_module_0.SoundMode
+    TypedDict = _compat_module_0.TypedDict
+    annotations = _compat_module_0.annotations
+    cast = _compat_module_0.cast
+    compute_motion_from_alarm = _compat_module_0.compute_motion_from_alarm
+    datetime = _compat_module_0.datetime
+    fetch_nested_value = _compat_module_0.fetch_nested_value
+    local_ip_address = _compat_module_0.local_ip_address
+    logging = _compat_module_0.logging
+    parse_timezone_value = _compat_module_0.parse_timezone_value
+    string_to_list = _compat_module_0.string_to_list
+    switch_values = _compat_module_0.switch_values
 
 sys.modules[__name__] = _implementation

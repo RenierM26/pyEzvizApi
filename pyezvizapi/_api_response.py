@@ -1,5 +1,6 @@
+# Compatibility export assignments include retained private attributes.
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.responses`.
 
@@ -12,24 +13,23 @@ from typing import TYPE_CHECKING
 from pyezvizapi.cloud import responses as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.cloud.responses import (
-    Any as Any,
-    JsonDict as JsonDict,
-    Mapping as Mapping,
-    PyEzvizError as PyEzvizError,
-    annotations as annotations,
-    body_debug_summary as body_debug_summary,
-    is_ok as is_ok,
-    islice as islice,
-    json as json,
-    meta_code as meta_code,
-    normalize_json_payload as normalize_json_payload,
-    object_section as object_section,
-    parse_json as parse_json,
-    requests as requests,
-    response_code as response_code,
-    response_summary as response_summary,
-    summarize_payload as summarize_payload,
-    )
+    import pyezvizapi.cloud.responses as _compat_module_0
+    Any = _compat_module_0.Any
+    JsonDict = _compat_module_0.JsonDict
+    Mapping = _compat_module_0.Mapping
+    PyEzvizError = _compat_module_0.PyEzvizError
+    annotations = _compat_module_0.annotations
+    body_debug_summary = _compat_module_0.body_debug_summary
+    is_ok = _compat_module_0.is_ok
+    islice = _compat_module_0.islice
+    json = _compat_module_0.json
+    meta_code = _compat_module_0.meta_code
+    normalize_json_payload = _compat_module_0.normalize_json_payload
+    object_section = _compat_module_0.object_section
+    parse_json = _compat_module_0.parse_json
+    requests = _compat_module_0.requests
+    response_code = _compat_module_0.response_code
+    response_summary = _compat_module_0.response_summary
+    summarize_payload = _compat_module_0.summarize_payload
 
 sys.modules[__name__] = _implementation

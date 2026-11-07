@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.playback`.
 
@@ -12,16 +14,15 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming import playback as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.playback import (
-    Any as Any,
-    EzvizAppPlaybackSupport as EzvizAppPlaybackSupport,
-    Mapping as Mapping,
-    _capability_integer as _capability_integer,
-    annotations as annotations,
-    dataclass as dataclass,
-    inspect_app_playback_support as inspect_app_playback_support,
-    json as json,
-    re as re,
-    )
+    import pyezvizapi.streaming.playback as _compat_module_0
+    Any = _compat_module_0.Any
+    EzvizAppPlaybackSupport = _compat_module_0.EzvizAppPlaybackSupport
+    Mapping = _compat_module_0.Mapping
+    _capability_integer = _compat_module_0._capability_integer
+    annotations = _compat_module_0.annotations
+    dataclass = _compat_module_0.dataclass
+    inspect_app_playback_support = _compat_module_0.inspect_app_playback_support
+    json = _compat_module_0.json
+    re = _compat_module_0.re
 
 sys.modules[__name__] = _implementation

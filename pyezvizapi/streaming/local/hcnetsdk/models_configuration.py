@@ -1,17 +1,16 @@
 # Runtime hooks deliberately resolve through their legacy owner.
 # ruff: noqa: SLF001
-
+# Model defaults depend only on the SDK constants leaf.
+# ruff: noqa: E402, I001, SLF001
+from __future__ import annotations
+from pyezvizapi.streaming.local.hcnetsdk import constants as _constants
 """models configuration implementation; legacy runtime hooks remain on the owner module.
 
 Access through _owner is deliberate: callers that patch the compatibility
 module must still affect dependent operations. No copied hook snapshots.
 """
-from __future__ import annotations
 
-import pyezvizapi.streaming.local.hcnetsdk.protocol as _owner
-
-
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkStdXmlConfigRequest:
     """Python model of ``NET_DVR_STDXMLConfig`` request/output allocation.
 
@@ -25,8 +24,8 @@ class HcNetSdkStdXmlConfigRequest:
     recv_timeout: int = 0
     force_encrypt: int = 0
     num_of_multi_part: int = 0
-    output_buffer_size: int = _owner.HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE
-    status_buffer_size: int = _owner.HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE
+    output_buffer_size: int = _constants.HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE
+    status_buffer_size: int = _constants.HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE
 
     def __post_init__(self) -> None:
         for name, value in (('recv_timeout', self.recv_timeout), ('output_buffer_size', self.output_buffer_size), ('status_buffer_size', self.status_buffer_size)):
@@ -62,7 +61,7 @@ class HcNetSdkStdXmlConfigRequest:
         in_buffer = self.in_buffer_bytes
         return {'api': 'NET_DVR_STDXMLConfig', 'input': {'field_order': _owner.HCNETSDK_STDXML_INPUT_FIELD_ORDER, 'dwSize': 'sizeof(NET_DVR_XML_CONFIG_INPUT)', 'lpRequestUrl': request_bytes if include_buffers else '<request-url-buffer>', 'dwRequestUrlLen': len(request_bytes), 'lpInBuffer': in_buffer if include_buffers and in_buffer else '<input-buffer>' if in_buffer else None, 'dwInBufferSize': len(in_buffer), 'dwRecvTimeOut': self.recv_timeout, 'byForceEncrpt': self.force_encrypt, 'byNumOfMultiPart': self.num_of_multi_part, 'byResLength': 30}, 'output': {'field_order': _owner.HCNETSDK_STDXML_OUTPUT_FIELD_ORDER, 'dwSize': 'sizeof(NET_DVR_XML_CONFIG_OUTPUT)', 'lpOutBuffer': '<output-buffer>', 'dwOutBufferSize': self.output_buffer_size, 'dwReturnedXMLSize': '<returned-xml-size>', 'lpStatusBuffer': '<status-buffer>', 'dwStatusSize': self.status_buffer_size, 'byResLength': 32}, 'android_helper_compatible': self.android_helper_compatible}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkStdXmlConfigResponse:
     """Result returned by a native ``NET_DVR_STDXMLConfig`` call."""
     succeeded: bool
@@ -85,7 +84,7 @@ class HcNetSdkStdXmlConfigResponse:
         """Parse the output buffer as a JSON object."""
         return _owner.hcnetsdk_stdxml_response_json(self.output)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanServicesSwitchState:
     """Parsed ``servicesSwitch`` values returned by EZVIZ local ISAPI."""
     hiksdk: int | None = None
@@ -103,7 +102,7 @@ class EzvizLanServicesSwitchState:
         """Return the local web switch as a boolean when present."""
         return None if self.web is None else bool(self.web)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanWifiApInfo:
     """One Wi-Fi access point entry returned by ``NET_DVR_AP_INFO_LIST``."""
     ssid: str
@@ -112,7 +111,7 @@ class EzvizLanWifiApInfo:
     signal_strength: int
     extra: int
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanHdDiskConfig:
     """One ``NET_DVR_SINGLE_HD`` entry from a traced storage config."""
     hd_no: int
@@ -128,7 +127,7 @@ class EzvizLanHdDiskConfig:
     picture_capacity: int
     free_picture_space: int
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanHdConfig:
     """Known fields from a traced ``NET_DVR_HDCFG`` response."""
     declared_size: int
@@ -136,7 +135,7 @@ class EzvizLanHdConfig:
     disk_count: int = 0
     disks: tuple[EzvizLanHdDiskConfig, ...] = ()
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanNtpConfig:
     """Known fields from a traced ``NET_DVR_NTPPARA`` response."""
     ntp_server: str
@@ -147,7 +146,7 @@ class EzvizLanNtpConfig:
     ntp_port: int
     raw: bytes
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanNetInterfaceConfig:
     """One Ethernet interface entry from ``NET_DVR_NETCFG_V30``."""
     ip_address: str
@@ -157,7 +156,7 @@ class EzvizLanNetInterfaceConfig:
     mtu: int
     mac_address: str
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanNetConfigV30:
     """Known non-secret fields from a traced ``NET_DVR_NETCFG_V30`` response."""
     declared_size: int
@@ -170,7 +169,7 @@ class EzvizLanNetConfigV30:
     nfs_ip: str
     raw: bytes
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanDvrConfigSummary:
     """Non-secret summary for sensitive traced ``NET_DVR_GetDVRConfig`` buffers."""
     command: int
@@ -181,7 +180,7 @@ class EzvizLanDvrConfigSummary:
     trailing_bytes: int
     nonzero_bytes: int
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanEzvizAccessConfig:
     """Redacted fields from ``NET_DVR_EZVIZ_ACCESS_CFG``.
 
@@ -198,7 +197,7 @@ class EzvizLanEzvizAccessConfig:
     raw_length: int
     trailing_bytes: int
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanUserConfigV30Entry:
     """One decoded ``NET_DVR_USER_INFO_V30`` entry.
 
@@ -207,8 +206,8 @@ class EzvizLanUserConfigV30Entry:
     """
     index: int
     username: str
-    password: str = _owner.field(repr=False)
-    password_bytes: bytes = _owner.field(repr=False)
+    password: str = _constants.field(repr=False)
+    password_bytes: bytes = _constants.field(repr=False)
     local_rights: tuple[int, ...]
     remote_rights: tuple[int, ...]
     net_preview_rights: tuple[int, ...]
@@ -223,14 +222,14 @@ class EzvizLanUserConfigV30Entry:
     user_ipv6: str
     mac_address: str
     priority: int
-    reserved: bytes = _owner.field(repr=False)
+    reserved: bytes = _constants.field(repr=False)
 
     @property
     def is_active(self) -> bool:
         """Return whether the entry carries any configured user data."""
         return bool(self.username or self.password_bytes or self.priority or self.user_ipv4 or self.user_ipv6 or self.mac_address or any(self.local_rights) or any(self.remote_rights) or any(self.net_preview_rights) or any(self.local_playback_rights) or any(self.net_playback_rights) or any(self.local_record_rights) or any(self.net_record_rights) or any(self.local_ptz_rights) or any(self.net_ptz_rights) or any(self.local_backup_rights))
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanUserConfigV30:
     """Decoded ``NET_DVR_USER_V30`` user table."""
     declared_size: int
@@ -243,7 +242,7 @@ class EzvizLanUserConfigV30:
         """Return configured entries, leaving empty user slots out."""
         return tuple(user for user in self.users if user.is_active)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanDeviceConfigV40:
     """Known fields from a traced ``NET_DVR_DEVICECFG_V40`` response."""
     declared_size: int
@@ -273,14 +272,14 @@ class EzvizLanDeviceConfigV40:
     device_type_name: str
     raw: bytes
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanRecordDayConfig:
     """One all-day entry from ``NET_DVR_RECORD_V30``."""
     day_index: int
     all_day_record: int
     record_type: int
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanRecordScheduleSegment:
     """One timed schedule segment from ``NET_DVR_RECORD_V30``."""
     day_index: int
@@ -291,7 +290,7 @@ class EzvizLanRecordScheduleSegment:
     stop_minute: int
     record_type: int
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanRecordConfigV30:
     """Known fields from a traced ``NET_DVR_RECORD_V30`` response."""
     declared_size: int
@@ -310,7 +309,7 @@ class EzvizLanRecordConfigV30:
     svc_level: int
     raw: bytes
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanCameraParamConfig:
     """Known fields from a ``NET_DVR_CAMERAPARAMCFG`` response."""
     declared_size: int
@@ -394,7 +393,7 @@ class EzvizLanCameraParamConfig:
         """Return ``struBackLight.byBacklightLevel`` when present."""
         return _owner._optional_raw_byte(self.raw, _owner.HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET + 1)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanWifiConnectStatus:
     """Known fields from a ``NET_DVR_WIFI_CONNECT_STATUS`` response."""
     declared_size: int
@@ -402,7 +401,7 @@ class EzvizLanWifiConnectStatus:
     error_code: int
     raw: bytes
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanAudioInputParam:
     """Known fields from a ``NET_DVR_AUDIO_INPUT_PARAM`` response."""
     audio_input_type: int
@@ -410,14 +409,14 @@ class EzvizLanAudioInputParam:
     noise_filter_enabled: int
     raw: bytes
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanAudioOutputVolume:
     """Known fields from a ``NET_DVR_AUDIOOUT_VOLUME`` response."""
     declared_size: int
     volume: int
     raw: bytes
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanCompressionInfoV30:
     """Known fields from one ``NET_DVR_COMPRESSION_INFO_V30`` block."""
     stream_type: int
@@ -442,7 +441,7 @@ class EzvizLanCompressionInfoV30:
     average_video_bitrate: int
     raw: bytes
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanCompressionConfig:
     """Known fields from a ``NET_DVR_COMPRESSIONCFG_V30`` response."""
     declared_size: int
@@ -479,7 +478,7 @@ class EzvizLanCompressionConfig:
         """Return ``struNetPara`` when present."""
         return _owner._hcnetsdk_compression_info_v30(self.raw, _owner.HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanPictureConfig:
     """Known fields from a ``NET_DVR_PICCFG_V40`` response."""
     declared_size: int
@@ -576,7 +575,7 @@ class EzvizLanPictureConfig:
         """Return ``byOSDMilliSecondEnable`` when present."""
         return _owner._optional_raw_byte(self.raw, _owner.HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET + 7)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkDvrConfigRequest:
     """Native ``NET_DVR_GetDVRConfig`` / ``NET_DVR_SetDVRConfig`` shape."""
     login_id: int
@@ -610,12 +609,12 @@ class HcNetSdkDvrConfigRequest:
         hint.update({'lpInBuffer': f'<{self.structure}>', 'dwInBufferSize': structure_size, 'fieldUpdates': dict(self.field_updates or {}), 'readBeforeWrite': self.read_before_write})
         return hint
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkFormatDiskRequest:
     """Native ``NET_DVR_FormatDisk`` call shape."""
     login_id: int
     disk_number: int
-    api: str = _owner.HCNETSDK_FORMAT_DISK
+    api: str = _constants.HCNETSDK_FORMAT_DISK
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return the native argument names for starting local SD formatting."""
@@ -627,11 +626,11 @@ class HcNetSdkFormatDiskRequest:
             raise _owner.PyEzvizError('HCNetSDK format API is unsupported')
         return {'api': self.api, 'lUserID': self.login_id, 'lDiskNumber': self.disk_number, 'failureHandle': -1}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkFormatProgressRequest:
     """Native ``NET_DVR_GetFormatProgress`` call shape."""
     format_handle: int
-    api: str = _owner.HCNETSDK_GET_FORMAT_PROGRESS
+    api: str = _constants.HCNETSDK_GET_FORMAT_PROGRESS
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return the native argument names for polling SD format progress."""
@@ -641,11 +640,11 @@ class HcNetSdkFormatProgressRequest:
             raise _owner.PyEzvizError('HCNetSDK format-progress API is unsupported')
         return {'api': self.api, 'lFormatHandle': self.format_handle, 'pCurrentFormatDisk': '<IntByReference>', 'pCurrentDiskPos': '<IntByReference>', 'pFormatStatic': '<IntByReference>'}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkCloseFormatHandleRequest:
     """Native ``NET_DVR_CloseFormatHandle`` call shape."""
     format_handle: int
-    api: str = _owner.HCNETSDK_CLOSE_FORMAT_HANDLE
+    api: str = _constants.HCNETSDK_CLOSE_FORMAT_HANDLE
 
     def to_native_args_hint(self) -> dict[str, _owner.Any]:
         """Return the native argument names for closing an SD format handle."""
@@ -655,7 +654,7 @@ class HcNetSdkCloseFormatHandleRequest:
             raise _owner.PyEzvizError('HCNetSDK close-format API is unsupported')
         return {'api': self.api, 'lFormatHandle': self.format_handle}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkSetupAlarmParam:
     """Native ``NET_DVR_SETUPALARM_PARAM`` shape used by alarm V41 setup."""
     level: int = 0
@@ -672,7 +671,7 @@ class HcNetSdkSetupAlarmParam:
         """Return the JNA field names and values for V41 alarm setup."""
         return {'structure': 'NET_DVR_SETUPALARM_PARAM', 'fieldOrder': _owner.HCNETSDK_SETUPALARM_PARAM_FIELD_ORDER, 'dwSize': 'sizeof(NET_DVR_SETUPALARM_PARAM)', 'byLevel': _owner._byte_value('alarm level', self.level), 'byAlarmInfoType': _owner._byte_value('alarm info type', self.alarm_info_type), 'byRetAlarmTypeV40': _owner._byte_value('alarm V40 return type', self.ret_alarm_type_v40), 'byRetDevInfoVersion': _owner._byte_value('alarm device-info version', self.ret_dev_info_version), 'byRetVQDAlarmType': _owner._byte_value('alarm VQD return type', self.ret_vqd_alarm_type), 'byFaceAlarmDetection': _owner._byte_value('face alarm detection', self.face_alarm_detection), 'bySupport': _owner._byte_value('alarm support', self.support), 'byBrokenNetHttp': _owner._byte_value('broken-net HTTP', self.broken_net_http), 'wTaskNo': _owner._word_value('alarm task number', self.task_no), 'byRes1Length': 6}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanSdFormatProgress:
     """RN-style result mapping for ``NET_DVR_GetFormatProgress`` values."""
     code: int
@@ -681,15 +680,15 @@ class EzvizLanSdFormatProgress:
     status: int
     done: bool
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkDeviceAbilityRequest:
     """Native ``NET_DVR_GetDeviceAbility`` call shape."""
     login_id: int
     ability_type: int
     in_buffer: str | bytes | None = None
-    output_buffer_size: int = _owner.HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE
-    retry_output_buffer_size: int | None = _owner.HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE
-    api: str = _owner.HCNETSDK_GET_DEVICE_ABILITY
+    output_buffer_size: int = _constants.HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE
+    retry_output_buffer_size: int | None = _constants.HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE
+    api: str = _constants.HCNETSDK_GET_DEVICE_ABILITY
 
     @property
     def in_buffer_bytes(self) -> bytes:
@@ -711,7 +710,7 @@ class HcNetSdkDeviceAbilityRequest:
         in_buffer = self.in_buffer_bytes
         return {'api': self.api, 'lUserID': self.login_id, 'dwAbilityType': self.ability_type, 'pInBuf': in_buffer if include_buffers and in_buffer else '<input-buffer>' if in_buffer else None, 'dwInLength': len(in_buffer), 'pOutBuf': '<output-buffer>', 'dwOutLength': self.output_buffer_size, 'retryOnError': _owner.HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR if self.retry_output_buffer_size is not None else None, 'retryDwOutLength': self.retry_output_buffer_size}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanPtzAbility:
     """Parsed PTZ ability values returned by local HCNetSDK ability XML."""
     control_types: str | None = None
@@ -725,7 +724,7 @@ class EzvizLanPtzAbility:
         """Return comma-separated PTZ control options as a tuple."""
         return _owner._ability_option_tuple(self.control_types)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanAccessProtocolAbility:
     """Parsed safe fields from ``AccessProtocolAbility`` XML."""
     channel_no: str | None = None
@@ -756,7 +755,7 @@ class EzvizLanAccessProtocolAbility:
         """Return comma-separated redirect options as a tuple."""
         return _owner._ability_option_tuple(self.allow_redirect_options)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanVideoPicAbility:
     """Parsed safe fields from ``VideoPicAbility`` XML."""
     channel_no: str | None = None
@@ -789,7 +788,7 @@ class EzvizLanVideoPicAbility:
         """Return comma-separated motion region-type options as a tuple."""
         return _owner._ability_option_tuple(self.motion_region_type_options)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanIpcFrontParameterRange:
     """One integer range advertised by ``CAMERAPARA`` ability XML."""
     minimum: int = 0
@@ -801,7 +800,7 @@ class EzvizLanIpcFrontParameterRange:
         """Return whether the range has a non-empty max/min span."""
         return self.maximum > self.minimum
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanIpcFrontParameterAbility:
     """Parsed safe image/front-parameter ranges from ``CAMERAPARA`` XML."""
     has_camera_para: bool = False
@@ -809,23 +808,23 @@ class EzvizLanIpcFrontParameterAbility:
     white_balance_mode_range: str | None = None
     exposure_mode_range: str | None = None
     exposure_set_range: str | None = None
-    exposure_user_set: EzvizLanIpcFrontParameterRange = _owner.field(default_factory=EzvizLanIpcFrontParameterRange)
-    gain_level: EzvizLanIpcFrontParameterRange = _owner.field(default_factory=EzvizLanIpcFrontParameterRange)
-    brightness_level: EzvizLanIpcFrontParameterRange = _owner.field(default_factory=EzvizLanIpcFrontParameterRange)
-    contrast_level: EzvizLanIpcFrontParameterRange = _owner.field(default_factory=EzvizLanIpcFrontParameterRange)
-    sharpness_level: EzvizLanIpcFrontParameterRange = _owner.field(default_factory=EzvizLanIpcFrontParameterRange)
-    saturation_level: EzvizLanIpcFrontParameterRange = _owner.field(default_factory=EzvizLanIpcFrontParameterRange)
+    exposure_user_set: EzvizLanIpcFrontParameterRange = _constants.field(default_factory=EzvizLanIpcFrontParameterRange)
+    gain_level: EzvizLanIpcFrontParameterRange = _constants.field(default_factory=EzvizLanIpcFrontParameterRange)
+    brightness_level: EzvizLanIpcFrontParameterRange = _constants.field(default_factory=EzvizLanIpcFrontParameterRange)
+    contrast_level: EzvizLanIpcFrontParameterRange = _constants.field(default_factory=EzvizLanIpcFrontParameterRange)
+    sharpness_level: EzvizLanIpcFrontParameterRange = _constants.field(default_factory=EzvizLanIpcFrontParameterRange)
+    saturation_level: EzvizLanIpcFrontParameterRange = _constants.field(default_factory=EzvizLanIpcFrontParameterRange)
     day_night_filter_type_range: str | None = None
     switch_schedule_enabled_range: str | None = None
     day_to_night_filter_level_range: str | None = None
     night_to_day_filter_level_range: str | None = None
-    day_night_filter_time: EzvizLanIpcFrontParameterRange = _owner.field(default_factory=EzvizLanIpcFrontParameterRange)
+    day_night_filter_time: EzvizLanIpcFrontParameterRange = _constants.field(default_factory=EzvizLanIpcFrontParameterRange)
     backlight_mode_range: str | None = None
     mirror_range: str | None = None
     digital_noise_reduction_enable_range: str | None = None
-    digital_noise_reduction_level: EzvizLanIpcFrontParameterRange = _owner.field(default_factory=EzvizLanIpcFrontParameterRange)
-    digital_noise_spectral_level: EzvizLanIpcFrontParameterRange = _owner.field(default_factory=EzvizLanIpcFrontParameterRange)
-    digital_noise_temporal_level: EzvizLanIpcFrontParameterRange = _owner.field(default_factory=EzvizLanIpcFrontParameterRange)
+    digital_noise_reduction_level: EzvizLanIpcFrontParameterRange = _constants.field(default_factory=EzvizLanIpcFrontParameterRange)
+    digital_noise_spectral_level: EzvizLanIpcFrontParameterRange = _constants.field(default_factory=EzvizLanIpcFrontParameterRange)
+    digital_noise_temporal_level: EzvizLanIpcFrontParameterRange = _constants.field(default_factory=EzvizLanIpcFrontParameterRange)
 
     @property
     def success(self) -> bool:
@@ -847,7 +846,7 @@ class EzvizLanIpcFrontParameterAbility:
         """Return comma-separated day/night filter type options as a tuple."""
         return _owner._ability_option_tuple(self.day_night_filter_type_range)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanAudioVideoCompressStream:
     """One video stream profile from ``AudioVideoCompressInfo`` XML."""
     index: int | None = None
@@ -859,15 +858,15 @@ class EzvizLanAudioVideoCompressStream:
     frame_rates: tuple[int, ...] = ()
     bitrate_min: int = 0
     bitrate_max: int = 0
-    resolutions: tuple[_owner.EzvizLanVideoResolution, ...] = _owner.field(default=(), kw_only=True)
-    bitrate_codes: tuple[int, ...] = _owner.field(default=(), kw_only=True)
+    resolutions: tuple[_owner.EzvizLanVideoResolution, ...] = _constants.field(default=(), kw_only=True)
+    bitrate_codes: tuple[int, ...] = _constants.field(default=(), kw_only=True)
 
     @property
     def resolution_count(self) -> int:
         """Return the number of advertised video resolutions."""
         return len(self.resolution_indexes)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanAudioVideoCompressVideoChannel:
     """One video channel from ``AudioVideoCompressInfo`` XML."""
     channel_number: int = 0
@@ -879,7 +878,7 @@ class EzvizLanAudioVideoCompressVideoChannel:
         """Return whether at least one sub-stream profile was advertised."""
         return bool(self.sub_streams)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanAudioVideoCompressAudioChannel:
     """One audio channel from ``AudioVideoCompressInfo`` XML."""
     channel_number: int = 0
@@ -889,14 +888,14 @@ class EzvizLanAudioVideoCompressAudioChannel:
     audio_in_volume_min: int = 0
     audio_in_volume_max: int = 0
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanAudioVideoCompressVoiceTalkChannel:
     """One voice-talk channel from ``AudioVideoCompressInfo`` XML."""
     channel_number: int = 0
     voice_talk_encode_type_range: str | None = None
     voice_talk_in_type_range: str | None = None
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanAudioVideoCompressInfo:
     """Parsed safe fields from ``AudioVideoCompressInfo`` XML."""
     video_channels: tuple[EzvizLanAudioVideoCompressVideoChannel, ...] = ()
@@ -915,7 +914,7 @@ class EzvizLanAudioVideoCompressInfo:
         """Return whether any video channel advertises sub-stream support."""
         return any(channel.supports_sub_stream for channel in self.video_channels)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanDeviceSoftHardwareAbility:
     """Parsed software/hardware ability values used by ``DeviceAbilityHelper``."""
     max_preview_num: int = 0
@@ -936,7 +935,7 @@ class EzvizLanDeviceSoftHardwareAbility:
         """Return the app's PTZ support boolean interpretation."""
         return self.ptz_support == 1
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanPlaybackConvertAbility:
     """Parsed playback conversion ability values used by the Android app."""
     resolutions: tuple[_owner.EzvizLanPlaybackConvertResolution, ...] = ()
@@ -946,7 +945,7 @@ class EzvizLanPlaybackConvertAbility:
         """Return whether any conversion resolution was parsed."""
         return bool(self.resolutions)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class EzvizLanLiveViewParams:
     """Relevant EZVIZ player init fields for ``PlayerDataType.LAN`` live view."""
     serial: str
@@ -954,12 +953,12 @@ class EzvizLanLiveViewParams:
     channel_serial: str | None = None
     channel_index: str | None = None
     channel_count: int | None = None
-    stream_source: int = _owner.EZVIZ_STREAM_SOURCE_LIVE_MINE
+    stream_source: int = _constants.EZVIZ_STREAM_SOURCE_LIVE_MINE
     stream_type: int = 1
-    video_level: int = _owner.EZVIZ_LAN_MAIN_VIDEO_LEVEL
-    stream_inhibit: int = _owner.EZVIZ_STREAM_INHIBIT_LAN
-    stream_timeout_ms: int = _owner.EZVIZ_STREAM_TIMEOUT_MS
-    preplay_sps_type: int = _owner.EZVIZ_PREPLAY_SPS_TYPE
+    video_level: int = _constants.EZVIZ_LAN_MAIN_VIDEO_LEVEL
+    stream_inhibit: int = _constants.EZVIZ_STREAM_INHIBIT_LAN
+    stream_timeout_ms: int = _constants.EZVIZ_STREAM_TIMEOUT_MS
+    preplay_sps_type: int = _constants.EZVIZ_PREPLAY_SPS_TYPE
     device_ip: str | None = None
     device_local_ip: str | None = None
     device_cmd_port: int | None = None
@@ -980,7 +979,7 @@ class EzvizLanLiveViewParams:
         """Return the direct HCNetSDK ``RealPlay_V30`` request shape."""
         return _owner.hcnetsdk_real_play_request(self.netsdk_login_id, channel_number=self.netsdk_channel_number or self.channel_number, link_mode=link_mode, blocked=blocked, multicast_ip=multicast_ip)
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class HcNetSdkTcpShapeLogRecord:
     """One secret-safe HCNetSDK command-port shape log line."""
     direction: str
@@ -992,7 +991,7 @@ class HcNetSdkTcpShapeLogRecord:
     fingerprint: str | None = None
     length_candidates: _owner.Mapping[str, int] | None = None
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class SadpDeviceNetParam:
     """Android ``SADP_DEV_NET_PARAM`` field updates used by the RN module."""
     ipv4_address: str
@@ -1014,13 +1013,13 @@ class SadpDeviceNetParam:
         ipv6_gateway = _owner._sadp_string_bytes('IPv6 gateway', self.ipv6_gateway, 128, allow_empty=True)
         return {'structure': 'SADP_DEV_NET_PARAM', 'androidFields': _owner.SADP_DEV_NET_PARAM_ANDROID_FIELDS, 'jnaFieldOrder': _owner.SADP_DEV_NET_PARAM_JNA_FIELD_ORDER, 'szIPv4Address': ipv4_address if include_buffers else self.ipv4_address, 'szIPv4SubnetMask': ipv4_subnet_mask if include_buffers else self.ipv4_subnet_mask, 'szIPv4Gateway': ipv4_gateway if include_buffers else self.ipv4_gateway, 'szIPv6Address': ipv6_address if include_buffers else self.ipv6_address, 'szIPv6Gateway': ipv6_gateway if include_buffers else self.ipv6_gateway, 'byDhcpEnabled': _owner._byte_value('SADP DHCP enabled', int(self.dhcp_enabled)), 'byIPv6MaskLen': _owner._byte_value('SADP IPv6 mask length', self.ipv6_mask_len), 'wHttpPort': _owner._port_value('SADP HTTP port', self.http_port), 'wPort': _owner._port_value('SADP command port', self.command_port)}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class SadpModifyDeviceNetParamRequest:
     """Android ``SADP_ModifyDeviceNetParam`` call shape."""
     mac: str
     password: str
     net_param: SadpDeviceNetParam
-    api: str = _owner.SADP_MODIFY_DEVICE_NET_PARAM
+    api: str = _constants.SADP_MODIFY_DEVICE_NET_PARAM
 
     def to_native_args_hint(self, *, include_password: bool=False, include_buffers: bool=False) -> dict[str, _owner.Any]:
         """Return the native argument names for a local SADP bridge."""
@@ -1031,7 +1030,7 @@ class SadpModifyDeviceNetParamRequest:
             raise _owner.PyEzvizError('SADP network password cannot be empty')
         return {'api': self.api, 'mac': mac, 'password': self.password if include_password else '<password>', 'passwordLength': len(self.password.encode('utf-8')), 'netParam': self.net_param.to_native_dict(include_buffers=include_buffers), 'lastErrorApi': _owner.SADP_GET_LAST_ERROR}
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class SadpDeviceRetNetParam:
     """Native ``SADP_DEV_RET_NET_PARAM`` output-buffer shape."""
     retry_modify_time: int | None = None
@@ -1046,14 +1045,14 @@ class SadpDeviceRetNetParam:
             result['bySurplusLockTime'] = _owner._byte_value('SADP surplus lock time', self.surplus_lock_time)
         return result
 
-@_owner.dataclass(frozen=True)
+@_constants.dataclass(frozen=True)
 class SadpModifyDeviceNetParamV40Request:
     """Android ``SADP_ModifyDeviceNetParam_V40`` call shape."""
     mac: str
     password: str
     net_param: SadpDeviceNetParam
     ret_net_param: SadpDeviceRetNetParam | None = None
-    api: str = _owner.SADP_MODIFY_DEVICE_NET_PARAM_V40
+    api: str = _constants.SADP_MODIFY_DEVICE_NET_PARAM_V40
 
     def to_native_args_hint(self, *, include_password: bool=False, include_buffers: bool=False) -> dict[str, _owner.Any]:
         """Return the V40 native argument names for a local SADP bridge."""
@@ -1066,3 +1065,6 @@ class SadpModifyDeviceNetParamV40Request:
             raise _owner.PyEzvizError('SADP V40 network-param API is unsupported')
         ret_net_param = self.ret_net_param or _owner.SadpDeviceRetNetParam()
         return {'api': self.api, 'mac': mac, 'password': self.password if include_password else '<password>', 'passwordLength': len(self.password.encode('utf-8')), 'netParam': self.net_param.to_native_dict(include_buffers=include_buffers), 'lpRetNetParam': ret_net_param.to_native_dict(), 'dwOutBuffSize': _owner.SADP_DEV_RET_NET_PARAM_BUFFER_SIZE, 'lastErrorApi': _owner.SADP_GET_LAST_ERROR}
+
+# Late owner reference preserves legacy model hook and annotation resolution.
+import pyezvizapi.streaming.local.hcnetsdk.protocol as _owner

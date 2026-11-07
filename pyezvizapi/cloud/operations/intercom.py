@@ -1,17 +1,16 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""intercom implementation; legacy runtime hooks remain on the owner module.
-
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
+'intercom implementation; runtime hooks arrive through an explicit owner context.\n\nAccess through _owner is deliberate: callers that patch the compatibility\nmodule must still affect dependent operations. No copied hook snapshots.\n'
 from __future__ import annotations
 
-import pyezvizapi.client as _owner
+from collections.abc import Mapping as _StaticMapping
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pyezvizapi.client as _owner_types
 
-def get_cam_auth_code(self: _owner.EzvizClient, serial: str, encrypt_pwd: str | None=None, msg_auth_code: str | int | None=None, sender_type: int=0, max_retries: int=0) -> _owner.Any:
+def get_cam_auth_code(self: _owner_types.EzvizClient, serial: str, encrypt_pwd: str | None, msg_auth_code: str | int | None, sender_type: int, max_retries: int, *, _owner: _ModuleType) -> _owner_types.Any:
     """Get Camera auth code. This is the verification code on the camera sticker.
 
         Args:
@@ -49,7 +48,7 @@ def get_cam_auth_code(self: _owner.EzvizClient, serial: str, encrypt_pwd: str | 
         raise _owner.PyEzvizError(f'Could not get camera verification key: Got {self._response_summary(json_output)}')
     return json_output['devAuthCode']
 
-def get_2fa_check_code(self: _owner.EzvizClient, biz_type: str='DEVICE_AUTH_CODE', username: str | None=None, max_retries: int=0) -> _owner.Any:
+def get_2fa_check_code(self: _owner_types.EzvizClient, biz_type: str, username: str | None, max_retries: int, *, _owner: _ModuleType) -> _owner_types.Any:
     """Initiate 2FA check for sensitive operations. Elevates your session token permission.
 
         Args:
@@ -81,7 +80,7 @@ def get_2fa_check_code(self: _owner.EzvizClient, biz_type: str='DEVICE_AUTH_CODE
         raise _owner.PyEzvizError(f'Could not request elevated permission: Got {self._response_summary(json_output)})')
     return json_output
 
-def create_panoramic(self: _owner.EzvizClient, serial: str, max_retries: int=0) -> _owner.Any:
+def create_panoramic(self: _owner_types.EzvizClient, serial: str, max_retries: int, *, _owner: _ModuleType) -> _owner_types.Any:
     """Create panoramic image."""
     if max_retries > _owner.MAX_RETRIES:
         raise _owner.PyEzvizError("Can't gather proper data. Max retries exceeded.")
@@ -97,14 +96,14 @@ def create_panoramic(self: _owner.EzvizClient, serial: str, max_retries: int=0) 
         raise _owner.PyEzvizError(f'Could not send command to create panoramic photo: Got {self._response_summary(json_output)})')
     raise _owner.PyEzvizError('Could not send command to create panoramic photo: exceeded retries')
 
-def return_panoramic(self: _owner.EzvizClient, serial: str, max_retries: int=0) -> _owner.Any:
+def return_panoramic(self: _owner_types.EzvizClient, serial: str, max_retries: int, *, _owner: _ModuleType) -> _owner_types.Any:
     """Return panoramic image url list."""
     json_output = self._retry_json(lambda: self._request_json('POST', _owner.API_ENDPOINT_RETURN_PANORAMIC, data={'deviceSerial': serial}, retry_401=True, max_retries=0), attempts=max_retries, should_retry=lambda p: str(p.get('resultCode')) == '-1', log='panoramic_busy_or_unreachable', serial=serial)
     if str(json_output.get('resultCode')) != '0':
         raise _owner.PyEzvizError(f'Could retrieve panoramic photo: Got {self._response_summary(json_output)})')
     return json_output
 
-def ptz_control_coordinates(self: _owner.EzvizClient, serial: str, x_axis: float, y_axis: float, *, resource_identifier: str='Video_1', local_index: str='1', max_retries: int=0) -> bool:
+def ptz_control_coordinates(self: _owner_types.EzvizClient, serial: str, x_axis: float, y_axis: float, *, resource_identifier: str, local_index: str, max_retries: int, _owner: _ModuleType) -> bool:
     """PTZ Coordinate Move."""
     if not 0 <= x_axis <= 1:
         raise _owner.PyEzvizError(f'Invalid X coordinate: {x_axis}: Should be between 0 and 1 inclusive')
@@ -114,23 +113,23 @@ def ptz_control_coordinates(self: _owner.EzvizClient, serial: str, x_axis: float
     _owner._LOGGER.debug('http_debug: serial=%s code=%s msg=%s', serial, self._meta_code(json_result), 'ptz_control_coordinates')
     return True
 
-def get_door_lock_users(self: _owner.EzvizClient, serial: str, *, max_retries: int=0) -> _owner.JsonDict:
+def get_door_lock_users(self: _owner_types.EzvizClient, serial: str, *, max_retries: int, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Retrieve users associated with a door lock device."""
     json_output = self._request_json('GET', f'{_owner.API_ENDPOINT_DOORLOCK_USERS}{serial}/users', retry_401=True, max_retries=max_retries)
     self._ensure_ok(json_output, 'Could not get door lock users')
     return json_output
 
-def get_terminals(self: _owner.EzvizClient, *, limit: int=20, offset: int=0, max_retries: int=0) -> _owner.JsonDict:
+def get_terminals(self: _owner_types.EzvizClient, *, limit: int, offset: int, max_retries: int, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Retrieve account terminal information."""
     return self._request_json('GET', _owner.API_ENDPOINT_TERMINAL_INFO, params={'limit': limit, 'offset': offset}, retry_401=True, max_retries=max_retries)
 
-def get_latest_terminal_bind(self: _owner.EzvizClient, *, limit: int=20, offset: int=0, terminal_name: str | None='Hassio', max_retries: int=0) -> tuple[str, str]:
+def get_latest_terminal_bind(self: _owner_types.EzvizClient, *, limit: int, offset: int, terminal_name: str | None, max_retries: int, _owner: _ModuleType) -> tuple[str, str]:
     """Return the latest terminal bind code and terminal user name."""
     json_output = self.get_terminals(limit=limit, offset=offset, max_retries=max_retries)
     terminals = json_output.get('terminals')
     if not isinstance(terminals, list) or not terminals:
         raise _owner.PyEzvizError('No terminal information found')
-    terminal_items = [item for item in terminals if isinstance(item, _owner.Mapping) and str(item.get('sign') or '').strip() and str(item.get('userId') or '').strip()]
+    terminal_items = [item for item in terminals if isinstance(item, _StaticMapping) and str(item.get('sign') or '').strip() and str(item.get('userId') or '').strip()]
     if not terminal_items:
         raise _owner.PyEzvizError('No terminal bind information found')
     if terminal_name:
@@ -144,7 +143,7 @@ def get_latest_terminal_bind(self: _owner.EzvizClient, *, limit: int=20, offset:
     user_name = terminal.get('name') or terminal.get('terminalName') or terminal_user_id
     return (f'{sign}{terminal_user_id}', str(user_name))
 
-def remote_unlock(self: _owner.EzvizClient, serial: str, user_id: str, lock_no: int, *, resource_id: str | None=None, local_index: str | int | None=None, stream_token: str | None=None, lock_type: str | None=None, bind_code: str | None=None, terminal_filter_name: str | None='Hassio', use_terminal_bind: bool=True) -> bool:  # noqa: PLR0913 -- existing self plus unchanged public arguments
+def remote_unlock(self: _owner_types.EzvizClient, serial: str, user_id: str, lock_no: int, *, resource_id: str | None, local_index: str | int | None, stream_token: str | None, lock_type: str | None, bind_code: str | None, terminal_filter_name: str | None, use_terminal_bind: bool, _owner: _ModuleType) -> bool:  # noqa: PLR0913 -- explicit runtime context plus retained signature
     """Sends a remote command to unlock a specific lock.
 
         Args:
@@ -187,7 +186,7 @@ def remote_unlock(self: _owner.EzvizClient, serial: str, user_id: str, lock_no: 
             _owner._LOGGER.debug('Terminal bind unavailable for %s, using legacy bind code: %s', serial, err)
     if effective_bind_code is None:
         effective_bind_code = f'{_owner.FEATURE_CODE}{user_id}'
-    un_lock_info: dict[str, _owner.Any] = {'bindCode': effective_bind_code, 'lockNo': lock_no, 'streamToken': stream_token or '', 'userName': effective_user_name}
+    un_lock_info: dict[str, _owner_types.Any] = {'bindCode': effective_bind_code, 'lockNo': lock_no, 'streamToken': stream_token or '', 'userName': effective_user_name}
     if lock_type:
         un_lock_info['type'] = lock_type
     payload = {'unLockInfo': un_lock_info}
@@ -196,11 +195,11 @@ def remote_unlock(self: _owner.EzvizClient, serial: str, user_id: str, lock_no: 
     self._ensure_ok(json_result, 'Could not remotely unlock device')
     return True
 
-def remote_lock(self: _owner.EzvizClient, serial: str, user_id: str, lock_no: int, *, resource_id: str | None=None, local_index: str | int | None=None, stream_token: str | None=None, lock_type: str | None=None) -> bool:
+def remote_lock(self: _owner_types.EzvizClient, serial: str, user_id: str, lock_no: int, *, resource_id: str | None, local_index: str | int | None, stream_token: str | None, lock_type: str | None, _owner: _ModuleType) -> bool:
     """Send a remote lock command to a specific lock."""
     route_resource = resource_id or 'Video'
     route_index = str(local_index if local_index is not None else 1)
-    un_lock_info: dict[str, _owner.Any] = {'bindCode': f'{_owner.FEATURE_CODE}{user_id}', 'lockNo': lock_no, 'streamToken': stream_token or '', 'userName': user_id}
+    un_lock_info: dict[str, _owner_types.Any] = {'bindCode': f'{_owner.FEATURE_CODE}{user_id}', 'lockNo': lock_no, 'streamToken': stream_token or '', 'userName': user_id}
     if lock_type:
         un_lock_info['type'] = lock_type
     payload = {'unLockInfo': un_lock_info}
@@ -209,7 +208,7 @@ def remote_lock(self: _owner.EzvizClient, serial: str, user_id: str, lock_no: in
     self._ensure_ok(json_result, 'Could not remotely lock device')
     return True
 
-def get_remote_unbind_progress(self: _owner.EzvizClient, serial: str, *, max_retries: int=0) -> _owner.JsonDict:
+def get_remote_unbind_progress(self: _owner_types.EzvizClient, serial: str, *, max_retries: int, _owner: _ModuleType) -> _owner_types.JsonDict:
     """Check progress of a remote unbind request."""
     json_output = self._request_json('GET', f'{_owner.API_ENDPOINT_REMOTE_UNBIND_PROGRESS}{serial}/progress', retry_401=True, max_retries=max_retries)
     self._ensure_ok(json_output, 'Could not get unbind progress')

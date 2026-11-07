@@ -1,17 +1,15 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""authentication implementation; legacy runtime hooks remain on the owner module.
-
-Access through _owner is deliberate: callers that patch the compatibility
-module must still affect dependent operations. No copied hook snapshots.
-"""
+'authentication implementation; legacy runtime hooks remain on the owner module.\n\nAccess through _owner is deliberate: callers that patch the compatibility\nmodule must still affect dependent operations. No copied hook snapshots.\n'
 from __future__ import annotations
 
-import pyezvizapi.streaming.local.hcnetsdk.api as _owner
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.local.hcnetsdk.api as _owner_types
 
-def ezviz_local_sdk_ssl_iv(size: int=_owner.EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE, *, seed: bytes=_owner.EZVIZ_LOCAL_SDK_SSL_IV_PREFIX) -> bytes:
+def ezviz_local_sdk_ssl_iv(size: int, *, seed: bytes, _owner: _ModuleType) -> bytes:
     """Return the app-shaped IV used for local SDK SSL-like frames.
 
     EZVIZ traces show the direct-local stack creates one IV per preview setup
@@ -26,7 +24,7 @@ def ezviz_local_sdk_ssl_iv(size: int=_owner.EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE, *, s
         raise _owner.PyEzvizError('EZVIZ local SDK SSL IV seed must be 8 bytes')
     return seed + bytes(size - len(seed))
 
-def ezviz_lan_login_candidates(verification_code: str, *, username: str=_owner.HCNETSDK_EZVIZ_DEFAULT_USERNAME, command_port: int=_owner.HCNETSDK_DEFAULT_SERVER_PORT, tls_port: int=_owner.HCNETSDK_DEFAULT_TLS_PORT) -> list[_owner.HcNetSdkLoginCandidate]:
+def ezviz_lan_login_candidates(verification_code: str, *, username: str, command_port: int, tls_port: int, _owner: _ModuleType) -> list[_owner_types.HcNetSdkLoginCandidate]:
     """Return EZVIZ app-style HCNetSDK LAN login attempts.
 
     APK inspection shows LAN login tries HCNetSDK V40 over HTTPS first, then
@@ -40,25 +38,25 @@ def ezviz_lan_login_candidates(verification_code: str, *, username: str=_owner.H
     local_password = _owner.ezviz_lan_local_user_password(code)
     return [_owner.HcNetSdkLoginCandidate(username=username, password=code, port=tls_port, api='NET_DVR_Login_V40', https=True), _owner.HcNetSdkLoginCandidate(username=username, password=code, port=command_port, api='NET_DVR_Login_V30'), _owner.HcNetSdkLoginCandidate(username=_owner.HCNETSDK_EZVIZ_LOCAL_USERNAME, password=local_password, port=command_port, api='NET_DVR_Login_V30')]
 
-def ezviz_lan_local_user_password(password: str) -> str:
+def ezviz_lan_local_user_password(password: str, *, _owner: _ModuleType) -> str:
     """Return the EZ_LOCAL_USER password derived by AddMD5Util.a(...)."""
     return _owner.hashlib.md5(password.encode('utf-8')).hexdigest()[8:24].lower()
 
-def ezviz_lan_password_store_name(user_id: str) -> str:
+def ezviz_lan_password_store_name(user_id: str, *, _owner: _ModuleType) -> str:
     """Return the SharedPreferences name used for LAN Live View passwords."""
     user = user_id.strip()
     if not user:
         raise _owner.PyEzvizError('Missing EZVIZ user id for LAN password store')
     return f'{user}{_owner.HCNETSDK_EZVIZ_LAN_PASSWORD_PREF_SUFFIX}'
 
-def ezviz_lan_password_store_key(serial: str) -> str:
+def ezviz_lan_password_store_key(serial: str, *, _owner: _ModuleType) -> str:
     """Return the SharedPreferences key used for one LAN device password."""
     device_serial = serial.strip()
     if not device_serial:
         raise _owner.PyEzvizError('Missing EZVIZ device serial for LAN password store')
     return f'{_owner.HCNETSDK_EZVIZ_LAN_PASSWORD_KEY_PREFIX}{device_serial}'
 
-def ezviz_lan_settings_login_candidates(verification_code: str, *, username: str=_owner.HCNETSDK_EZVIZ_DEFAULT_USERNAME, command_port: int=_owner.HCNETSDK_DEFAULT_SERVER_PORT, tls_port: int=_owner.HCNETSDK_DEFAULT_TLS_PORT, login_with_8443: bool | None=None) -> list[_owner.HcNetSdkLoginCandidate]:
+def ezviz_lan_settings_login_candidates(verification_code: str, *, username: str, command_port: int, tls_port: int, login_with_8443: bool | None, _owner: _ModuleType) -> list[_owner_types.HcNetSdkLoginCandidate]:
     """Return the LAN Live View settings-screen login attempts.
 
     LanDeviceListPresenter.o(...) differs slightly from the older
@@ -85,26 +83,26 @@ def ezviz_lan_settings_login_candidates(verification_code: str, *, username: str
         return candidates[1:]
     return candidates
 
-def ezviz_lan_user_password_update_request(login_id: int, password: str | bytes) -> _owner.HcNetSdkDvrConfigRequest:
+def ezviz_lan_user_password_update_request(login_id: int, password: str | bytes, *, _owner: _ModuleType) -> _owner_types.HcNetSdkDvrConfigRequest:
     """Return the local admin-user password update request shape."""
     password_bytes = _owner._bounded_bytes('user password', password, 16)
     if not password_bytes:
         raise _owner.PyEzvizError('EZVIZ LAN user password cannot be empty')
     return _owner.hcnetsdk_dvr_config_set_request(login_id, _owner.HcNetSdkDvrCommand.SET_USER_CFG_V30, structure='NET_DVR_USER_V30', field_updates={'struUser[0].sPassword': '<password-bytes>', 'struUser[0].sPasswordLength': len(password_bytes), 'struUser[0].sPasswordZeroFill': 16}, read_before_write=True)
 
-def ezviz_lan_settings_error_clears_password(error_code: int) -> bool:
+def ezviz_lan_settings_error_clears_password(error_code: int, *, _owner: _ModuleType) -> bool:
     """Return whether LanDeviceListActivity.q(...) clears the LAN password."""
     return error_code in (_owner.HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_ERROR, _owner.HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_LOCKED_ERROR)
 
-def ezviz_lan_settings_login_succeeded(login_id: int) -> bool:
+def ezviz_lan_settings_login_succeeded(login_id: int, *, _owner: _ModuleType) -> bool:
     """Return whether the settings presenter treats an HCNetSDK login as OK."""
     return login_id >= 0
 
-def ezviz_lan_play_device_login_succeeded(login_id: int) -> bool:
+def ezviz_lan_play_device_login_succeeded(login_id: int, *, _owner: _ModuleType) -> bool:
     """Return whether DeviceInfoEx.loginPlayDevice(...) returned a login id."""
     return login_id >= 0
 
-def hcnetsdk_command_port_login_request_frame(public_key_der: bytes, *, username: str=_owner.HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str) -> bytes:
+def hcnetsdk_command_port_login_request_frame(public_key_der: bytes, *, username: str, local_ip: str, _owner: _ModuleType) -> bytes:
     """Build the first port-8000 RSA login frame.
 
     The native SDK sends a PKCS#1 ``RSAPublicKey`` DER blob, not the longer
@@ -113,7 +111,7 @@ def hcnetsdk_command_port_login_request_frame(public_key_der: bytes, *, username
     body = _owner._hcnetsdk_command_port_login_prefix(local_ip) + _owner._hcnetsdk_command_port_username(username) + public_key_der
     return _owner.build_hcnetsdk_tcp_frame(body, field_4=_owner.HCNETSDK_COMMAND_PORT_LOGIN_FAMILY, field_12=_owner.HCNETSDK_COMMAND_PORT_LOGIN_HEADER_FIELD_12)
 
-def hcnetsdk_command_port_password_digest(username: str, password: str | bytes, password_seed: bytes) -> bytes:
+def hcnetsdk_command_port_password_digest(username: str, password: str | bytes, password_seed: bytes, *, _owner: _ModuleType) -> bytes:
     """Return the native SDK SHA-256 password branch for command-port login.
 
     This is a device-protocol compatibility digest, not password storage.
@@ -127,7 +125,7 @@ def hcnetsdk_command_port_password_digest(username: str, password: str | bytes, 
     digest.update(password_bytes)
     return digest.hexdigest().encode()
 
-def hcnetsdk_command_port_login_proof(username: str, password: str | bytes, challenge: bytes, password_seed: bytes) -> tuple[bytes, bytes]:
+def hcnetsdk_command_port_login_proof(username: str, password: str | bytes, challenge: bytes, password_seed: bytes, *, _owner: _ModuleType) -> tuple[bytes, bytes]:
     """Return the two proof chunks for the second command-port login frame.
 
     The native device handshake uses MD5 HMAC branches here for compatibility;
@@ -139,13 +137,13 @@ def hcnetsdk_command_port_login_proof(username: str, password: str | bytes, chal
     password_digest = _owner.hcnetsdk_command_port_password_digest(username, password, password_seed)
     return (_owner._hcnetsdk_command_port_md5_hmac(challenge, username.encode()), _owner._hcnetsdk_command_port_md5_hmac(challenge, password_digest))
 
-def hcnetsdk_command_port_login_proof_frame(*, username: str=_owner.HCNETSDK_EZVIZ_DEFAULT_USERNAME, password: str | bytes, challenge: bytes, password_seed: bytes, local_ip: str) -> bytes:
+def hcnetsdk_command_port_login_proof_frame(*, username: str, password: str | bytes, challenge: bytes, password_seed: bytes, local_ip: str, _owner: _ModuleType) -> bytes:
     """Build the second port-8000 login proof frame."""
     primary, secondary = _owner.hcnetsdk_command_port_login_proof(username, password, challenge, password_seed)
     body = _owner._hcnetsdk_command_port_login_prefix(local_ip) + primary.ljust(_owner.HCNETSDK_COMMAND_PORT_PRIMARY_PROOF_LENGTH, b'\x00') + secondary[:_owner.HCNETSDK_COMMAND_PORT_SECONDARY_PROOF_LENGTH]
     return _owner.build_hcnetsdk_tcp_frame(body, field_4=_owner.HCNETSDK_COMMAND_PORT_LOGIN_FAMILY, field_12=_owner.HCNETSDK_COMMAND_PORT_LOGIN_HEADER_FIELD_12)
 
-def decode_hcnetsdk_command_port_login_challenge(response: _owner.HcNetSdkTcpFrame, rsa_key: _owner.Any) -> _owner.HcNetSdkCommandPortLoginChallenge:
+def decode_hcnetsdk_command_port_login_challenge(response: _owner_types.HcNetSdkTcpFrame, rsa_key: _owner_types.Any, *, _owner: _ModuleType) -> _owner_types.HcNetSdkCommandPortLoginChallenge:
     """Decrypt the first command-port login response with the RSA private key."""
     if len(response.body) < _owner.HCNETSDK_COMMAND_PORT_RSA_BLOCK_LENGTH + _owner.HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH:
         raise _owner.PyEzvizError('HCNetSDK command-port login challenge response is truncated')
@@ -154,7 +152,7 @@ def decode_hcnetsdk_command_port_login_challenge(response: _owner.HcNetSdkTcpFra
         raise _owner.PyEzvizError('HCNetSDK command-port RSA challenge decrypt failed')
     return _owner.HcNetSdkCommandPortLoginChallenge(response=response, challenge=challenge.rstrip(b'\x00'), password_seed=response.body[_owner.HCNETSDK_COMMAND_PORT_RSA_BLOCK_LENGTH:_owner.HCNETSDK_COMMAND_PORT_RSA_BLOCK_LENGTH + _owner.HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH])
 
-def ezviz_lan_play_device_login(endpoint: _owner.HcNetSdkLanEndpoint, *, check_last_login_status: bool=False) -> _owner.EzvizLanPlayDeviceLogin:
+def ezviz_lan_play_device_login(endpoint: _owner_types.HcNetSdkLanEndpoint, *, check_last_login_status: bool, _owner: _ModuleType) -> _owner_types.EzvizLanPlayDeviceLogin:
     """Build the player-side LAN HCNetSDK login step observed in the APK.
 
     The settings screen's login id is only a gate for opening the player. The
@@ -166,7 +164,7 @@ def ezviz_lan_play_device_login(endpoint: _owner.HcNetSdkLanEndpoint, *, check_l
         raise _owner.PyEzvizError('Missing EZVIZ LAN play-device host')
     return _owner.EzvizLanPlayDeviceLogin(endpoint=endpoint, check_last_login_status=check_last_login_status)
 
-def encrypt_ezviz_local_sdk_body_aes_cbc(body: bytes | str, *, key: bytes | str, iv: bytes | str) -> bytes:
+def encrypt_ezviz_local_sdk_body_aes_cbc(body: bytes | str, *, key: bytes | str, iv: bytes | str, _owner: _ModuleType) -> bytes:
     """Encrypt a local SDK control body with AES-CBC/PKCS#5 padding.
 
     The EZVIZ app's local control frames use AES-CBC with 16-byte block
@@ -177,10 +175,10 @@ def encrypt_ezviz_local_sdk_body_aes_cbc(body: bytes | str, *, key: bytes | str,
     body_bytes = body.encode('utf-8') if isinstance(body, str) else body
     return _owner.AES.new(_owner._local_sdk_aes_bytes('key', key), _owner.AES.MODE_CBC, _owner._local_sdk_aes_bytes('IV', iv)).encrypt(_owner._pkcs5_pad(body_bytes))
 
-def decrypt_ezviz_local_sdk_body_aes_cbc(body: bytes, *, key: bytes | str, iv: bytes | str) -> bytes:
+def decrypt_ezviz_local_sdk_body_aes_cbc(body: bytes, *, key: bytes | str, iv: bytes | str, _owner: _ModuleType) -> bytes:
     """Decrypt a local SDK AES-CBC/PKCS#5 control body."""
     plain = _owner.AES.new(_owner._local_sdk_aes_bytes('key', key), _owner.AES.MODE_CBC, _owner._local_sdk_aes_bytes('IV', iv)).decrypt(body)
     return _owner._pkcs5_unpad(plain)
 
-def _hcnetsdk_command_port_login_prefix(local_ip: str) -> bytes:
+def _hcnetsdk_command_port_login_prefix(local_ip: str, *, _owner: _ModuleType) -> bytes:
     return _owner.HCNETSDK_COMMAND_PORT_LOGIN_SEED_PREFIX + _owner._hcnetsdk_command_port_local_ip_word(local_ip) + _owner.HCNETSDK_COMMAND_PORT_LOGIN_SEED_SUFFIX

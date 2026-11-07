@@ -1,13 +1,15 @@
-# Runtime hooks deliberately resolve through their legacy owner.
+# Runtime hook context is explicit; immutable value types come from dependency leaves.
 # ruff: noqa: SLF001
-
-"""stream command handlers; legacy hooks resolve through cli.main."""
+'stream command handlers; cli.main passes the retained runtime hooks explicitly.'
 from __future__ import annotations
 
-import pyezvizapi.cli.main as _owner
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pyezvizapi.cli.main as _owner_types
 
-def _handle_stream(args: _owner.argparse.Namespace, client: _owner.EzvizClient) -> int:
+def _handle_stream(args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType) -> int:
     """Handle experimental stream helpers."""
     if args.stream_action not in {'trace', 'dump', 'proxy', 'local-sdk-dump', 'local-sdk-keys', 'h264-annexb-summary', 'hcnetsdk-command-dump-summary', 'hcnetsdk-command-plan-generate'}:
         _owner._LOGGER.error('Action not implemented, try running with -h switch for help')
@@ -32,7 +34,7 @@ def _handle_stream(args: _owner.argparse.Namespace, client: _owner.EzvizClient) 
     with _owner._closing_unconnected_cloud_stream(stream):
         if args.stream_action == 'dump':
             startup_deadline = _owner._start_cli_cloud_stream(stream, timeout=args.timeout, duration_seconds=args.duration)
-            collected_packets: list[_owner.Any] | None = None
+            collected_packets: list[_owner_types.Any] | None = None
             if args.decrypt_video:
                 collected_packets = _owner._collect_stream_packets(stream, max_packets=args.max_packets, duration_seconds=args.duration, first_packet_deadline=startup_deadline, allow_encrypted=args.allow_encrypted)
                 transport = _owner._detect_stream_packets_transport(collected_packets)
@@ -42,7 +44,7 @@ def _handle_stream(args: _owner.argparse.Namespace, client: _owner.EzvizClient) 
                         _owner._rtp_packets_to_annexb_units(collected_packets, codec=rtp_codec, first_slice_key=media_key, decrypt_codec=args.decrypt_codec)
                         assert media_key is not None
 
-                        def _write_rtp_mpegts(selected_output: _owner.BinaryIO) -> None:
+                        def _write_rtp_mpegts(selected_output: _owner_types.BinaryIO) -> None:
                             _owner.copy_decrypted_cloud_stream_packets_to_mpegts(collected_packets, selected_output, ffmpeg_path=args.ffmpeg_path, media_key=media_key, nalu_header_size=_owner._codec_nalu_header_size(args.decrypt_codec), transport=transport)
                         if args.output == '-':
                             _write_rtp_mpegts(_owner.sys.stdout.buffer)

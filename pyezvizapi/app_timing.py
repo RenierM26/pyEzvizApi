@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.app_timing`.
 
@@ -12,30 +14,29 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming import app_timing as _implementation
 
 if TYPE_CHECKING:
-    from pyezvizapi.streaming.app_timing import (
-        _PES_CHUNK_BYTES as _PES_CHUNK_BYTES,
-        _TICKS_PER_MS as _TICKS_PER_MS,
-        AppPlaybackClock as AppPlaybackClock,
-        AppTimedFrame as AppTimedFrame,
-        BinaryIO as BinaryIO,
-        Iterable as Iterable,
-        Iterator as Iterator,
-        Literal as Literal,
-        PyEzvizError as PyEzvizError,
-        _mpeg_crc32 as _mpeg_crc32,
-        _pack_header as _pack_header,
-        _pes as _pes,
-        _stream_map as _stream_map,
-        _TrackClock as _TrackClock,
-        _validate_frame as _validate_frame,
-        annotations as annotations,
-        app_timed_mpegps_payloads as app_timed_mpegps_payloads,
-        chain as chain,
-        copy_app_timed_frames_to_mpegts as copy_app_timed_frames_to_mpegts,
-        copy_remuxed_output as copy_remuxed_output,
-        dataclass as dataclass,
-        open_mpegts_remux_process as open_mpegts_remux_process,
-        subprocess as subprocess,
-    )
+    import pyezvizapi.streaming.app_timing as _compat_module_0
+    _PES_CHUNK_BYTES = _compat_module_0._PES_CHUNK_BYTES
+    _TICKS_PER_MS = _compat_module_0._TICKS_PER_MS
+    AppPlaybackClock = _compat_module_0.AppPlaybackClock
+    AppTimedFrame = _compat_module_0.AppTimedFrame
+    BinaryIO = _compat_module_0.BinaryIO
+    Iterable = _compat_module_0.Iterable
+    Iterator = _compat_module_0.Iterator
+    Literal = _compat_module_0.Literal
+    PyEzvizError = _compat_module_0.PyEzvizError
+    _mpeg_crc32 = _compat_module_0._mpeg_crc32
+    _pack_header = _compat_module_0._pack_header
+    _pes = _compat_module_0._pes
+    _stream_map = _compat_module_0._stream_map
+    _TrackClock = _compat_module_0._TrackClock
+    _validate_frame = _compat_module_0._validate_frame
+    annotations = _compat_module_0.annotations
+    app_timed_mpegps_payloads = _compat_module_0.app_timed_mpegps_payloads
+    chain = _compat_module_0.chain
+    copy_app_timed_frames_to_mpegts = _compat_module_0.copy_app_timed_frames_to_mpegts
+    copy_remuxed_output = _compat_module_0.copy_remuxed_output
+    dataclass = _compat_module_0.dataclass
+    open_mpegts_remux_process = _compat_module_0.open_mpegts_remux_process
+    subprocess = _compat_module_0.subprocess
 
 sys.modules[__name__] = _implementation

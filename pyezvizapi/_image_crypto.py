@@ -1,5 +1,7 @@
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
 # Compatibility aliases are explicit type-checker re-exports.
-# ruff: noqa: PLC0414
+# Compatibility aliases are explicit type-checker re-exports.
 
 """Compatibility alias. Implementation: :mod:`pyezvizapi._shared.image_crypto`.
 
@@ -12,19 +14,19 @@ from typing import TYPE_CHECKING
 from pyezvizapi._shared import image_crypto as _implementation
 
 if TYPE_CHECKING:
-    from Crypto.Cipher import AES as AES
+    import Crypto.Cipher as _compat_module_0
+    AES = _compat_module_0.AES
 
-    from pyezvizapi._shared.image_crypto import (
-        _LOGGER as _LOGGER,
-        HIK_ENCRYPTION_HEADER as HIK_ENCRYPTION_HEADER,
-        PyEzvizError as PyEzvizError,
-        _decrypt_single_block as _decrypt_single_block,
-        _split_encrypted_blocks as _split_encrypted_blocks,
-        annotations as annotations,
-        decrypt_image as decrypt_image,
-        logging as logging,
-        md5 as md5,
-        return_password_hash as return_password_hash,
-    )
+    import pyezvizapi._shared.image_crypto as _compat_module_1
+    _LOGGER = _compat_module_1._LOGGER
+    HIK_ENCRYPTION_HEADER = _compat_module_1.HIK_ENCRYPTION_HEADER
+    PyEzvizError = _compat_module_1.PyEzvizError
+    _decrypt_single_block = _compat_module_1._decrypt_single_block
+    _split_encrypted_blocks = _compat_module_1._split_encrypted_blocks
+    annotations = _compat_module_1.annotations
+    decrypt_image = _compat_module_1.decrypt_image
+    logging = _compat_module_1.logging
+    md5 = _compat_module_1.md5
+    return_password_hash = _compat_module_1.return_password_hash
 
 sys.modules[__name__] = _implementation

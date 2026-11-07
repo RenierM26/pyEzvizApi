@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-import math
 import re
 import socket
 import time
@@ -14,6 +13,7 @@ from typing import TypedDict
 from requests.utils import parse_dict_header
 
 from .exceptions import AuthTestResultFailed, InvalidHost
+from .media import is_positive_finite_duration_bound
 
 _LOGGER = logging.getLogger(__name__)
 _HEADER_END = b"\r\n\r\n"
@@ -83,7 +83,7 @@ class TestRTSPAuth:
         timeout: float = 25.0,
     ) -> None:
         """Initialize RTSP credential test."""
-        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not is_positive_finite_duration_bound(timeout):
             raise ValueError("RTSP timeout must be a positive finite number")
         self._timeout = timeout
         self._rtsp_details = RTSPDetails(

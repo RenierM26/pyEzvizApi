@@ -139,3 +139,10 @@ def test_orphan_header_continuation_is_rejected(monkeypatch):
     with pytest.raises(AuthTestResultFailed, match="header"):
         TestRTSPAuth("192.0.2.10").main()
     assert session.closed
+@pytest.mark.parametrize("timeout", [0, -1, True, float("nan"), float("inf"), 10**1000])
+def test_invalid_timeout_fails_before_socket_allocation(monkeypatch, timeout):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("must validate before opening socket")
+    monkeypatch.setattr(socket, "socket", forbidden)
+    with pytest.raises(ValueError):
+        TestRTSPAuth("unused.invalid", timeout=timeout)

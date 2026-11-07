@@ -3020,6 +3020,7 @@ class EzvizClient:
             "ptz_control",
         )
 
+        self._ensure_ok(json_output, "Could not control PTZ")
         return True
 
     def capture_picture(
@@ -4758,6 +4759,7 @@ class EzvizClient:
             self._response_code(json_result),
             "remote_unlock",
         )
+        self._ensure_ok(json_result, "Could not remotely unlock device")
         return True
 
     def remote_lock(
@@ -4797,6 +4799,7 @@ class EzvizClient:
             self._response_code(json_result),
             "remote_lock",
         )
+        self._ensure_ok(json_result, "Could not remotely lock device")
         return True
 
     def get_remote_unbind_progress(

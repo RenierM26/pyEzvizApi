@@ -56,4 +56,3 @@ def string_to_list(data: Any, separator: str = ",") -> Any:
         return data.split(separator)
 
     return data
-

@@ -118,4 +118,3 @@ def deep_merge(dict1: Any, dict2: Any) -> Any:
             merged[key] = dict2[key]
 
     return merged
-

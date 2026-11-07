@@ -168,4 +168,3 @@ def parse_timezone_value(tz_val: Any) -> datetime.tzinfo:
 
     # Fallbacks
     return datetime.datetime.now().astimezone().tzinfo or datetime.UTC
-

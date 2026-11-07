@@ -132,4 +132,3 @@ def _decrypt_single_block(
 def return_password_hash(password: str) -> str:
     """Return the password hash."""
     return md5(str.encode(md5(str.encode(password)).hexdigest())).hexdigest()
-

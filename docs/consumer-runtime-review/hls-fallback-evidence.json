@@ -14,15 +14,18 @@
     "unchanged_cancellation_pass": true,
     "fallback_unit_cases": 6,
     "scoped_RTSP_status_controls": 3,
-    "partial_admission_rollback_control": 1
+    "partial_admission_rollback_control": 1,
+    "real_RTSP_terminal_refusal_backchannel_modes": 2,
+    "RTSP_rollback_response_before_transport_close": true
   },
   "go": {
-    "extracted_paths_hash_verified": 55,
+    "extracted_paths_hash_verified": 56,
     "selected_race_packages_passed": [
       "pkg/mpegts",
       "pkg/rtsp",
       "pkg/webrtc",
-      "internal/streams"
+      "internal/streams",
+      "internal/rtsp"
     ],
     "full_upstream_CI_claimed": false
   },

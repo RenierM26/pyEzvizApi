@@ -84,3 +84,13 @@ HLS-only lab, not this new policy. This source change needs current upstream,
 platform and requesting-browser qualification before deployment. H.265 WebRTC
 remains unsupported in that tested Edge session; physical A/V synchronization
 and live/battery/soak acceptance remain separate gates.
+
+## Independent review correction
+
+Failed RTSP admission now detaches partial tracks without closing the transport
+before the scoped 409 response. The RTSP caller owns response/transport teardown.
+The client treats the frozen profile as terminal even with backchannel enabled;
+it closes the failed connection without a second DESCRIBE or producer fallback.
+Real loopback server/client controls cover both backchannel modes, no alternative
+producer selection and preservation of the healthy HLS sibling. A setup-state
+transport control verifies detached tracks, response delivery, then closure.

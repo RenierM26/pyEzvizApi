@@ -58,11 +58,129 @@ index 4b0560c..04d004e 100644
  }
  
  func handleTCP(rawURL string) (core.Producer, error) {
+diff --git a/internal/rtsp/native_profile_test.go b/internal/rtsp/native_profile_test.go
+new file mode 100644
+index 0000000..f8a7254
+--- /dev/null
++++ b/internal/rtsp/native_profile_test.go
+@@ -0,0 +1,94 @@
++package rtsp
++
++import (
++	"errors"
++	"github.com/AlexxIT/go2rtc/internal/streams"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	rtspconn "github.com/AlexxIT/go2rtc/pkg/rtsp"
++	"net"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++type frozenProducer struct{ core.Connection }
++
++func (p *frozenProducer) GetTrack(m *core.Media, c *core.Codec) (*core.Receiver, error) {
++	if c.Name == core.CodecOpus {
++		return nil, core.ErrSourceProfileFrozen
++	}
++	return p.Connection.GetTrack(m, c)
++}
++func (p *frozenProducer) Start() error { return nil }
++
++type videoConsumer struct{ core.Connection }
++
++func (c *videoConsumer) AddTrack(m *core.Media, codec *core.Codec, r *core.Receiver) error {
++	s := core.NewSender(m, codec)
++	s.Bind(r)
++	c.Senders = append(c.Senders, s)
++	return nil
++}
++func TestNativeProfileFrozenRealRTSP(t *testing.T) {
++	video := &core.Media{Kind: core.KindVideo, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{{Name: core.CodecH265, ClockRate: 90000}}}
++	audio := &core.Media{Kind: core.KindAudio, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{{Name: core.CodecOpus, ClockRate: 48000, Channels: 2}}}
++	source := &frozenProducer{Connection: core.Connection{Medias: []*core.Media{video, audio}}}
++	stream, err := streams.New("frozen-response-test")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer streams.Delete("frozen-response-test")
++	stream.AddProducer(source)
++	v := video.Clone()
++	v.Direction = core.DirectionSendonly
++	hls := &videoConsumer{Connection: core.Connection{Medias: []*core.Media{v}}}
++	if err = stream.AddConsumer(hls); err != nil {
++		t.Fatal(err)
++	}
++	defer stream.RemoveConsumer(hls)
++	track := source.Receivers[0]
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ln.Close()
++	var accepts, alternatives atomic.Int32
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		for {
++			c, e := ln.Accept()
++			if e != nil {
++				return
++			}
++			accepts.Add(1)
++			go tcpHandler(rtspconn.NewServer(c))
++		}
++	}()
++	defer func() { ln.Close(); <-done }()
++	streams.HandleFunc("frozenrtsp", func(raw string) (core.Producer, error) { return rtspHandler("rtsp" + raw[len("frozenrtsp"):]) })
++	streams.HandleFunc("frozenalternate", func(string) (core.Producer, error) {
++		alternatives.Add(1)
++		return nil, errors.New("alternative must not run")
++	})
++	for _, backchannel := range []string{"0", "1"} {
++		outer := streams.NewStream([]string{"frozenrtsp://" + ln.Addr().String() + "/frozen-response-test?video=h265&audio=opus#backchannel=" + backchannel, "frozenalternate:test"})
++		vv, aa := video.Clone(), audio.Clone()
++		vv.Direction = core.DirectionSendonly
++		aa.Direction = core.DirectionSendonly
++		consumer := &videoConsumer{Connection: core.Connection{Medias: []*core.Media{vv, aa}}}
++		if err = outer.AddConsumer(consumer); !errors.Is(err, core.ErrSourceProfileFrozen) {
++			t.Fatalf("scoped refusal lost (backchannel=%s): %v", backchannel, err)
++		}
++	}
++	if accepts.Load() != 2 || alternatives.Load() != 0 {
++		t.Fatalf("unexpected retry/fallback: connections=%d alternatives=%d", accepts.Load(), alternatives.Load())
++	}
++	deadline := time.Now().Add(time.Second)
++	for len(track.Senders()) != 1 && time.Now().Before(deadline) {
++		time.Sleep(time.Millisecond)
++	}
++	if len(track.Senders()) != 1 {
++		t.Fatalf("partial RTSP consumer leaked or HLS detached: %d", len(track.Senders()))
++	}
++}
 diff --git a/internal/rtsp/rtsp.go b/internal/rtsp/rtsp.go
-index 31c2c5d..c076eb0 100644
+index 31c2c5d..872959b 100644
 --- a/internal/rtsp/rtsp.go
 +++ b/internal/rtsp/rtsp.go
-@@ -219,6 +219,10 @@ func tcpHandler(conn *rtsp.Conn) {
+@@ -125,7 +125,8 @@ func rtspHandler(rawURL string) (core.Producer, error) {
+ 	}
+ 
+ 	if err := conn.Describe(); err != nil {
+-		if !conn.Backchannel {
++		_ = conn.Close()
++		if errors.Is(err, core.ErrSourceProfileFrozen) || !conn.Backchannel {
+ 			return nil, err
+ 		}
+ 		log.Trace().Msgf("[rtsp] describe (backchannel=%t) err: %v", conn.Backchannel, err)
+@@ -136,6 +137,7 @@ func rtspHandler(rawURL string) (core.Producer, error) {
+ 			return nil, err
+ 		}
+ 		if err = conn.Describe(); err != nil {
++			_ = conn.Close()
+ 			return nil, err
+ 		}
+ 	}
+@@ -219,6 +221,10 @@ func tcpHandler(conn *rtsp.Conn) {
  			conn.Connection.Source = query.Get("source")
  
  			if err := stream.AddConsumer(conn); err != nil {
@@ -74,7 +192,7 @@ index 31c2c5d..c076eb0 100644
  				return
  			}
 diff --git a/internal/streams/add_consumer.go b/internal/streams/add_consumer.go
-index 7400ce6..ae7a503 100644
+index 7400ce6..f489cdc 100644
 --- a/internal/streams/add_consumer.go
 +++ b/internal/streams/add_consumer.go
 @@ -14,9 +14,11 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
@@ -111,12 +229,18 @@ index 7400ce6..ae7a503 100644
  						log.Info().Err(err).Msg("[streams] can't get track")
  						prodErrors[prodN] = err
  						continue
-@@ -94,9 +104,15 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
+@@ -94,9 +104,21 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
  	}
  
  	// stop producers if they don't have readers
 +	if terminalError != nil {
-+		terminalError = errors.Join(terminalError, cons.Stop())
++		// RTSP must keep its transport alive long enough to send the scoped
++		// refusal. Detach tracks before checking producer readers regardless.
++		if rollback, ok := cons.(interface{ RollbackTracks() }); ok {
++			rollback.RollbackTracks()
++		} else {
++			terminalError = errors.Join(terminalError, cons.Stop())
++		}
 +	}
  	if s.pending.Add(-1) == 0 {
  		s.stopProducers()
@@ -127,7 +251,7 @@ index 7400ce6..ae7a503 100644
  
  	if len(prodStarts) == 0 {
  		return formatError(consMedias, prodMedias, prodErrors)
-@@ -107,8 +123,13 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
+@@ -107,8 +129,13 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
  	s.mu.Unlock()
  
  	// there may be duplicates, but that's not a problem
@@ -2960,10 +3084,10 @@ index e6525d9..880f7eb 100644
  			handlerFunc = h265.RTPPay(c.PacketSize, handlerFunc)
 diff --git a/pkg/rtsp/native_profile_test.go b/pkg/rtsp/native_profile_test.go
 new file mode 100644
-index 0000000..bfff002
+index 0000000..441a48f
 --- /dev/null
 +++ b/pkg/rtsp/native_profile_test.go
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,82 @@
 +package rtsp
 +
 +import (
@@ -2972,9 +3096,11 @@ index 0000000..bfff002
 +	"fmt"
 +	"github.com/AlexxIT/go2rtc/pkg/core"
 +	"github.com/AlexxIT/go2rtc/pkg/tcp"
++	"io"
 +	"net"
 +	"net/url"
 +	"testing"
++	"time"
 +)
 +
 +func TestNativeProfileFrozenResponse(t *testing.T) {
@@ -3002,8 +3128,50 @@ index 0000000..bfff002
 +		})
 +	}
 +}
++
++func TestNativeProfileRollbackPreservesResponseTransport(t *testing.T) {
++	client, server := net.Pipe()
++	defer client.Close()
++	defer server.Close()
++	c := NewServer(server)
++	c.state = StateSetup // Stop would close this transport.
++	media := &core.Media{Kind: core.KindVideo, Codecs: []*core.Codec{{Name: core.CodecH265, ClockRate: 90000}}}
++	receiver := core.NewReceiver(media, media.Codecs[0])
++	sender := core.NewSender(media, media.Codecs[0])
++	sender.Bind(receiver)
++	c.Senders = append(c.Senders, sender)
++	c.RollbackTracks()
++	if len(receiver.Senders()) != 0 {
++		t.Fatal("partial track still attached")
++	}
++	done := make(chan error, 1)
++	go func() {
++		err := c.WriteResponse(&tcp.Response{Status: "409 Conflict", Header: map[string][]string{"X-Stream-Native-Error": {"profile-frozen-v1"}}})
++		if err == nil {
++			err = c.Stop()
++		}
++		done <- err
++	}()
++	if err := client.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
++		t.Fatal(err)
++	}
++	response, err := tcp.ReadResponse(bufio.NewReader(client))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if response.StatusCode != 409 || response.Header.Get("X-Stream-Native-Error") != "profile-frozen-v1" {
++		t.Fatalf("wrong scoped response: %+v", response)
++	}
++	if err = <-done; err != nil {
++		t.Fatal(err)
++	}
++	var b [1]byte
++	if _, err = client.Read(b[:]); err != io.EOF {
++		t.Fatalf("transport not closed after refusal: %v", err)
++	}
++}
 diff --git a/pkg/rtsp/producer.go b/pkg/rtsp/producer.go
-index 3d818b6..94e8a91 100644
+index 3d818b6..dba9f83 100644
 --- a/pkg/rtsp/producer.go
 +++ b/pkg/rtsp/producer.go
 @@ -44,6 +44,19 @@ func (c *Conn) GetTrack(media *core.Media, codec *core.Codec) (*core.Receiver, e
@@ -3026,7 +3194,29 @@ index 3d818b6..94e8a91 100644
  	track.ID = channel
  	c.Receivers = append(c.Receivers, track)
  
-@@ -141,3 +154,6 @@ func (c *Conn) Reconnect() error {
+@@ -91,7 +104,9 @@ func (c *Conn) Start() (err error) {
+ 	}
+ }
+ 
+-func (c *Conn) Stop() (err error) {
++// RollbackTracks detaches failed admission without closing the RTSP transport.
++// The server owns sending the refusal and closing the transport afterwards.
++func (c *Conn) RollbackTracks() {
+ 	for _, receiver := range c.Receivers {
+ 		receiver.Close()
+ 	}
+@@ -99,6 +114,10 @@ func (c *Conn) Stop() (err error) {
+ 		sender.Close()
+ 	}
+ 
++}
++
++func (c *Conn) Stop() (err error) {
++	c.RollbackTracks()
+ 	c.stateMu.Lock()
+ 	if c.state != StateNone {
+ 		c.state = StateNone
+@@ -141,3 +160,6 @@ func (c *Conn) Reconnect() error {
  
  	return nil
  }

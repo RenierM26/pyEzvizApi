@@ -5,8 +5,8 @@
     "patch_applied_to_public_base": true,
     "extracted_source_sha256": {
       "internal/http/http.go": "dda5efadad4e6eb523c9c36c393bcfd0430d3c76c087dfb03f64e4213410284f",
-      "internal/rtsp/rtsp.go": "e7be74ddebaa87bdea51a204d91379941d9f05b31030f13ef6bbbe1700c2e083",
-      "internal/streams/add_consumer.go": "bc5e5f04337cf1be42b9edf9e009bfb2347351498b9691abca7411fd08dc5a16",
+      "internal/rtsp/rtsp.go": "288910efe8db292c7ab02e54ccbea39a713141e92ec89bc53bad15a86d2fe04d",
+      "internal/streams/add_consumer.go": "d3f534fdb368a1c76a94c45aa1f9fb15ff1ecde692cd4d22b6cf2b127cdae768",
       "internal/streams/api.go": "cff08784757d3c2198fffb2a658cd99c32aaf3881711605cd4c496d5bc1ae9ae",
       "internal/streams/native_profile_test.go": "aea468134fbfdff9f6e5a554bbfbec8d5e815a464db0f60f9ba83458bca132f2",
       "internal/streams/owned.go": "7b1777c50a0cb39ba1d9293b72f950ba3300b953ae8b8e164ca9ec8623c284b0",
@@ -40,8 +40,8 @@
       "pkg/rtsp/client.go": "96f233a68abd78598ce3da4766bd93150910a53c31d7966ce33a3d5e77e0ace2",
       "pkg/rtsp/conn.go": "24e2e0077dd7da85ac41190fead30321b9b5d8fd4e7ca0bd48cc9677067f4682",
       "pkg/rtsp/consumer.go": "aff11fc9a75c7c47f44b5fd1e97f9c0c92a9b84514d6fd548807b43eb061dbce",
-      "pkg/rtsp/native_profile_test.go": "e5fb543bb1fbf1e9b8d7b98311594816e08edc15236f19c366820ac54f470fa8",
-      "pkg/rtsp/producer.go": "bdc561d88652f1b5b3b16787201de5d5bd6ccb6e09e0e92a065649abdfcac53f",
+      "pkg/rtsp/native_profile_test.go": "2b435ec0273e1ccc59cd5640c489276f691ec8f0ab7ae599268d717179edda99",
+      "pkg/rtsp/producer.go": "7811bdd31c8603b6ca23e00d925ab231f92e50af9cd00d49df80c679df08985d",
       "pkg/rtsp/server.go": "eeec3a3e8c2db6f1ac2eee7e4648ee928fd879a843f827471c63a9264ddc19d2",
       "pkg/rtsp/source_clock.go": "7341ee0b5772caa268c5ce55db24240b07395b80fefca3e1aaf092b646e6f708",
       "pkg/rtsp/source_clock_test.go": "85788b07cfe69257e185ef53f6cc658905a5d02582eedc95153904b0bd5ddc57",
@@ -58,7 +58,8 @@
       "pkg/webrtc/native_start_test.go": "2abc79d6d52ba11584b68024886f452d490f7d0dd452c03ea3f84482d592bdde",
       "pkg/webrtc/rtx_sequence.go": "2d19d6bf291c9b79b70694711bca7acd2cb1343ac9eb11daa7b15bca8382ddf3",
       "pkg/webrtc/rtx_sequence_test.go": "bf3c92bf111c4fd92292ad0b7a20046a5eb0fd0962c919d3dc2e9f65233b0e85",
-      "pkg/webrtc/track.go": "67ec8c14da1d049f9453552b67d8cf9cc5bb09eb349ba84918147b02ffeec22d"
+      "pkg/webrtc/track.go": "67ec8c14da1d049f9453552b67d8cf9cc5bb09eb349ba84918147b02ffeec22d",
+      "internal/rtsp/native_profile_test.go": "7a78ee167f4113124cfc40394eab2fb66c1634cc863bc3dcc82f7b9045a63966"
     },
     "selected_race_tests": 38,
     "hevc_aggregation_controls": 4,
@@ -246,7 +247,7 @@
   },
   "patch_sha256": {
     "ffmpeg-parser-source-and-fate.patch": "c00bbe6ff11b02377a98f71147524e83ccb2a5f08092b1f3ae156604e2b03424",
-    "go2rtc-native-consumer.patch": "dde9e169d590e56110b0b6637c7e3e287fac80a230ff1266e48c7c45fc203e99",
+    "go2rtc-native-consumer.patch": "13fad35a383f4d4083d7ab699258446ed0f5ea5e8807344b4029ec0e2666c0dd",
     "home-assistant-finite-stream.patch": "5328eaef8153c2f48ae28477301a854f2e29b64abb7b3cd3d5df72f7ef40433a",
     "pion-rtx-pull.patch": "07878706168d57a3c2eecb10b6d389dc9b8b369739a723f5ca3d77efae730b66",
     "aiohttp-closed-heartbeat.patch": "b8439f7bb69e20eaf3ef2056630cfa1895bbeeb7578287316a0491f6a8b28d0e"

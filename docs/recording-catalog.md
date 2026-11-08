@@ -130,3 +130,13 @@ catalog = query_lan_recordings(
 
 See [media saving](media-saving.md) for single-interval APIs and existing
 validation/decryption limits.
+
+## Implementation boundaries
+
+`streaming.recordings` remains the compatibility entrypoint. Internally, catalog
+values live in `streaming.recording_models`, cloud index queries in
+`streaming.cloud.recordings`, and native queries in `streaming.local.recordings`.
+`streaming.recording_batch` owns sequential acquisition;
+`streaming.recording_store` owns deterministic filenames, atomic manifests and
+hash-verified resume. Catalog version 1, manifest contents and receipt identities
+are unchanged by this separation. Clock helpers live in `streaming.ranges`.

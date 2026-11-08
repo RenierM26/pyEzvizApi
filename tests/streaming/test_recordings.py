@@ -220,3 +220,14 @@ def test_compressed_trailing_junk_is_rejected():
     with pytest.raises(PyEzvizError):
         query_recordings(Index({"records": base64.b64encode(compressed).decode()}),
                          "SYNTHETIC", BEGIN, END)
+
+
+@pytest.mark.parametrize("response", [
+    {"data": {"records": [], "isFinished": 0}},
+    {"data": {"records": [RECORD], "isFinished": 0}},
+    {"isFinished": 1, "data": {"records": [], "isFinished": 0}},
+    {"isFinished": 0, "data": {"records": [], "isFinished": 1}},
+])
+def test_nested_completion_flags_preserved(response):
+    with pytest.raises(PyEzvizError, match="budget"):
+        query_recordings(Index(response), "SYNTHETIC", BEGIN, END, max_queries=1)

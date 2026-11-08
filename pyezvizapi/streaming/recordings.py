@@ -102,10 +102,10 @@ def _record_time(value: Any, timezone: str) -> datetime:
     return instant.astimezone(UTC)
 
 
-def _index_records(payload: Any) -> list[Any]:
-    """Do not confuse a malformed/compressed index with an empty card."""
+def _index_records(payload: Any) -> tuple[list[Any], bool]:
+    """Return records and inherited incompleteness without hiding nested flags."""
     if isinstance(payload, list):
-        return payload
+        return payload, False
     if isinstance(payload, str):
         try:
             decoder = zlib.decompressobj()
@@ -116,13 +116,14 @@ def _index_records(payload: Any) -> list[Any]:
             decoded = json.loads(raw)
             if not isinstance(decoded, list):
                 raise ValueError
-            return decoded
+            return decoded, False
         except (ValueError, zlib.error, UnicodeError) as error:
             raise PyEzvizError("Invalid compressed SD catalog") from error
     if isinstance(payload, Mapping):
         for key in ("records", "record", "files", "fileList", "videos", "videoList", "data"):
             if key in payload:
-                return _index_records(payload[key])
+                records, incomplete = _index_records(payload[key])
+                return records, incomplete or payload.get("isFinished") in (0, False)
     raise PyEzvizError("SD index response has no supported record list")
 
 
@@ -182,8 +183,8 @@ def query_recordings(
             max_retries=0,
         )
         queries += 1
-        records = _index_records(response)
-        if len(records) >= page_size or response.get("isFinished") in (0, False):
+        records, incomplete = _index_records(response)
+        if len(records) >= page_size or incomplete:
             if seconds <= 1:
                 raise PyEzvizError("SD catalog saturated at one second; completeness unknown")
             middle = left + timedelta(seconds=seconds // 2)

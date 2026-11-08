@@ -276,7 +276,8 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
             or duration_seconds <= 0
         ):
             raise PyEzvizError("SD playback duration_seconds must be positive and finite")
-        end = min(end, begin + timedelta(seconds=duration_seconds))
+        if duration_seconds < (end - begin).total_seconds():
+            end = begin + timedelta(seconds=duration_seconds)
         # The native selector is whole-second UTC, so reject sub-second ambiguity.
         if end.microsecond:
             raise PyEzvizError("SD playback duration must select whole UTC seconds")
@@ -305,7 +306,9 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
             monotonic=monotonic,
         )
         with bootstrap._closing_unconnected_cloud_stream(stream):  # noqa: SLF001
-            stream.start(deadline=deadline, monotonic=monotonic)
+            info = stream.start(deadline=deadline, monotonic=monotonic)
+            if info.result not in (None, 0):
+                raise PyEzvizError(f"SD playback negotiation failed with result {info.result}")
             data, reason = _collect_playback(
                 stream,
                 deadline=deadline,

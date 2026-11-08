@@ -42,6 +42,8 @@ def _validate_shared_clip_args(
             transfer_timeout=args.playback_transfer_timeout,
         )
         CaptureLimits(duration_seconds=args.duration, max_packets=args.max_packets)
+        if args.duration is not None and not float(args.duration).is_integer():
+            raise _owner.PyEzvizError("SD playback duration must select whole UTC seconds")
         if args.format not in (None, "mpegps"):
             raise _owner.PyEzvizError("SD playback requires --format mpegps")
     elif (

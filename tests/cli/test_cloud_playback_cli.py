@@ -21,6 +21,7 @@ TIMES = ["--begin-time", "20261108T000000Z", "--end-time", "20261108T000020Z"]
         ["--playback-max-bytes", "0"],
         ["--playback-transfer-timeout", "nan"],
         ["--duration", "nan"],
+        ["--duration", "0.5s"],
     ],
 )
 def test_invalid_playback_fails_before_constructing_a_client(monkeypatch, extra):

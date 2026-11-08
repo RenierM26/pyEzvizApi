@@ -310,3 +310,27 @@ def test_bootstrap_preserves_resource_channel_zero(monkeypatch):
 def test_invalid_native_timeout_field_never_reaches_varint_encoder(value):
     with pytest.raises(PyEzvizError, match="32-bit"):
         build_stream_info_request("ysproto://example.test/playback", stream_info_timeout=value)
+
+
+def test_large_finite_duration_is_clamped_before_datetime_arithmetic(monkeypatch):
+    sock, seen, _ = transport(monkeypatch)
+    result = playback.copy_cloud_playback_to_mpegps(
+        object(), "CAM123", BytesIO(), BEGIN, END, duration_seconds=1e300
+    )
+    assert result["end_time"] == END and sock.closed
+    assert seen[0][0][3] == END
+
+
+def test_application_level_playback_refusal_is_not_reported_as_an_empty_clip(monkeypatch):
+    wire = encode_vtm_packet(b"\x08\x07", message_code=VtmMessageCode.STREAMINFO_RSP)
+    sock = FakeVtmSocket([wire])
+    monkeypatch.setattr(
+        playback,
+        "open_cloud_playback_stream",
+        lambda *a, **kw: VtmStreamClient(
+            "ysproto://example.test:8554/playback", socket_factory=lambda *_: sock
+        ),
+    )
+    with pytest.raises(PyEzvizError, match=r"negotiation.*7"):
+        playback.copy_cloud_playback_to_mpegps(object(), "CAM123", BytesIO(), BEGIN, END)
+    assert sock.closed

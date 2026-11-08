@@ -275,7 +275,7 @@ class _SourceDefaultNaluHeaderSize(int):
 
 _SOURCE_DEFAULT_NALU_HEADER_SIZE: int = _SourceDefaultNaluHeaderSize(0)
 _SOURCE_DEFAULT_DURATION = _compat_module_6._SOURCE_DEFAULT_DURATION
-_SOURCE_DEFAULT_CLIENT_TYPE = _compat_module_6._SOURCE_DEFAULT_CLIENT_TYPE
+_SOURCE_DEFAULT_CLIENT_TYPE = _compat_module_6._SourceDefaultClientType(9)
 
 UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6

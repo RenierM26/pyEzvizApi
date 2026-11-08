@@ -35,9 +35,6 @@ class _SourceDefaultClientType(int):
     """Preserve live type 9 while selecting playback type 3 only on omission."""
 
 
-_SOURCE_DEFAULT_CLIENT_TYPE: int = _SourceDefaultClientType(9)
-
-
 @dataclass(frozen=True)
 class CloudPlaybackClipSource:
     """Cloud-mediated SD-card recording range, with explicit transfer budgets."""

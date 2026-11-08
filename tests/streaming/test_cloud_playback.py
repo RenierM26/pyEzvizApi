@@ -138,6 +138,56 @@ def test_truncated_packet_after_valid_media_cannot_publish_prefix(monkeypatch, t
     assert output.getvalue() == KEEP and sock.closed
 
 
+@pytest.mark.parametrize(
+    "tail",
+    [
+        b"\x00\x00\x01\xc0\x00\x20\x80\x00\x00audio",
+        _timed_video_pes(21 * 90_000)[:-1],
+        PACK[:-1],
+        b"garbage",
+        b"\x00\x00\x01\xc0\x00\x20\x80\x00\x00audio\x24kih\x04\x03\x02\x01",
+        b"\x24kih\x04\x03\x02\x02",
+    ],
+)
+def test_truncated_ps_tail_with_complete_vtm_and_pts_preserves_destination(
+    monkeypatch, tmp_path, tail
+):
+    sock, _, _ = transport(monkeypatch, body=media() + tail)
+    output = tmp_path / "existing.ps"
+    output.write_bytes(KEEP)
+    client = EzvizClient("user", "password")
+    with pytest.raises(PyEzvizError, match="MPEG-PS framing"):
+        client.save_clip_with_options(
+            "CAM123", output, ClipOptions(source=CloudPlaybackClipSource(BEGIN, END))
+        )
+    assert output.read_bytes() == KEEP and sock.closed
+
+
+@pytest.mark.parametrize(
+    "program_end", [b"", b"\x00\x00\x01\xb9", b"\x24kih\x04\x03\x02\x01"]
+)
+def test_unbounded_video_pes_and_optional_program_end_remain_supported(monkeypatch, program_end):
+    unbounded = b"".join(
+        PACK + pes[:4] + b"\x00\x00" + pes[6:]
+        for pes in (_timed_video_pes(i * 90_000) for i in range(21))
+    ) + program_end
+    sock, _, _ = transport(monkeypatch, body=unbounded)
+    output = BytesIO()
+    result = playback.copy_cloud_playback_to_mpegps(object(), "CAM123", output, BEGIN, END)
+    assert result["range_complete"] and output.getvalue() == unbounded and sock.closed
+
+
+def test_unbounded_video_cannot_hide_truncated_following_audio(monkeypatch):
+    pes = _timed_video_pes(21 * 90_000)
+    body = media() + PACK + pes[:4] + b"\x00\x00" + pes[6:]
+    body += b"\x00\x00\x01\xc0\x00\x20\x80\x00\x00audio"
+    sock, _, _ = transport(monkeypatch, body=body)
+    output = BytesIO(KEEP)
+    with pytest.raises(PyEzvizError, match="MPEG-PS framing"):
+        playback.copy_cloud_playback_to_mpegps(object(), "CAM123", output, BEGIN, END)
+    assert output.getvalue() == KEEP and sock.closed
+
+
 def test_encrypted_transport_after_clear_media_remains_failure(monkeypatch):
     sock, _, _ = transport(
         monkeypatch, tail=encode_vtm_packet(b"secret", channel=VtmChannel.ENCRYPTED_STREAM)

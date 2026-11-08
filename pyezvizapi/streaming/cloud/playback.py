@@ -23,6 +23,9 @@ from pyezvizapi.streaming.cloud.protocol import (
     VtmStreamClient,
     VtmStreamEOF,
     VtmStreamTimeout,
+    _mpeg_ps_video_decrypt_ranges,
+    _next_mpeg_ps_packet_start,
+    _pes_payload_start,
     build_vtm_url,
 )
 from pyezvizapi.streaming.media.containers import (
@@ -32,6 +35,9 @@ from pyezvizapi.streaming.media.containers import (
 
 DEFAULT_PLAYBACK_MAX_BYTES = 128 * 1024 * 1024
 DEFAULT_PLAYBACK_TRANSFER_TIMEOUT = 60.0
+# Exact terminal bytes observed after complete PS packets in the retained H9c
+# recording. Permit only this whole marker, never arbitrary trailing bytes.
+_PLAYBACK_VENDOR_TRAILER = b"\x24kih\x04\x03\x02\x01"
 
 
 def build_vtm_playback_url(  # noqa: PLR0913 -- native URL field contract
@@ -227,6 +233,33 @@ def _positive_timeout(value: object, label: str) -> float:
     return float(value)
 
 
+def _validate_playback_framing(data: bytes) -> None:
+    """Require complete contiguous PS framing, including the final packet.
+
+    Reuse the bounded vendor-video recovery used by the decryptor, but never
+    let its successfully parsed prefix hide an incomplete PES or skipped gap.
+    Zero-length video PES may legitimately run to EOF; a recognizable PS packet
+    start inside that payload must not hide a truncated following packet.
+    """
+    framed = data.removesuffix(_PLAYBACK_VENDOR_TRAILER)
+    framed = framed[:-4] if framed.endswith(b"\x00\x00\x01\xb9") else framed
+    cursor = 0
+    for packet in _mpeg_ps_video_decrypt_ranges(framed):
+        if packet.start != cursor:
+            raise PyEzvizError("SD playback has incomplete MPEG-PS framing")
+        if (
+            0xE0 <= packet.stream_id <= 0xEF
+            and int.from_bytes(framed[packet.start + 4 : packet.start + 6], "big") == 0
+        ):
+            payload = _pes_payload_start(framed, packet.start)
+            boundary = _next_mpeg_ps_packet_start(framed, payload) if payload is not None else None
+            if boundary is not None and boundary < packet.end:
+                raise PyEzvizError("SD playback has incomplete MPEG-PS framing")
+        cursor = packet.end
+    if cursor != len(framed):
+        raise PyEzvizError("SD playback has incomplete MPEG-PS framing")
+
+
 def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
     client: Any,
     serial: str,
@@ -317,6 +350,7 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
                 max_bytes=max_bytes,
                 monotonic=monotonic,
             )
+    _validate_playback_framing(data)
     span = mpeg_ps_video_pts_span_seconds(data, max_gap_seconds=1.0)
     complete = span is not None and span >= requested - min(1.0, requested * 0.05)
     if span is None and max_packets is None:

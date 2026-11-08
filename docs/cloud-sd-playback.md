@@ -126,6 +126,10 @@ The result includes `begin_time`, effective `end_time`, `bytes`,
 short, malformed, over-budget or unsupported encrypted transport output fails.
 A truncated VTM header/body is not treated as clean EOF. No automatic source
 fallback, unlimited retries, timestamp repair, preview or camera control occurs.
+Staged MPEG-PS packets must also be complete and contiguous, including the tail;
+the known vendor video-continuation convention, unbounded video PES, optional
+program-end code and exact eight-byte terminal marker observed in the H9c sample
+are supported. Arbitrary trailing bytes or truncated audio/video packets fail.
 
 ## Protocol evidence
 

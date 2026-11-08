@@ -6,7 +6,7 @@ import argparse
 from typing import Any
 
 from pyezvizapi.constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, BatteryCameraWorkMode
-from pyezvizapi.streaming.capture import _SOURCE_DEFAULT_CLIENT_TYPE, _SOURCE_DEFAULT_DURATION
+from pyezvizapi.streaming.capture import _SOURCE_DEFAULT_DURATION, _SourceDefaultClientType
 from pyezvizapi.streaming.local.transport import HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
 
 
@@ -856,7 +856,7 @@ def add_save_clip_arguments(subparsers_save: Any) -> None:
     parser_save_clip.add_argument(
         "--client-type",
         type=int,
-        default=_SOURCE_DEFAULT_CLIENT_TYPE,
+        default=_SourceDefaultClientType(9),
         help="VTM client type for --source cloud (default: 9)",
     )
     parser_save_clip.add_argument(

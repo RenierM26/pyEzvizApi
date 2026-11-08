@@ -1,6 +1,6 @@
 """Finite SD catalog discovery and resumable downloads over explicit routes.
 
-Discovery uses the cloud v2 SD index, NOT subscription cloud storage. Catalogs
+Discovery uses cloud v2 or explicit native LAN SD indexes, NOT cloud storage. Catalogs
 contain UTC intervals only; source URLs, keys and raw descriptors are not saved.
 """
 
@@ -41,16 +41,19 @@ class StoredRecording:
 
 @dataclass(frozen=True)
 class RecordingCatalog:
-    """A bounded, deduplicated snapshot of the cloud SD index."""
+    """A bounded, deduplicated snapshot with an explicit discovery route."""
 
     serial: str
     channel: int
     timezone: str
     recordings: tuple[StoredRecording, ...]
+    discovery: str = "cloud-sd-v2"
 
     def __post_init__(self) -> None:
         if not isinstance(self.serial, str) or not self.serial:
             raise PyEzvizError("Catalog requires a serial")
+        if self.discovery not in ("cloud-sd-v2", "lan-hcnetsdk"):
+            raise PyEzvizError("Unsupported catalog discovery route")
         playback_integer(self.channel, "catalog channel", minimum=0)
         playback_timezone(self.timezone)
         if not isinstance(self.recordings, tuple) or any(
@@ -59,19 +62,20 @@ class RecordingCatalog:
             raise PyEzvizError("Catalog recordings must be StoredRecording values")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"version": 1, "discovery": "cloud-sd-v2", **asdict(self)}
+        return {"version": 1, **asdict(self)}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> RecordingCatalog:
         """Load only the versioned public catalog shape."""
         try:
-            if value["version"] != 1 or value["discovery"] != "cloud-sd-v2":
+            if value["version"] != 1 or value["discovery"] not in ("cloud-sd-v2", "lan-hcnetsdk"):
                 raise ValueError
             return cls(
                 value["serial"],
                 value["channel"],
                 value["timezone"],
                 tuple(StoredRecording(**item) for item in value["recordings"]),
+                discovery=value["discovery"],
             )
         except (KeyError, TypeError, ValueError) as error:
             raise PyEzvizError("Invalid recording catalog") from error
@@ -232,6 +236,22 @@ def _digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def _batch_channel(catalog: RecordingCatalog, source: str, channel: int | None) -> int:
+    if catalog.discovery == "lan-hcnetsdk" and source == "cloud-playback" and channel is None:
+        raise PyEzvizError("LAN catalogs require an explicit cloud channel")
+    selected_channel = (
+        channel
+        if channel is not None
+        else (
+            1
+            if source == "local-playback" and catalog.discovery == "cloud-sd-v2"
+            else catalog.channel
+        )
+    )
+    playback_integer(selected_channel, "channel", minimum=0)
+    return selected_channel
+
+
 def download_recordings(  # noqa: PLR0913
     client: Any,
     catalog: RecordingCatalog,
@@ -264,10 +284,7 @@ def download_recordings(  # noqa: PLR0913
         raise PyEzvizError("Catalog exceeds batch clip budget")
     if source == "local-playback" and (not host or not password):
         raise PyEzvizError("LAN batch requires explicit host and device password")
-    selected_channel = (
-        channel if channel is not None else (1 if source == "local-playback" else catalog.channel)
-    )
-    playback_integer(selected_channel, "channel", minimum=0)
+    selected_channel = _batch_channel(catalog, source, channel)
     root = Path(output)
     root.mkdir(parents=True, exist_ok=True)
     # Bind receipts to route, selector clock and decryption profile, never keys.

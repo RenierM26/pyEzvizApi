@@ -1551,10 +1551,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     client: EzvizClient | None = None
-    local_batch = (
-        args.action == "recordings"
-        and args.recordings_action == "download"
-        and args.source == "local-playback"
+    local_batch = args.action == "recordings" and (
+        (args.recordings_action == "download" and args.source == "local-playback")
+        or (args.recordings_action == "list" and args.source == "lan-hcnetsdk")
     )
     if _save_clip_can_run_without_cloud_credentials(args) or local_batch:
         try:

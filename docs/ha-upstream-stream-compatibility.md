@@ -1,5 +1,10 @@
 # Upstream HA stream compatibility and review boundary
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](README.md) and [current HA status](home-assistant.md).
+
+
 The isolated external proposals now apply to actual HA2026.10.4 commit
 `357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b` and pass its complete stream component
 suite using upstream root fixtures/helpers. This is not full HA CI or a runtime

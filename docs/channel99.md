@@ -1,6 +1,6 @@
 # Channel-99 push transport and migration
 
-This branch implements the Android channel-99 long-link transport. It still uses
+The current library implements the Android channel-99 long-link transport. It still uses
 MQTT after an LBS authentication/key-negotiation exchange; it does not use FCM or
 require Android/Google services on the receiving Linux machine.
 
@@ -8,6 +8,9 @@ The obsolete HTTP-registration push transport has been removed. This is a
 migration, not a drop-in change for existing Home Assistant storage code.
 Unmigrated tokens fail with a migration instruction; they are never sent to the
 old registration endpoint. Existing polling/API operations remain available.
+
+The pinned `ha-ezviz` consumer has not implemented these prerequisites; see
+[HA consumer status](home-assistant.md). CLI migration does not migrate HA storage.
 
 ## Migrating a login
 
@@ -146,18 +149,18 @@ code are included in the library or its portable tests.
 
 ## Implementation boundaries
 
-- `_auth.py` owns the shared HTTPS refresh operation. Both public login and
+- `cloud/auth.py` owns the shared HTTPS refresh operation. Both public login and
   background push use it; MQTT does not instantiate another `EzvizClient`.
   Callers keep ownership of the credential lock, durable-save callback and
   HTTP transport. Background requests copy mutable request state but borrow
   the caller's adapters, preserving proxy/certificate/TLS configuration.
-- `_token.py` contains the persisted token schema and boundary validators.
+- `cloud/token.py` contains the persisted token schema and boundary validators.
   Historical `ClientToken`, `EzvizToken` and `ServiceUrls` imports remain
   available. Partial login tokens still require runtime validation before push.
-- `_longlink.py` implements only EZVIZ wire encoding and cryptography. PKCS#7
+- `push/longlink/codec.py` implements only EZVIZ wire encoding and cryptography. PKCS#7
   padding uses `cryptography`; the fixed IV and native key derivation remain
   protocol requirements, verified against synthetic native vectors.
-- `_paho.py` isolates Paho 2.x's private runtime keepalive field. There is no
+- `push/paho.py` isolates Paho 2.x's private runtime keepalive field. There is no
   public setter; a compatibility test verifies actual ping scheduling. Paho
   automatic reconnect is intentionally not used because each reconnect must
   first negotiate fresh EZVIZ keys through LBS.

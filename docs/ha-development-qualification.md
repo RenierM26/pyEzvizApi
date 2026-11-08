@@ -1,5 +1,10 @@
 # HA full development qualification and finite publication fixes
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](README.md) and [current HA status](home-assistant.md).
+
+
 > Historical checkpoint: the [current finite joint-delivery review](consumer-runtime-review/README.md)
 > supersedes its unresolved software-startup/audio/clock status and PR-head claims.
 

@@ -15,7 +15,9 @@ These are explicit, typed re-exports, not module-object replacements. Unrelated
 imports and private hooks are not supported through these paths. Test or patch
 the canonical owner. `EzvizClient`, constants, exceptions, models and root lazy
 public symbol exports remain available. Client method names and status keys
-are unchanged; no integration source changes are required.
+are unchanged by the alias cleanup. This is an **import** contract, not a
+push/runtime compatibility claim: the pinned consumer still needs the
+[channel-99 migration](home-assistant.md#custom-cloud-integration-qualification).
 
 ## Intentional breaking changes
 

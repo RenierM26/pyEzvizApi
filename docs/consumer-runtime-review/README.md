@@ -1,5 +1,10 @@
 # Finite HLS/WebRTC source-review bundle
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](../README.md) and [current HA status](../home-assistant.md).
+
+
 This review includes **source proposals, not installed dependencies**. They close
 local finite-recording startup, AAC-to-Opus attachment, delivery and clock gaps.
 The current [automatic receiver/browser follow-up](automatic-client-qualification.md)

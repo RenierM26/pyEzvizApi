@@ -6,11 +6,15 @@ For questions, bugs, and feature requests, please use GitHub issues.
 
 Please check:
 
-- the latest release and current `main` branch behavior;
+- your installed release/commit and its matching docs; main may be unreleased;
 - existing open and closed issues;
-- [`README.md`](README.md) for CLI examples and development notes;
+- [getting started](docs/getting-started.md) and the [CLI guide](docs/cli.md);
 - [`docs/home-assistant-contract.md`](docs/home-assistant-contract.md) for Home Assistant integration-facing behavior;
 - [`SECURITY.md`](SECURITY.md) for vulnerability or security-sensitive reports.
+
+Check [common problems](docs/getting-started.md#common-problems) and
+[HA consumer status](docs/home-assistant.md) before treating import success or
+optional-push retries as proof of complete integration compatibility.
 
 ## What to include
 

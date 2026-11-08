@@ -1,5 +1,10 @@
 # Package layout migration (historical PR #413 plan)
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](README.md) and [current HA status](home-assistant.md).
+
+
 The preservation rules below describe PR #413, not the subsequent alias cleanup.
 Current supported paths are documented in [HA compatibility](ha-compatibility.md).
 

@@ -1,5 +1,10 @@
 # Finite HLS completion: separate host review candidate
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](README.md) and [current HA status](home-assistant.md).
+
+
 This follows the [delivered-HLS boundary audit](ha-finite-hls-review.md). It is
 an isolated external HA proposal, not installed HA support or a pyezvizapi runtime
 change. The existing draft PR397 and validated library wheel remain unchanged.

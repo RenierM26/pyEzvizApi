@@ -5,27 +5,25 @@ contracts, and the validation procedure used before changing stream code.
 
 ## Module ownership
 
-New code should import from the focused module that owns the behavior:
+Use canonical module owners for new imports:
 
-- `stream_transport`: VTM/VTDU discovery, framing, keepalives, cloud packet
-  sources, and cloud replay transport.
-- `stream_media`: MPEG-PS transport detection, prefix parsing, and Hikvision
-  video decryption.
-- `local_stream_transport`: local SDK and HCNetSDK command-port sessions,
-  bootstrap plans, receiver sockets, keepalives, and local packet sources.
-- `local_stream_media`: local MPEG/IDMX transforms, codec routing, clean
-  IDR/IRAP selection, diagnostics, and remux entry points.
-- `local_stream_ecdh`: ECDH handshake, key derivation, encrypted packet
-  decoding, and the ECDH packet source.
-- `media`: transport-neutral `MediaPacket`, `CaptureLimits`, decode/mux options,
-  and packet-source adapters.
-- `remux`: FFmpeg process construction, bounded stderr capture, cancellation,
-  and terminate/kill cleanup.
-- `clip`: grouped public source and clip configuration objects.
+| Responsibility | Module |
+| --- | --- |
+| VTM/VTDU discovery, framing and cloud replay transport | `pyezvizapi.streaming.cloud.transport` |
+| Cloud negotiation and packet-source bootstrap | `pyezvizapi.streaming.cloud.bootstrap` |
+| MPEG-PS parsing and vendor video decryption | `pyezvizapi.streaming.media.containers` and `cloud.protocol` |
+| Local SDK/HCNetSDK sessions, plans and sockets | `pyezvizapi.streaming.local.session` and `local.transport` |
+| Local MPEG/IDMX routing, windows and remux | `pyezvizapi.streaming.local.media` |
+| ECDH handshake and packet source | `pyezvizapi.streaming.local.ecdh` |
+| Transport-neutral packets, capture/decode/mux values | `pyezvizapi.streaming.media.models` |
+| FFmpeg process construction and cleanup | `pyezvizapi.streaming.media.remux` |
+| Grouped source/clip configuration | `pyezvizapi.streaming.capture` |
 
-`pyezvizapi.streaming.cloud.protocol` and `pyezvizapi.streaming.local.session` are compatibility aliases for
-older imports. They remain supported, but new lower-level integrations should
-use the focused modules above.
+`streaming.cloud.protocol` and `streaming.local.session` are canonical owners,
+not legacy flat aliases. Removed names such as `stream_transport` no longer
+import. See [the compatibility boundary](ha-compatibility.md) and
+[code map](code-map.md). For task-based entry points, use the
+[media guide](media.md), [saving guide](media-saving.md), or [stream CLI](stream-cli.md).
 
 ## Conformance matrix
 

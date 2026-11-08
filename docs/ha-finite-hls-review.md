@@ -1,5 +1,10 @@
 # Delivered HLS clocks and finite-tail boundary
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](README.md) and [current HA status](home-assistant.md).
+
+
 This retained-recording investigation changes no library or integration runtime.
 It follows the [external startup-clock proposals](ha-initial-source-clock-review.md).
 The stock-host gate remains open: the receiver still needs maintained FFmpeg/HA

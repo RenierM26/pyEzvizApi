@@ -11,9 +11,9 @@ from homeassistant.components.camera import DynamicStreamSettings
 from homeassistant.components.stream import create_stream
 from homeassistant.setup import async_setup_component
 import pytest
-from test_local_av_timeline import encode_three_track_ps
-from test_native_stream import Source, options, repeated_ps_packets
-from test_stream_sample import packet_oracle
+from tests.streaming.test_native_stream import Source, options, repeated_ps_packets
+from tests.streaming.test_stream_sample import packet_oracle
+from tests.tools.test_local_av_timeline import encode_three_track_ps
 
 from pyezvizapi.native_stream import NativeTrackSelection
 

@@ -71,6 +71,10 @@ jobs:
       - name: Ruff
         run: ruff check .
 
+      - name: Package formatting
+        if: matrix.python-version == '3.12'
+        run: ruff format --check pyezvizapi
+
       - name: Codespell
         if: matrix.python-version == '3.12'
         run: codespell pyezvizapi tests README.md pyproject.toml .github --skip tests/fixtures/page_list_response.json
@@ -115,7 +119,7 @@ jobs:
       - name: pytest with coverage (skip gracefully if no tests yet)
         shell: bash
         run: |
-          if compgen -G "tests/test_*.py" > /dev/null; then
+          if [ -n "$(find tests -name 'test_*.py' -print -quit)" ]; then
             pytest --cov=pyezvizapi --cov-report=term-missing --cov-report=xml --cov-fail-under=85
           else
             echo "No tests found under tests/, skipping pytest."

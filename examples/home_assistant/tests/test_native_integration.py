@@ -25,30 +25,13 @@ from homeassistant.components.stream import create_stream
 from homeassistant.setup import async_setup_component
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from test_local_av_timeline import encode_three_track_ps
-from test_native_stream import Source, repeated_ps_packets
+from tests.streaming.test_native_stream import Source, repeated_ps_packets
+from tests.tools.test_local_av_timeline import encode_three_track_ps
 
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.native_stream import NativeMpegTsStream
 from pyezvizapi.stream_selection import select_stream_source
-
-
-@pytest.fixture
-def data(tmp_path):
-    path = tmp_path / "private.json"
-    path.write_text(json.dumps({
-        "serial": "CAMERA123", "endpoint": {"host": "192.0.2.10", "command_port": 8000},
-        "cas": {"operation_code": "ABC1234", "key": "0123456789abcdef"},
-        "media_key": "secret",
-    }))
-    return {"name": "Lens A", "credentials_path": str(path), "channel": 0,
-            "video_id": 480, "audio_id": 448, "video_codec": "hevc", "nalu_header_size": 2}
-
-
-@pytest.fixture
-def runtime(data):
-    return Runtime(load_settings(data), MagicMock(spec=EzvizClient))
 
 
 async def route_client(hass, aiohttp_client, runtime):

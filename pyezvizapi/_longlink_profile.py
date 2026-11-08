@@ -1,90 +1,54 @@
-"""Immutable HTTP identities used by legacy and channel-99 sessions."""
+# Compatibility export assignments include retained private attributes.
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-from __future__ import annotations
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.push.longlink.profile`.
 
-from collections.abc import Mapping, MutableMapping
-from typing import Any, Literal
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
-from .constants import (
-    ANDROID_PROFILE,
-    WEB_PROFILE,
-    HttpProfile,
-)
+import sys
+from typing import TYPE_CHECKING
 
+from pyezvizapi.push.longlink import profile as _implementation
 
-def profile_for_token(token: Mapping[str, Any]) -> HttpProfile:
-    """Select the HTTP identity bound to a persisted token."""
+if TYPE_CHECKING:
+    import pyezvizapi.push.longlink.profile as _compat_module_0
 
-    if token.get("push_profile") == ANDROID_PROFILE.name:
-        return ANDROID_PROFILE
-    return WEB_PROFILE
+    ANDROID_PROFILE = _compat_module_0.ANDROID_PROFILE
+    WEB_PROFILE = _compat_module_0.WEB_PROFILE
+    Any = _compat_module_0.Any
+    HttpProfile = _compat_module_0.HttpProfile
+    Literal = _compat_module_0.Literal
+    Mapping = _compat_module_0.Mapping
+    MutableMapping = _compat_module_0.MutableMapping
+    annotations = _compat_module_0.annotations
+    current_session_header = _compat_module_0.current_session_header
+    profile_for_token = _compat_module_0.profile_for_token
+    recreated_session_header_for_token = _compat_module_0.recreated_session_header_for_token
+    session_header_for_token = _compat_module_0.session_header_for_token
+    synchronize_http_headers = _compat_module_0.synchronize_http_headers
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-def session_header_for_token(token: Mapping[str, Any]) -> object | str | None:
-    """Return the exact session-header state represented by a token.
+    _declare_compatibility_exports(
+        ANDROID_PROFILE,
+        WEB_PROFILE,
+        Any,
+        HttpProfile,
+        Literal,
+        Mapping,
+        MutableMapping,
+        annotations,
+        current_session_header,
+        profile_for_token,
+        recreated_session_header_for_token,
+        session_header_for_token,
+        synchronize_http_headers,
+    )
 
-    Legacy sessions retain the historical empty default. An Android profile with
-    no credential is a migration in progress and must omit ``sessionId`` so an
-    old web credential cannot be sent under the new identity.
-    """
-
-    if session_id := token.get("session_id"):
-        return str(session_id)
-    if profile_for_token(token) is ANDROID_PROFILE:
-        return None
-    return HttpProfile.DEFAULT_SESSION
-
-
-def recreated_session_header_for_token(
-    token: Mapping[str, Any],
-) -> object | str | None:
-    """Return the historical session state used after transport recreation."""
-
-    if profile_for_token(token) is ANDROID_PROFILE:
-        return session_header_for_token(token)
-    return WEB_PROFILE.headers["sessionId"]
-
-
-def current_session_header(headers: Mapping[str, Any]) -> str | bytes | None:
-    """Return a live header value, preserving absence as ``None``."""
-
-    if "sessionId" not in headers:
-        return None
-    return headers["sessionId"]
-
-
-def synchronize_http_headers(
-    headers: MutableMapping[str, Any],
-    profile: HttpProfile,
-    session_id: object | str | bytes | None = HttpProfile.DEFAULT_SESSION,
-    *,
-    scope: Literal["profile", "identity", "session"],
-) -> None:
-    """Synchronize profile-owned headers without touching endpoint headers.
-
-    The ``profile`` scope installs the complete identity on a new or repurposed
-    session. ``identity`` updates fields that may differ after profile migration
-    while preserving endpoint-specific request headers. ``session`` changes only
-    the rotating credential on an already-owned or externally supplied session.
-
-    ``session_id`` has three states: the private default keeps the profile's
-    historical empty value, ``None`` removes the header for a fresh migration,
-    and a string installs the current credential.
-    """
-
-    managed = {
-        "profile": HttpProfile.PROFILE_HEADER_NAMES,
-        "identity": HttpProfile.IDENTITY_HEADER_NAMES,
-        "session": ("sessionId",),
-    }[scope]
-    for name in managed:
-        if name in profile.headers:
-            headers[name] = profile.headers[name]
-        else:
-            headers.pop(name, None)
-    if session_id is None:
-        headers.pop("sessionId", None)
-    elif session_id is not HttpProfile.DEFAULT_SESSION:
-        headers["sessionId"] = (
-            session_id if isinstance(session_id, (str, bytes)) else str(session_id)
-        )
+sys.modules[__name__] = _implementation

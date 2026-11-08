@@ -1,62 +1,47 @@
-"""Offline advisory playback capabilities from the official app's conditions."""
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-from __future__ import annotations
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.playback`.
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-import json
-import re
-from typing import Any
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
+import sys
+from typing import TYPE_CHECKING
 
-@dataclass(frozen=True)
-class EzvizAppPlaybackSupport:
-    """Player support flags, not active sound state or an AV clock contract.
+from pyezvizapi.streaming import playback as _implementation
 
-    ``None`` means metadata is unavailable/malformed. A valid map missing 915
-    follows the app's disabled default. Smoothing belongs to a live player;
-    these flags never authorize a timestamp shift or change a camera setting.
-    """
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.playback as _compat_module_0
 
-    audio_on_off: bool | None
-    auto_smooth_play: bool | None
+    Any = _compat_module_0.Any
+    EzvizAppPlaybackSupport = _compat_module_0.EzvizAppPlaybackSupport
+    Mapping = _compat_module_0.Mapping
+    _capability_integer = _compat_module_0._capability_integer
+    annotations = _compat_module_0.annotations
+    dataclass = _compat_module_0.dataclass
+    inspect_app_playback_support = _compat_module_0.inspect_app_playback_support
+    json = _compat_module_0.json
+    re = _compat_module_0.re
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-def _capability_integer(value: object) -> int | None:
-    # DeviceParam uses Kotlin toIntOrNull: no whitespace, CSV, floats or bools.
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if -(2**31) <= value < 2**31 else None
-    if isinstance(value, str) and re.fullmatch(r"[+-]?[0-9]+", value):
-        digits = value.lstrip("+-").lstrip("0")
-        if len(digits) > 10:
-            return None
-        parsed = int(digits or "0") * (-1 if value.startswith("-") else 1)
-        return parsed if -(2**31) <= parsed < 2**31 else None
-    return None
+    _declare_compatibility_exports(
+        Any,
+        EzvizAppPlaybackSupport,
+        Mapping,
+        _capability_integer,
+        annotations,
+        dataclass,
+        inspect_app_playback_support,
+        json,
+        re,
+    )
 
-
-def inspect_app_playback_support(device: Mapping[str, Any]) -> EzvizAppPlaybackSupport:
-    """Inspect supplied device metadata without account/network probes.
-
-    Verified EZVIZ 7.4.1 paths: audio on/off uses supportExt 63; LivePlayCore
-    enables smoothing only for DeviceParam support 915 == 1. Its EZVIZ converter
-    ignores the named ``support_auto_smooth_play`` fallback and reads numeric
-    support. Do not substitute FEATURE or the distinct ezDeviceCapability map.
-    Missing/invalid 915 values in an available map are disabled by the app.
-    """
-    info = device.get("deviceInfos")
-    if not isinstance(info, Mapping):
-        return EzvizAppPlaybackSupport(None, None)
-    support = info.get("supportExt")
-    if isinstance(support, str):
-        try:
-            support = json.loads(support)
-        except ValueError:
-            return EzvizAppPlaybackSupport(None, None)
-    if not isinstance(support, Mapping):
-        return EzvizAppPlaybackSupport(None, None)
-    audio = _capability_integer(support.get("63"))
-    smooth = _capability_integer(support.get("915"))
-    return EzvizAppPlaybackSupport(audio == 1, smooth == 1)
+sys.modules[__name__] = _implementation

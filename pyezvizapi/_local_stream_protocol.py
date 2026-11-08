@@ -1,53 +1,45 @@
-"""Bounded wire evidence shared by local probing and strict ECDH decoding."""
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-from __future__ import annotations
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.local.protocol`.
 
-from .exceptions import PyEzvizError
-from .rtp import parse_rtp_packet, rtp_payload
-from .stream_media import MPEG_START_CODE_PREFIX, _is_mpeg_ps_packet_start_id
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
-_LEGACY_PS_EVIDENCE_PACKETS = 8
+import sys
+from typing import TYPE_CHECKING
 
+from pyezvizapi.streaming.local import protocol as _implementation
 
-class LocalSdkProtocolDetector:
-    """Recognize repeated PS starts on one syntactically valid RTP route.
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.local.protocol as _compat_module_0
 
-    Never infer a protocol from RTP version bits, a single packet, duplicate
-    records, or SSRC alone. Keep only a small bounded set of observations.
-    """
+    _LEGACY_PS_EVIDENCE_PACKETS = _compat_module_0._LEGACY_PS_EVIDENCE_PACKETS
+    MPEG_START_CODE_PREFIX = _compat_module_0.MPEG_START_CODE_PREFIX
+    LocalSdkProtocolDetector = _compat_module_0.LocalSdkProtocolDetector
+    PyEzvizError = _compat_module_0.PyEzvizError
+    _is_mpeg_ps_packet_start_id = _compat_module_0._is_mpeg_ps_packet_start_id
+    annotations = _compat_module_0.annotations
+    parse_rtp_packet = _compat_module_0.parse_rtp_packet
+    rtp_payload = _compat_module_0.rtp_payload
 
-    def __init__(self) -> None:
-        self._route: tuple[int, int, int] | None = None
-        self._records: set[tuple[int, int]] = set()
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-    @property
-    def legacy_rtp_ps(self) -> bool:
-        """Whether eight distinct records establish a legacy RTP/PS route."""
-        return len(self._records) >= _LEGACY_PS_EVIDENCE_PACKETS
+    _declare_compatibility_exports(
+        _LEGACY_PS_EVIDENCE_PACKETS,
+        MPEG_START_CODE_PREFIX,
+        LocalSdkProtocolDetector,
+        PyEzvizError,
+        _is_mpeg_ps_packet_start_id,
+        annotations,
+        parse_rtp_packet,
+        rtp_payload,
+    )
 
-    def observe(self, channel: int, payload: bytes) -> None:
-        """Observe framing only; retain neither payloads nor key material."""
-        if self.legacy_rtp_ps:
-            return
-        try:
-            packet = parse_rtp_packet(payload)
-            body = rtp_payload(payload)
-        except PyEzvizError:
-            return
-        if body.startswith(b"\x1c") and len(body) >= 2:
-            body = body[2:]
-        elif body.startswith(b"\x0d"):
-            body = body[1:]
-        if not (
-            len(body) >= 4
-            and body.startswith(MPEG_START_CODE_PREFIX)
-            and _is_mpeg_ps_packet_start_id(body[3])
-        ):
-            return
-        route = (channel, packet.ssrc, packet.payload_type)
-        if route != self._route:
-            self._route = route
-            self._records.clear()
-        self._records.add((packet.sequence, packet.timestamp))
-
-
+sys.modules[__name__] = _implementation

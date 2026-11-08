@@ -1,120 +1,51 @@
-"""Nested mapping traversal and legacy shallow merge contracts."""
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-from __future__ import annotations
+"""Compatibility alias. Implementation: :mod:`pyezvizapi._shared.mapping`.
 
-from collections.abc import Iterable, Iterator
-from typing import Any
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
-PathComponent = str | int
-WILDCARD_STEP = "*"
-_MISSING = object()
+import sys
+from typing import TYPE_CHECKING
 
+from pyezvizapi._shared import mapping as _implementation
 
-def iter_nested(data: Any, path: Iterable[PathComponent]) -> Iterator[Any]:
-    """Yield values reachable by following a dotted path with optional wildcards."""
+if TYPE_CHECKING:
+    import pyezvizapi._shared.mapping as _compat_module_0
 
-    current: list[Any] = [data]
+    _MISSING = _compat_module_0._MISSING
+    WILDCARD_STEP = _compat_module_0.WILDCARD_STEP
+    Any = _compat_module_0.Any
+    Iterable = _compat_module_0.Iterable
+    Iterator = _compat_module_0.Iterator
+    PathComponent = _compat_module_0.PathComponent
+    annotations = _compat_module_0.annotations
+    deep_merge = _compat_module_0.deep_merge
+    fetch_nested_value = _compat_module_0.fetch_nested_value
+    first_nested = _compat_module_0.first_nested
+    iter_nested = _compat_module_0.iter_nested
 
-    for step in path:
-        next_level: list[Any] = []
-        for candidate in current:
-            if step == WILDCARD_STEP:
-                if isinstance(candidate, dict):
-                    next_level.extend(candidate.values())
-                elif isinstance(candidate, (list, tuple)):
-                    next_level.extend(candidate)
-                continue
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-            if isinstance(candidate, dict) and step in candidate:
-                next_level.append(candidate[step])
-                continue
+    _declare_compatibility_exports(
+        _MISSING,
+        WILDCARD_STEP,
+        Any,
+        Iterable,
+        Iterator,
+        PathComponent,
+        annotations,
+        deep_merge,
+        fetch_nested_value,
+        first_nested,
+        iter_nested,
+    )
 
-            if (
-                isinstance(candidate, (list, tuple))
-                and isinstance(step, int)
-                and -len(candidate) <= step < len(candidate)
-            ):
-                next_level.append(candidate[step])
-
-        current = next_level
-        if not current:
-            break
-
-    yield from current
-
-
-
-def first_nested(
-    data: Any, path: Iterable[PathComponent], default: Any = None
-) -> Any:
-    """Return the first value produced by iter_nested or ``default``."""
-
-    return next(iter_nested(data, path), default)
-
-
-
-def fetch_nested_value(data: Any, keys: list, default_value: Any = None) -> Any:
-    """Fetch the value corresponding to the given nested keys in a dictionary.
-
-    If any of the keys in the path doesn't exist, the default value is returned.
-
-    Args:
-        data (dict): The nested dictionary to search for keys.
-        keys (list): A list of keys representing the path to the desired value.
-        default_value (optional): The value to return if any of the keys doesn't exist.
-
-    Returns:
-        The value corresponding to the nested keys or the default value.
-
-    """
-    value = first_nested(data, keys, _MISSING)
-    return default_value if value is _MISSING else value
-
-
-
-def deep_merge(dict1: Any, dict2: Any) -> Any:
-    """Merge dicts recursively, concatenate lists, and otherwise prefer dict2.
-
-    Inputs are not mutated. Unchanged subtrees and the non-None operand of a
-    None merge are returned by reference; this is not a deep-copy operation.
-
-    Args:
-    dict1 (dict): The first dictionary.
-    dict2 (dict): The second dictionary.
-
-    Returns:
-    dict: The merged dictionary.
-
-    """
-    # If one of the dictionaries is None, return the other one
-    if dict1 is None:
-        return dict2
-    if dict2 is None:
-        return dict1
-
-    if not isinstance(dict1, dict) or not isinstance(dict2, dict):
-        if isinstance(dict1, list) and isinstance(dict2, list):
-            return dict1 + dict2
-        return dict2
-
-    # Create a new dictionary to store the merged result
-    merged = {}
-
-    # Merge keys from both dictionaries
-    for key in set(dict1.keys()) | set(dict2.keys()):
-        if key in dict1 and key in dict2:
-            if isinstance(dict1[key], dict) and isinstance(dict2[key], dict):
-                merged[key] = deep_merge(dict1[key], dict2[key])
-            elif isinstance(dict1[key], list) and isinstance(dict2[key], list):
-                merged[key] = dict1[key] + dict2[key]
-            else:
-                # If both values are not dictionaries or lists, keep the value from dict2
-                merged[key] = dict2[key]
-        elif key in dict1:
-            # If the key is only in dict1, keep its value
-            merged[key] = dict1[key]
-        else:
-            # If the key is only in dict2, keep its value
-            merged[key] = dict2[key]
-
-    return merged
+sys.modules[__name__] = _implementation

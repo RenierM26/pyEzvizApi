@@ -1,45 +1,97 @@
-"""Local SDK and HCNetSDK transport/session helpers."""
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-import socket as _socket
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.local.transport`.
 
-from ._local_stream import (  # noqa: F401
-    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
-    EzvizLocalSdkCredentials,
-    EzvizLocalSdkMediaStream,
-    EzvizLocalStreamPacket,
-    HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
-    HcNetSdkCommandPortGeneratedMultiSocketPlan,
-    HcNetSdkCommandPortGeneratedSocketStep,
-    HcNetSdkCommandPortKeepaliveEvent,
-    HcNetSdkCommandPortMediaStream,
-    HcNetSdkCommandPortMultiSocketMediaStream,
-    HcNetSdkCommandPortMultiSocketPlan,
-    HcNetSdkCommandPortSocketStep,
-    copy_local_sdk_stream_from_client,
-    get_local_sdk_stream_credentials_from_client,
-    hcnetsdk_command_port_generated_plan_from_socket_plan,
-    hcnetsdk_command_port_native_lan_live_view_plan,
-    local_media_packet_source,
-    local_stream_packet_to_media_packet,
-    open_hcnetsdk_command_port_generated_multi_socket_stream,
-    open_hcnetsdk_command_port_multi_socket_stream,
-    open_hcnetsdk_command_port_stream,
-    open_local_sdk_stream,
-    open_local_sdk_stream_from_client,
-)
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
+import sys
+from typing import TYPE_CHECKING
 
-def fresh_local_sdk_receiver_port() -> int:
-    """Reserve a kernel-selected IPv4 port on the SDK bind scope for a new local SDK session.
+from pyezvizapi.streaming.local import transport as _implementation
 
-    Does not connect or listen. The subsequent SDK bind remains authoritative
-    if another local process wins the brief allocation race.
-    """
-    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as reservation:
-        # The SDK subsequently binds IPv4 INADDR_ANY. This transient socket
-        # must match that scope, but never listens or accepts remote traffic.
-        reservation.bind(("", 0))  # codeql[py/bind-socket-all-network-interfaces] lgtm[py/bind-socket-all-network-interfaces]
-        return int(reservation.getsockname()[1])
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.local.transport as _compat_module_0
 
+    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = (
+        _compat_module_0.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+    )
+    EzvizLocalSdkCredentials = _compat_module_0.EzvizLocalSdkCredentials
+    EzvizLocalSdkMediaStream = _compat_module_0.EzvizLocalSdkMediaStream
+    EzvizLocalStreamPacket = _compat_module_0.EzvizLocalStreamPacket
+    HcNetSdkCommandPortGeneratedMultiSocketMediaStream = (
+        _compat_module_0.HcNetSdkCommandPortGeneratedMultiSocketMediaStream
+    )
+    HcNetSdkCommandPortGeneratedMultiSocketPlan = (
+        _compat_module_0.HcNetSdkCommandPortGeneratedMultiSocketPlan
+    )
+    HcNetSdkCommandPortGeneratedSocketStep = _compat_module_0.HcNetSdkCommandPortGeneratedSocketStep
+    HcNetSdkCommandPortKeepaliveEvent = _compat_module_0.HcNetSdkCommandPortKeepaliveEvent
+    HcNetSdkCommandPortMediaStream = _compat_module_0.HcNetSdkCommandPortMediaStream
+    HcNetSdkCommandPortMultiSocketMediaStream = (
+        _compat_module_0.HcNetSdkCommandPortMultiSocketMediaStream
+    )
+    HcNetSdkCommandPortMultiSocketPlan = _compat_module_0.HcNetSdkCommandPortMultiSocketPlan
+    HcNetSdkCommandPortSocketStep = _compat_module_0.HcNetSdkCommandPortSocketStep
+    _socket = _compat_module_0._socket
+    copy_local_sdk_stream_from_client = _compat_module_0.copy_local_sdk_stream_from_client
+    fresh_local_sdk_receiver_port = _compat_module_0.fresh_local_sdk_receiver_port
+    get_local_sdk_stream_credentials_from_client = (
+        _compat_module_0.get_local_sdk_stream_credentials_from_client
+    )
+    hcnetsdk_command_port_generated_plan_from_socket_plan = (
+        _compat_module_0.hcnetsdk_command_port_generated_plan_from_socket_plan
+    )
+    hcnetsdk_command_port_native_lan_live_view_plan = (
+        _compat_module_0.hcnetsdk_command_port_native_lan_live_view_plan
+    )
+    local_media_packet_source = _compat_module_0.local_media_packet_source
+    local_stream_packet_to_media_packet = _compat_module_0.local_stream_packet_to_media_packet
+    open_hcnetsdk_command_port_generated_multi_socket_stream = (
+        _compat_module_0.open_hcnetsdk_command_port_generated_multi_socket_stream
+    )
+    open_hcnetsdk_command_port_multi_socket_stream = (
+        _compat_module_0.open_hcnetsdk_command_port_multi_socket_stream
+    )
+    open_hcnetsdk_command_port_stream = _compat_module_0.open_hcnetsdk_command_port_stream
+    open_local_sdk_stream = _compat_module_0.open_local_sdk_stream
+    open_local_sdk_stream_from_client = _compat_module_0.open_local_sdk_stream_from_client
 
-__all__ = [name for name in globals() if not name.startswith("_")]
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
+        EzvizLocalSdkCredentials,
+        EzvizLocalSdkMediaStream,
+        EzvizLocalStreamPacket,
+        HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
+        HcNetSdkCommandPortGeneratedMultiSocketPlan,
+        HcNetSdkCommandPortGeneratedSocketStep,
+        HcNetSdkCommandPortKeepaliveEvent,
+        HcNetSdkCommandPortMediaStream,
+        HcNetSdkCommandPortMultiSocketMediaStream,
+        HcNetSdkCommandPortMultiSocketPlan,
+        HcNetSdkCommandPortSocketStep,
+        _socket,
+        copy_local_sdk_stream_from_client,
+        fresh_local_sdk_receiver_port,
+        get_local_sdk_stream_credentials_from_client,
+        hcnetsdk_command_port_generated_plan_from_socket_plan,
+        hcnetsdk_command_port_native_lan_live_view_plan,
+        local_media_packet_source,
+        local_stream_packet_to_media_packet,
+        open_hcnetsdk_command_port_generated_multi_socket_stream,
+        open_hcnetsdk_command_port_multi_socket_stream,
+        open_hcnetsdk_command_port_stream,
+        open_local_sdk_stream,
+        open_local_sdk_stream_from_client,
+    )
+
+sys.modules[__name__] = _implementation

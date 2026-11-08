@@ -1,25 +1,36 @@
-"""Small shared device-payload helpers; device wrappers retain state ownership."""
+# Compatibility export assignments include retained private attributes.
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-from collections.abc import Mapping
-from typing import Any
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.devices.payload`.
 
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
-def switch_values(value: Any) -> dict[int, bool]:
-    """Collapse valid switch rows, preserving zero/false and last-row wins."""
-    result: dict[int, bool] = {}
-    for item in value if isinstance(value, list) else ():
-        if not isinstance(item, Mapping):
-            continue
-        kind, enabled = item.get("type"), item.get("enable")
-        if isinstance(kind, int) and isinstance(enabled, (bool, int)):
-            result[kind] = bool(enabled)
-    return result
+import sys
+from typing import TYPE_CHECKING
 
+from pyezvizapi.devices import payload as _implementation
 
-def local_ip_address(wifi: Any, connection: Any) -> str:
-    """Prefer WIFI address then CONNECTION.localIp, ignoring 0.0.0.0."""
-    for section, key in ((wifi, "address"), (connection, "localIp")):
-        value = section.get(key) if isinstance(section, Mapping) else None
-        if isinstance(value, str) and value != "0.0.0.0":
-            return value
-    return "0.0.0.0"
+if TYPE_CHECKING:
+    import pyezvizapi.devices.payload as _compat_module_0
+
+    Any = _compat_module_0.Any
+    Mapping = _compat_module_0.Mapping
+    local_ip_address = _compat_module_0.local_ip_address
+    switch_values = _compat_module_0.switch_values
+
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Any,
+        Mapping,
+        local_ip_address,
+        switch_values,
+    )
+
+sys.modules[__name__] = _implementation

@@ -1,5 +1,9 @@
 # Implementation responsibilities after the maintenance extraction
 
+> Historical checkpoint from PR #410. For current implementation paths, use
+> [the code map](code-map.md). Flat paths below remain compatibility imports;
+> they no longer imply implementation ownership.
+
 | Responsibility | Implementation | Compatibility boundary |
 | --- | --- | --- |
 | Tolerant conversion, mapping traversal, alarms/time, image envelope | `_coercion`, `_mapping`, `_alarm_time`, `_image_crypto` | Public `utils` helper imports remain the implementation objects; private image calls retain named compatibility wrappers. |

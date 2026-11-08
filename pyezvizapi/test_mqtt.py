@@ -1,140 +1,73 @@
-"""MQTT test module.
+# Compatibility export assignments include retained private attributes.
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-Run a simple MQTT listener using either a saved token file
-(`--token-file ezviz_token.json`) or by prompting for username/password
-with MFA similar to the main CLI.
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.cli.mqtt_listener`.
+
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
 """
 
-from __future__ import annotations
-
-import argparse
-from getpass import getpass
-import json
-import logging
-from pathlib import Path
 import sys
-import time
-from typing import Any, cast
+from typing import TYPE_CHECKING
 
-from ._token_store import save_private_token
-from .client import EzvizClient
-from .exceptions import EzvizAuthVerificationCode, PyEzvizError
+from pyezvizapi.cli import mqtt_listener as _implementation
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-_LOGGER = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    import pyezvizapi.cli.mqtt_listener as _compat_module_0
 
-LOG_FILE = Path("mqtt_messages.jsonl")  # JSON Lines format
+    _LOGGER = _compat_module_0._LOGGER
+    LOG_FILE = _compat_module_0.LOG_FILE
+    Any = _compat_module_0.Any
+    EzvizAuthVerificationCode = _compat_module_0.EzvizAuthVerificationCode
+    EzvizClient = _compat_module_0.EzvizClient
+    Path = _compat_module_0.Path
+    PyEzvizError = _compat_module_0.PyEzvizError
+    _load_token_file = _compat_module_0._load_token_file
+    _parse_args = _compat_module_0._parse_args
+    _save_token_file = _compat_module_0._save_token_file
+    annotations = _compat_module_0.annotations
+    argparse = _compat_module_0.argparse
+    cast = _compat_module_0.cast
+    getpass = _compat_module_0.getpass
+    json = _compat_module_0.json
+    logging = _compat_module_0.logging
+    main = _compat_module_0.main
+    message_handler = _compat_module_0.message_handler
+    save_private_token = _compat_module_0.save_private_token
+    sys = _compat_module_0.sys
+    time = _compat_module_0.time
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-def message_handler(msg: dict[str, Any]) -> None:
-    """Handle new MQTT messages by printing and saving them to a file."""
-    _LOGGER.info("📩 New MQTT message: %s", msg)
-    with LOG_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-
-
-def _load_token_file(path: str | None) -> dict[str, Any] | None:
-    if not path:
-        return None
-    p = Path(path)
-    if not p.exists():
-        return None
-    try:
-        return cast(dict[str, Any], json.loads(p.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError):
-        _LOGGER.warning("Failed to read token file: %s", p)
-        return None
-
-
-def _save_token_file(path: str | None, token: dict[str, Any]) -> None:
-    if not path:
-        raise ValueError("Channel-99 requires a token-file path")
-    save_private_token(path, token)
-
-
-def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    """Parse standalone listener arguments."""
-    parser = argparse.ArgumentParser(prog="test_mqtt")
-    parser.add_argument("-u", "--username", required=False, help="Ezviz username")
-    parser.add_argument("-p", "--password", required=False, help="Ezviz password")
-    parser.add_argument(
-        "-r",
-        "--region",
-        required=False,
-        default="apiieu.ezvizlife.com",
-        help="Ezviz API region",
+    _declare_compatibility_exports(
+        _LOGGER,
+        LOG_FILE,
+        Any,
+        EzvizAuthVerificationCode,
+        EzvizClient,
+        Path,
+        PyEzvizError,
+        _load_token_file,
+        _parse_args,
+        _save_token_file,
+        annotations,
+        argparse,
+        cast,
+        getpass,
+        json,
+        logging,
+        main,
+        message_handler,
+        save_private_token,
+        sys,
+        time,
     )
-    parser.add_argument(
-        "--token-file",
-        type=str,
-        default="ezviz_token.json",
-        help="Path to JSON token file (default: ezviz_token.json)",
-    )
-    parser.add_argument(
-        "--save-token",
-        action="store_true",
-        help="Compatibility flag: tokens are now always saved for channel-99",
-    )
-    return parser.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Entry point for testing MQTT messages."""
-    args = _parse_args(argv)
-    token = _load_token_file(args.token_file)
-
-    username = args.username
-    password = args.password
-
-    # If no token and missing username/password, prompt interactively
-    if (not token or token.get("push_profile") != "android-channel99") and (not username or not password):
-        _LOGGER.info("No token found. Please enter Ezviz credentials")
-        username = username or input("Username: ")
-        password = password or getpass("Password: ")
-
-    client = None
-    mqtt_client = None
-    shutdown_failed = False
-    try:
-        client = EzvizClient(
-            username, password, args.region, token=token,
-            on_token_updated=lambda snapshot: _save_token_file(args.token_file, snapshot),
-        )
-        try:
-            client.enable_channel99()
-        except EzvizAuthVerificationCode:
-            mfa_code = input("MFA code required, please input MFA code.\n")
-            try:
-                code_int = int(mfa_code.strip())
-            except ValueError:
-                code_int = None
-            client.enable_channel99(sms_code=code_int)
-
-        mqtt_client = client.get_mqtt_client(on_message_callback=message_handler)
-        mqtt_client.connect()
-        _LOGGER.info("Listening for MQTT messages... (Ctrl+C to quit)")
-        while True:
-            mqtt_client.raise_if_failed()
-            time.sleep(1)
-    except (PyEzvizError, OSError) as error:
-        _LOGGER.error("Listener failed: %s", error)
-        return 1
-    except KeyboardInterrupt:
-        _LOGGER.info("Stopping listener (keyboard interrupt)")
-    finally:
-        try:
-            if mqtt_client is not None:
-                mqtt_client.stop()
-        except TimeoutError:
-            shutdown_failed = True
-            _LOGGER.error("Push shutdown timed out; cancellation remains signalled")
-        finally:
-            if client is not None:
-                client.close_session()
-        _LOGGER.info("Listener stopped")
-
-    return 1 if shutdown_failed else 0
-
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_implementation.main())
+else:
+    sys.modules[__name__] = _implementation

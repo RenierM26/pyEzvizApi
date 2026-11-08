@@ -7,18 +7,10 @@ from custom_components.ezviz_native.const import DOMAIN
 from custom_components.ezviz_native.entry_runtime import GroupEntry
 from homeassistant.helpers import entity_registry as er
 import pytest
-from test_composition import (
-    cameras,
-    clear_finite as clear_finite,  # noqa: PLC0414
-    consume,
-    path,
-    settled,
-    setup,
-)
-from test_local_av_timeline import encode_three_track_ps
-from test_native_integration import data as data  # noqa: PLC0414
-from test_native_late_join import oracle
-from test_native_stream import Source, repeated_ps_packets
+from test_composition import cameras, consume, path, settled, setup
+from tests.streaming.test_native_late_join import oracle
+from tests.streaming.test_native_stream import Source, repeated_ps_packets
+from tests.tools.test_local_av_timeline import encode_three_track_ps
 
 from pyezvizapi.native_session import NativeMpegTsSession
 

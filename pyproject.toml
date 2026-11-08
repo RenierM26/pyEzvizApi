@@ -55,6 +55,7 @@ include = ["pyezvizapi*"]
 
 [tool.setuptools.package-data]
 pyezvizapi = ["py.typed"]
+"pyezvizapi._typing" = ["*.pyi"]
 
 [tool.ruff]
 line-length = 100
@@ -73,14 +74,24 @@ ignore = ["E501"] # long URLs ok
 "pyezvizapi/__init__.py" = ["F401"]
 # Compatibility helper modules may intentionally expose legacy names.
 "pyezvizapi/test_*.py" = ["SLF001"]
-"tests/test_mqtt.py" = ["SLF001"]
-"tests/test_pagelist.py" = ["SLF001"]
-"tests/test_http_helpers.py" = ["SLF001"]
-"tests/test_mqtt_demo.py" = ["SLF001"]
-"tests/test_auth.py" = ["SLF001"]
-"tests/test_client_parsing.py" = ["SLF001"]
-"tests/test_alarm_parsing.py" = ["SLF001"]
+"tests/push/test_mqtt.py" = ["SLF001"]
+"tests/cloud/test_pagelist.py" = ["SLF001"]
+"tests/cloud/test_http_helpers.py" = ["SLF001"]
+"tests/push/test_mqtt_demo.py" = ["SLF001"]
+"tests/cloud/test_auth.py" = ["SLF001"]
+"tests/cloud/test_client_parsing.py" = ["SLF001"]
+"tests/cloud/test_alarm_parsing.py" = ["SLF001"]
 "pyezvizapi/cloud_stream.py" = ["SLF001"]
+
+
+# Identity-preserving compatibility boundaries retain historical imports and initialization order.
+"pyezvizapi/client.py" = ["F401", "E402", "I001", "PLC0414", "SLF001"]
+"pyezvizapi/streaming/local/session.py" = ["F401", "E402", "I001", "PLC0414", "SLF001"]
+"pyezvizapi/streaming/local/hcnetsdk/api.py" = ["F401", "E402", "I001", "PLC0414", "SLF001"]
+"pyezvizapi/streaming/local/hcnetsdk/protocol.py" = ["F401", "E402", "I001", "PLC0414", "SLF001"]
+"pyezvizapi/cli/commands/*.py" = ["PLR0911", "PLR0912", "PLR0915"]
+"pyezvizapi/cli/main.py" = ["F401", "E402", "I001", "PLC0414", "SLF001", "PLR0911", "PLR0912", "PLR0915"]
+"pyezvizapi/streaming/cloud/bootstrap.py" = ["SLF001"]
 
 # Import sorting to match HA expectations
 [tool.ruff.lint.isort]

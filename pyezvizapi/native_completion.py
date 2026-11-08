@@ -1,40 +1,36 @@
-"""Immutable selected-access-unit completion metadata; no host/transport policy."""
+# Compatibility export assignments include retained private attributes.
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-from dataclasses import dataclass
-from typing import Literal
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.media.completion`.
 
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
-@dataclass(frozen=True, slots=True)
-class NativeTrackCompletion:
-    """One admitted encoded track, counted after successful mux acceptance."""
+import sys
+from typing import TYPE_CHECKING
 
-    track_id: int
-    index: int
-    kind: Literal["video", "audio"]
-    codec: str
-    access_units: int
+from pyezvizapi.streaming.media import completion as _implementation
 
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.media.completion as _compat_module_0
 
-@dataclass(frozen=True, slots=True)
-class NativeMediaCompletion:
-    """Verified finite, joined, fully read output of one source/subscription.
+    Literal = _compat_module_0.Literal
+    NativeMediaCompletion = _compat_module_0.NativeMediaCompletion
+    NativeTrackCompletion = _compat_module_0.NativeTrackCompletion
+    dataclass = _compat_module_0.dataclass
 
-    Source generation is opaque and owner-local, not camera identity or capture
-    UTC. Track units describe original selected access units, not TS chunks or
-    proprietary transport packets. A consumer must establish one-to-one unit
-    correspondence through its container/relay before using these as host counts.
-    """
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-    source_generation: str
-    subscription_generation: int
-    tracks: tuple[NativeTrackCompletion, ...]
+    _declare_compatibility_exports(
+        Literal,
+        NativeMediaCompletion,
+        NativeTrackCompletion,
+        dataclass,
+    )
 
-    @property
-    def video_units(self) -> int:
-        """Return the selected video's accepted unit count."""
-        return sum(track.access_units for track in self.tracks if track.kind == "video")
-
-    @property
-    def audio_units(self) -> int:
-        """Return selected audio units, or zero for explicit video-only output."""
-        return sum(track.access_units for track in self.tracks if track.kind == "audio")
+sys.modules[__name__] = _implementation

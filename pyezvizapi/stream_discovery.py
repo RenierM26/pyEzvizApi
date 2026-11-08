@@ -1,75 +1,52 @@
-"""Caller-owned bounded reuse of successful local transport discovery."""
+# Compatibility export assignments include retained private attributes.
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-from __future__ import annotations
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.discovery`.
 
-from collections import OrderedDict
-from collections.abc import Callable
-from dataclasses import dataclass
-import math
-from threading import Lock
-import time
-from typing import Literal
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
-from .exceptions import PyEzvizError
-from .stream_header import EzvizStreamHeader
+import sys
+from typing import TYPE_CHECKING
 
+from pyezvizapi.streaming import discovery as _implementation
 
-@dataclass(frozen=True)
-class LocalStreamDiscovery:
-    """Negotiated transport/media metadata, never credentials or decoded proof."""
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.discovery as _compat_module_0
 
-    source_kind: Literal["local-sdk", "local-sdk-ecdh"]
-    stream_header: EzvizStreamHeader | None = None
+    Callable = _compat_module_0.Callable
+    EzvizStreamHeader = _compat_module_0.EzvizStreamHeader
+    Literal = _compat_module_0.Literal
+    LocalStreamDiscovery = _compat_module_0.LocalStreamDiscovery
+    LocalStreamDiscoveryCache = _compat_module_0.LocalStreamDiscoveryCache
+    Lock = _compat_module_0.Lock
+    OrderedDict = _compat_module_0.OrderedDict
+    PyEzvizError = _compat_module_0.PyEzvizError
+    annotations = _compat_module_0.annotations
+    dataclass = _compat_module_0.dataclass
+    math = _compat_module_0.math
+    time = _compat_module_0.time
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-class LocalStreamDiscoveryCache:
-    """In-memory TTL/LRU cache; integrations own its lifetime and invalidation.
+    _declare_compatibility_exports(
+        Callable,
+        EzvizStreamHeader,
+        Literal,
+        LocalStreamDiscovery,
+        LocalStreamDiscoveryCache,
+        Lock,
+        OrderedDict,
+        PyEzvizError,
+        annotations,
+        dataclass,
+        math,
+        time,
+    )
 
-    Keys must represent endpoint, channel, credentials and metadata generation.
-    AutoMediaStream supplies hashed keys and refreshes only after emitted input.
-    A hit is a startup hint, not an authentication bypass or media decode proof.
-    """
-
-    def __init__(self, *, ttl: float = 300.0, max_entries: int = 32,
-                 monotonic: Callable[[], float] = time.monotonic) -> None:
-        if not math.isfinite(ttl) or ttl <= 0:
-            raise PyEzvizError("Discovery cache TTL must be positive and finite")
-        if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries <= 0:
-            raise PyEzvizError("Discovery cache capacity must be a positive integer")
-        self._ttl = ttl
-        self._max_entries = max_entries
-        self._monotonic = monotonic
-        self._entries: OrderedDict[str, tuple[float, LocalStreamDiscovery]] = OrderedDict()
-        self._lock = Lock()
-
-    def get(self, key: str) -> LocalStreamDiscovery | None:
-        """Return an unexpired hint; cache reads do not extend its freshness."""
-        with self._lock:
-            entry = self._entries.get(key)
-            if entry is None:
-                return None
-            if self._monotonic() >= entry[0]:
-                del self._entries[key]
-                return None
-            self._entries.move_to_end(key)
-            return entry[1]
-
-    def remember(self, key: str, discovery: LocalStreamDiscovery) -> None:
-        """Store successful discovery; evict oldest entries at capacity."""
-        with self._lock:
-            now = self._monotonic()
-            expired = [identity for identity, entry in self._entries.items() if now >= entry[0]]
-            for identity in expired:
-                del self._entries[identity]
-            self._entries[key] = (now + self._ttl, discovery)
-            self._entries.move_to_end(key)
-            while len(self._entries) > self._max_entries:
-                self._entries.popitem(last=False)
-
-    def invalidate(self, key: str | None = None) -> None:
-        """Forget one identity or all identities after configuration changes."""
-        with self._lock:
-            if key is None:
-                self._entries.clear()
-            else:
-                self._entries.pop(key, None)
+sys.modules[__name__] = _implementation

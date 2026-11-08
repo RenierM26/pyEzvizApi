@@ -13,37 +13,9 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .app_timing import (
-        AppPlaybackClock,
-        AppTimedFrame,
-        app_timed_mpegps_payloads,
-        copy_app_timed_frames_to_mpegts,
-    )
-    from .camera import EzvizCamera
-    from .cas import EzvizCAS
-    from .client import EzvizClient
-    from .clip import (
-        AutoClipSource,
-        ClipOptions,
-        ClipOutputFormat,
-        ClipSource,
-        ClipSourceOptions,
-        CloudClipSource,
-        HcNetSdkCommandPortClipSource,
-        LocalSdkClipSource,
-        LocalSdkEcdhClipSource,
-    )
-    from .cloud_stream import (
-        VtduTokenResponse,
-        copy_cloud_stream_to_mpegps,
-        copy_cloud_stream_to_mpegts,
-        get_cloud_stream_info,
-        get_vtdu_token_v2,
-        get_vtm_info,
-        get_vtm_page_list,
-        open_cloud_stream,
-    )
-    from .constants import (
+    from pyezvizapi.client import EzvizClient
+    from pyezvizapi.cloud.cas import EzvizCAS
+    from pyezvizapi.constants import (
         AlarmDetectHumanCar,
         BatteryCameraNewWorkMode,
         BatteryCameraWorkMode,
@@ -57,18 +29,8 @@ if TYPE_CHECKING:
         SoundMode,
         SupportExt,
     )
-    from .exceptions import (
-        AuthTestResultFailed,
-        DeviceException,
-        EzvizAuthTokenExpired,
-        EzvizAuthVerificationCode,
-        HTTPError,
-        InvalidHost,
-        InvalidURL,
-        PyEzvizError,
-        UnsupportedRtpVideoCodecError,
-    )
-    from .feature import (
+    from pyezvizapi.devices.camera import EzvizCamera
+    from pyezvizapi.devices.features import (
         day_night_mode_value,
         day_night_sensitivity_value,
         device_icr_dss_config,
@@ -96,7 +58,111 @@ if TYPE_CHECKING:
         supplement_light_params,
         support_ext_value,
     )
-    from .hcnetsdk import (
+    from pyezvizapi.devices.light_bulb import EzvizLightBulb
+    from pyezvizapi.devices.smart_plug import EzvizSmartPlug
+    from pyezvizapi.exceptions import (
+        AuthTestResultFailed,
+        DeviceException,
+        EzvizAuthTokenExpired,
+        EzvizAuthVerificationCode,
+        HTTPError,
+        InvalidHost,
+        InvalidURL,
+        PyEzvizError,
+        UnsupportedRtpVideoCodecError,
+    )
+    from pyezvizapi.models import (
+        EzvizChimeMusic,
+        EzvizDeviceChimeInfo,
+        EzvizDeviceRecord,
+        build_device_records_map,
+    )
+    from pyezvizapi.push.mqtt import EzvizToken, MQTTClient, MqttData, ServiceUrls
+    from pyezvizapi.streaming.app_timing import (
+        AppPlaybackClock,
+        AppTimedFrame,
+        app_timed_mpegps_payloads,
+        copy_app_timed_frames_to_mpegts,
+    )
+    from pyezvizapi.streaming.capture import (
+        AutoClipSource,
+        ClipOptions,
+        ClipOutputFormat,
+        ClipSource,
+        ClipSourceOptions,
+        CloudClipSource,
+        HcNetSdkCommandPortClipSource,
+        LocalSdkClipSource,
+        LocalSdkEcdhClipSource,
+    )
+    from pyezvizapi.streaming.cloud.bootstrap import (
+        VtduTokenResponse,
+        copy_cloud_stream_to_mpegps,
+        copy_cloud_stream_to_mpegts,
+        get_cloud_stream_info,
+        get_vtdu_token_v2,
+        get_vtm_info,
+        get_vtm_page_list,
+        open_cloud_stream,
+    )
+    from pyezvizapi.streaming.cloud.transport import (
+        StopStreamResponse,
+        StreamInfoResponse,
+        StreamTransport,
+        VtduInfoResponse,
+        VtduStreamResponse,
+        VtmChannel,
+        VtmMessageCode,
+        VtmPacket,
+        VtmStreamClient,
+        VtmTraceEvent,
+        build_get_vtdu_info_request,
+        build_peer_stream_request,
+        build_start_stream_request,
+        build_stop_stream_request,
+        build_stream_info_request,
+        build_stream_keepalive_request,
+        build_vtm_url,
+        decode_vtm_header,
+        decode_vtm_packet,
+        download_ezviz_cloud_replay,
+        encode_vtm_packet,
+        parse_get_vtdu_info_response,
+        parse_peer_stream_response,
+        parse_start_stream_response,
+        parse_stop_stream_response,
+        parse_stream_info_response,
+        parse_vtm_url,
+        summarize_vtm_packet,
+        vtm_media_packet_source,
+        vtm_packet_to_media_packet,
+    )
+    from pyezvizapi.streaming.discovery import LocalStreamDiscovery, LocalStreamDiscoveryCache
+    from pyezvizapi.streaming.local.details import discover_hcnetsdk_stream_details
+    from pyezvizapi.streaming.local.ecdh import (
+        EzvizLocalSdkEcdhDataPacket,
+        EzvizLocalSdkEcdhHandshakePacket,
+        EzvizLocalSdkEcdhKeyPair,
+        EzvizLocalSdkEcdhMediaStream,
+        EzvizLocalSdkEcdhStreamDecoder,
+        EzvizLocalSdkEcdhStreamPacket,
+        build_ezviz_local_sdk_ecdh_init_request_body,
+        copy_local_sdk_ecdh_stream_from_client,
+        copy_local_sdk_ecdh_stream_to_mpegps,
+        decrypt_ezviz_local_sdk_ecdh_data_packet,
+        derive_ezviz_local_sdk_ecdh_chacha20_key,
+        derive_ezviz_local_sdk_ecdh_shared_secret,
+        ezviz_local_sdk_ecdh_chacha20_nonce,
+        generate_ezviz_local_sdk_ecdh_keypair,
+        local_ecdh_media_packet_source,
+        local_ecdh_packet_to_media_packet,
+        open_local_sdk_ecdh_stream,
+        open_local_sdk_ecdh_stream_from_client,
+        parse_ezviz_local_sdk_ecdh_data_packet,
+        parse_ezviz_local_sdk_ecdh_handshake_packet,
+        transform_ezviz_local_sdk_ecdh_nonce,
+    )
+    from pyezvizapi.streaming.local.hcnetsdk.api import (
         EZVIZ_CAS_PTZ_COMMAND_MAP,
         EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE,
         EZVIZ_HCNETUTIL_LOGIN_V40,
@@ -622,33 +688,8 @@ if TYPE_CHECKING:
         sadp_stop_request,
         summarize_hcnetsdk_command_trace,
     )
-    from .hcnetsdk_parameters import HcNetSdkConfiguredMedia
-    from .light_bulb import EzvizLightBulb
-    from .local_stream_details import discover_hcnetsdk_stream_details
-    from .local_stream_ecdh import (
-        EzvizLocalSdkEcdhDataPacket,
-        EzvizLocalSdkEcdhHandshakePacket,
-        EzvizLocalSdkEcdhKeyPair,
-        EzvizLocalSdkEcdhMediaStream,
-        EzvizLocalSdkEcdhStreamDecoder,
-        EzvizLocalSdkEcdhStreamPacket,
-        build_ezviz_local_sdk_ecdh_init_request_body,
-        copy_local_sdk_ecdh_stream_from_client,
-        copy_local_sdk_ecdh_stream_to_mpegps,
-        decrypt_ezviz_local_sdk_ecdh_data_packet,
-        derive_ezviz_local_sdk_ecdh_chacha20_key,
-        derive_ezviz_local_sdk_ecdh_shared_secret,
-        ezviz_local_sdk_ecdh_chacha20_nonce,
-        generate_ezviz_local_sdk_ecdh_keypair,
-        local_ecdh_media_packet_source,
-        local_ecdh_packet_to_media_packet,
-        open_local_sdk_ecdh_stream,
-        open_local_sdk_ecdh_stream_from_client,
-        parse_ezviz_local_sdk_ecdh_data_packet,
-        parse_ezviz_local_sdk_ecdh_handshake_packet,
-        transform_ezviz_local_sdk_ecdh_nonce,
-    )
-    from .local_stream_media import (
+    from pyezvizapi.streaming.local.hcnetsdk.parameters import HcNetSdkConfiguredMedia
+    from pyezvizapi.streaming.local.media import (
         LocalSdkOutputFormat,
         collect_h264_idmx_annexb_after_first_clean_idr_window,
         collect_local_stream_mpegps,
@@ -663,7 +704,7 @@ if TYPE_CHECKING:
         summarize_idmx_h264_local_packets,
         trim_h264_annexb_to_first_clean_idr_window,
     )
-    from .local_stream_transport import (
+    from pyezvizapi.streaming.local.transport import (
         HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
         EzvizLocalSdkCredentials,
         EzvizLocalSdkMediaStream,
@@ -687,7 +728,15 @@ if TYPE_CHECKING:
         open_local_sdk_stream,
         open_local_sdk_stream_from_client,
     )
-    from .media import (
+    from pyezvizapi.streaming.media.containers import (
+        decrypt_hikvision_ps_video,
+        detect_hikvision_ps_video_nalu_header_size,
+        detect_transport,
+        mpeg_ps_complete_prefix_length,
+        mpeg_ps_decryptable_prefix_length,
+    )
+    from pyezvizapi.streaming.media.header import EzvizStreamHeader, parse_ezviz_stream_header
+    from pyezvizapi.streaming.media.models import (
         CaptureLimits,
         DeadlineLegacyPacketSource,
         IterableMediaPacketSource,
@@ -699,15 +748,7 @@ if TYPE_CHECKING:
         MediaPacketSource,
         MediaPacketSourceAdapter,
     )
-    from .models import (
-        EzvizChimeMusic,
-        EzvizDeviceChimeInfo,
-        EzvizDeviceRecord,
-        build_device_records_map,
-    )
-    from .mqtt import EzvizToken, MQTTClient, MqttData, ServiceUrls
-    from .playback import EzvizAppPlaybackSupport, inspect_app_playback_support
-    from .rtp import (
+    from pyezvizapi.streaming.media.rtp import (
         RtpCodec,
         RtpContinuityStats,
         RtpPacket,
@@ -722,51 +763,10 @@ if TYPE_CHECKING:
         rtp_payload,
         rtp_payload_video_codec,
     )
-    from .rtp_timing import NativeRtpClockProbe, probe_native_rtp_clock
-    from .smart_plug import EzvizSmartPlug
-    from .stream_discovery import LocalStreamDiscovery, LocalStreamDiscoveryCache
-    from .stream_header import EzvizStreamHeader, parse_ezviz_stream_header
-    from .stream_media import (
-        decrypt_hikvision_ps_video,
-        detect_hikvision_ps_video_nalu_header_size,
-        detect_transport,
-        mpeg_ps_complete_prefix_length,
-        mpeg_ps_decryptable_prefix_length,
-    )
-    from .stream_selection import AutoMediaStream
-    from .stream_transport import (
-        StopStreamResponse,
-        StreamInfoResponse,
-        StreamTransport,
-        VtduInfoResponse,
-        VtduStreamResponse,
-        VtmChannel,
-        VtmMessageCode,
-        VtmPacket,
-        VtmStreamClient,
-        VtmTraceEvent,
-        build_get_vtdu_info_request,
-        build_peer_stream_request,
-        build_start_stream_request,
-        build_stop_stream_request,
-        build_stream_info_request,
-        build_stream_keepalive_request,
-        build_vtm_url,
-        decode_vtm_header,
-        decode_vtm_packet,
-        download_ezviz_cloud_replay,
-        encode_vtm_packet,
-        parse_get_vtdu_info_response,
-        parse_peer_stream_response,
-        parse_start_stream_response,
-        parse_stop_stream_response,
-        parse_stream_info_response,
-        parse_vtm_url,
-        summarize_vtm_packet,
-        vtm_media_packet_source,
-        vtm_packet_to_media_packet,
-    )
-    from .test_cam_rtsp import TestRTSPAuth
+    from pyezvizapi.streaming.media.rtp_timing import NativeRtpClockProbe, probe_native_rtp_clock
+    from pyezvizapi.streaming.playback import EzvizAppPlaybackSupport, inspect_app_playback_support
+    from pyezvizapi.streaming.rtsp_compat import TestRTSPAuth
+    from pyezvizapi.streaming.selection import AutoMediaStream
 
 _EXPORTS = {
     "HcNetSdkStreamDetails": "hcnetsdk",

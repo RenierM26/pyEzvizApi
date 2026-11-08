@@ -1,31 +1,40 @@
-"""Atomic owner-only token storage for the command-line listeners."""
+# Compatibility export assignments include retained private attributes.
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-import json
-import os
-from pathlib import Path
-import tempfile
-from typing import Any
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.token_store`.
 
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
-def save_private_token(path: str, token: dict[str, Any]) -> None:
-    """Persist or raise; never let push continue after an unnoticed write failure."""
-    target = Path(path)
-    staged: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=target.parent, prefix=f".{target.name}.", delete=False
-        ) as temporary:
-            staged = Path(temporary.name)
-            json.dump(token, temporary)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(staged, target)
-        if os.name == "posix":
-            descriptor = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-    finally:
-        if staged is not None:
-            staged.unlink(missing_ok=True)
+import sys
+from typing import TYPE_CHECKING
+
+from pyezvizapi.cloud import token_store as _implementation
+
+if TYPE_CHECKING:
+    import pyezvizapi.cloud.token_store as _compat_module_0
+
+    Any = _compat_module_0.Any
+    Path = _compat_module_0.Path
+    json = _compat_module_0.json
+    os = _compat_module_0.os
+    save_private_token = _compat_module_0.save_private_token
+    tempfile = _compat_module_0.tempfile
+
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Any,
+        Path,
+        json,
+        os,
+        save_private_token,
+        tempfile,
+    )
+
+sys.modules[__name__] = _implementation

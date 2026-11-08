@@ -103,9 +103,7 @@ class HttpProfile:
     headers: Mapping[str, str]
     registration: Mapping[str, str]
 
-    PROFILE_HEADER_NAMES: ClassVar = tuple(
-        dict.fromkeys((*REQUEST_HEADER, *_ANDROID_OVERRIDES))
-    )
+    PROFILE_HEADER_NAMES: ClassVar = tuple(dict.fromkeys((*REQUEST_HEADER, *_ANDROID_OVERRIDES)))
     IDENTITY_HEADER_NAMES: ClassVar = (
         "sessionId",
         "featureCode",

@@ -1,91 +1,46 @@
-"""Bounded synchronous framing for the channel-99 LBS handshake."""
+# Compatibility export assignments include retained private attributes.
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-from __future__ import annotations
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.push.longlink.transport`.
 
-from collections.abc import Callable
-from contextlib import suppress
-import socket
-import time
-from types import TracebackType
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
-MAX_PAYLOAD = 65536
-MAX_LENGTH_BYTES = 4
+import sys
+from typing import TYPE_CHECKING
 
+from pyezvizapi.push.longlink import transport as _implementation
 
-class LbsConnection:
-    """Own one handshake socket; every exchange has a total wall-clock deadline.
+if TYPE_CHECKING:
+    import pyezvizapi.push.longlink.transport as _compat_module_0
 
-    DNS/connect is performed by the caller so this codec can also be exercised
-    over a socket pair. Closing the connection unblocks an outstanding read.
-    """
+    MAX_LENGTH_BYTES = _compat_module_0.MAX_LENGTH_BYTES
+    MAX_PAYLOAD = _compat_module_0.MAX_PAYLOAD
+    Callable = _compat_module_0.Callable
+    LbsConnection = _compat_module_0.LbsConnection
+    TracebackType = _compat_module_0.TracebackType
+    annotations = _compat_module_0.annotations
+    socket = _compat_module_0.socket
+    suppress = _compat_module_0.suppress
+    time = _compat_module_0.time
 
-    def __init__(
-        self,
-        sock: socket.socket,
-        *,
-        timeout: float = 10,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        if timeout <= 0:
-            raise ValueError("Handshake timeout must be positive")
-        self.socket = sock
-        self.timeout = timeout
-        self.clock = clock
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-    def __enter__(self) -> LbsConnection:
-        return self
+    _declare_compatibility_exports(
+        MAX_LENGTH_BYTES,
+        MAX_PAYLOAD,
+        Callable,
+        LbsConnection,
+        TracebackType,
+        annotations,
+        socket,
+        suppress,
+        time,
+    )
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        self.close()
-
-    def close(self) -> None:
-        """Interrupt an outstanding read, then release the owned socket."""
-        with suppress(OSError):
-            self.socket.shutdown(socket.SHUT_RDWR)
-        self.socket.close()
-
-    def _remaining(self, deadline: float) -> None:
-        remaining = deadline - self.clock()
-        if remaining <= 0:
-            raise TimeoutError("Long-link handshake deadline exceeded")
-        self.socket.settimeout(remaining)
-
-    def _read(self, size: int, deadline: float) -> bytes:
-        result = bytearray()
-        while len(result) < size:
-            self._remaining(deadline)
-            chunk = self.socket.recv(size - len(result))
-            if not chunk:
-                raise ConnectionError("Long-link peer closed the connection")
-            result.extend(chunk)
-        return bytes(result)
-
-    def send(self, frame: bytes) -> None:
-        """Send a frame that does not expect a response (refresh command 9)."""
-        self._remaining(self.clock() + self.timeout)
-        self.socket.sendall(frame)
-
-    def exchange(self, frame: bytes) -> tuple[int, bytes]:
-        """Send a request and read exactly one bounded response frame."""
-        deadline = self.clock() + self.timeout
-        self._remaining(deadline)
-        self.socket.sendall(frame)
-        first = self._read(1, deadline)[0]
-        if first & 15:
-            raise ValueError("Unexpected LBS header flags")
-        length = 0
-        for index in range(MAX_LENGTH_BYTES):
-            digit = self._read(1, deadline)[0]
-            length |= (digit & 127) << (7 * index)
-            if length > MAX_PAYLOAD:
-                raise ValueError("LBS payload exceeds limit")
-            if not digit & 128:
-                if index and digit == 0:
-                    raise ValueError("Noncanonical LBS length")
-                return first >> 4, self._read(length, deadline)
-        raise ValueError("Malformed LBS remaining length")
+sys.modules[__name__] = _implementation

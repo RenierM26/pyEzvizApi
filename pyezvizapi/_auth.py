@@ -1,84 +1,73 @@
-"""Shared HTTP credential refresh and isolated borrowed request transport.
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-Callers own the token lock and transport lifetime. A successful rotation is
-persisted before discovery; storage failures must propagate to the caller.
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.auth`.
+
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
 """
-from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+import sys
+from typing import TYPE_CHECKING
 
-import requests
+from pyezvizapi.cloud import auth as _implementation
 
-from . import _http_transport
-from ._api_response import meta_code, object_section, parse_json, response_summary
-from ._budget_http import budgeted_http_call
-from ._longlink_profile import profile_for_token, synchronize_http_headers
-from ._token import validate_feature_code
-from .api_endpoints import API_ENDPOINT_REFRESH_SESSION_ID, API_ENDPOINT_SERVER_INFO
-from .constants import FEATURE_CODE
-from .exceptions import EzvizAuthTokenExpired, HTTPError, PyEzvizError
+if TYPE_CHECKING:
+    import pyezvizapi.cloud.auth as _compat_module_0
 
-# Older callers and MQTT retain this helper import as the same object.
-isolated_session = _http_transport.isolated_session
+    API_ENDPOINT_REFRESH_SESSION_ID = _compat_module_0.API_ENDPOINT_REFRESH_SESSION_ID
+    API_ENDPOINT_SERVER_INFO = _compat_module_0.API_ENDPOINT_SERVER_INFO
+    FEATURE_CODE = _compat_module_0.FEATURE_CODE
+    Any = _compat_module_0.Any
+    Callable = _compat_module_0.Callable
+    EzvizAuthTokenExpired = _compat_module_0.EzvizAuthTokenExpired
+    HTTPError = _compat_module_0.HTTPError
+    PyEzvizError = _compat_module_0.PyEzvizError
+    _http_transport = _compat_module_0._http_transport
+    annotations = _compat_module_0.annotations
+    budgeted_http_call = _compat_module_0.budgeted_http_call
+    discover_services = _compat_module_0.discover_services
+    isolated_session = _compat_module_0.isolated_session
+    meta_code = _compat_module_0.meta_code
+    object_section = _compat_module_0.object_section
+    parse_json = _compat_module_0.parse_json
+    profile_for_token = _compat_module_0.profile_for_token
+    refresh_credentials = _compat_module_0.refresh_credentials
+    requests = _compat_module_0.requests
+    response_summary = _compat_module_0.response_summary
+    synchronize_http_headers = _compat_module_0.synchronize_http_headers
+    validate_feature_code = _compat_module_0.validate_feature_code
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-def discover_services(session: requests.Session, token: dict[str, Any], timeout: int) -> dict[str, Any]:
-    """Discover endpoints using the just-refreshed isolated HTTP session."""
-    response = session.get(
-        f"https://{token['api_url']}{API_ENDPOINT_SERVER_INFO}", timeout=timeout,
-        allow_redirects=False,
+    _declare_compatibility_exports(
+        API_ENDPOINT_REFRESH_SESSION_ID,
+        API_ENDPOINT_SERVER_INFO,
+        FEATURE_CODE,
+        Any,
+        Callable,
+        EzvizAuthTokenExpired,
+        HTTPError,
+        PyEzvizError,
+        _http_transport,
+        annotations,
+        budgeted_http_call,
+        discover_services,
+        isolated_session,
+        meta_code,
+        object_section,
+        parse_json,
+        profile_for_token,
+        refresh_credentials,
+        requests,
+        response_summary,
+        synchronize_http_headers,
+        validate_feature_code,
     )
-    try:
-        response.raise_for_status()
-    except requests.HTTPError as error:
-        raise HTTPError from error
-    result = parse_json(response)
-    if meta_code(result) != 200:
-        raise PyEzvizError("Error getting service URLs")
-    urls = object_section(result, "systemConfigInfo")
-    urls["sysConf"] = str(urls.get("sysConf", "")).split("|")
-    return urls
 
-
-def refresh_credentials(
-    session: requests.Session,
-    token: dict[str, Any],
-    timeout: int,
-    notify: Callable[[], None],
-    discover: Callable[[], Any],
-) -> None:
-    """Rotate an existing login; account/password fallback belongs to the caller."""
-    validate_feature_code(token)
-    try:
-        response = budgeted_http_call(session, "put",
-            url=f"https://{token['api_url']}{API_ENDPOINT_REFRESH_SESSION_ID}",
-            data={"refreshSessionId": token["rf_session_id"], "featureCode": FEATURE_CODE,
-                  **profile_for_token(token).registration},
-            allow_redirects=False, timeout=timeout,
-        )
-        response.raise_for_status()
-    except requests.HTTPError as error:
-        raise HTTPError from error
-    try:
-        result = parse_json(response)
-    except PyEzvizError as error:
-        raise PyEzvizError("Impossible to decode refresh response") from error
-    code = meta_code(result)
-    if code in (401, 403):
-        raise EzvizAuthTokenExpired("Token expired; login with username and password required")
-    if code != 200:
-        raise PyEzvizError(f"Error renewing login token: {response_summary(result)}")
-    info = object_section(result, "sessionInfo", required=True)
-    session_id, refresh_id = info.get("sessionId"), info.get("refreshSessionId")
-    if not isinstance(session_id, str) or not session_id or not isinstance(refresh_id, str) or not refresh_id:
-        raise PyEzvizError("Invalid refresh credential fields")
-    token.update(session_id=session_id, rf_session_id=refresh_id)
-    token["feature_code"] = FEATURE_CODE
-    synchronize_http_headers(
-        session.headers, profile_for_token(token), token["session_id"], scope="session"
-    )
-    notify()
-    if not token.get("service_urls"):
-        token["service_urls"] = discover()
-        notify()
+sys.modules[__name__] = _implementation

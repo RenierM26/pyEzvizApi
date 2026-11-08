@@ -1,86 +1,55 @@
-"""Camera-supplied PlayM4 media headers, distinct from SDK configuration codes.
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-Field offsets and codec codes follow the native ST_MEDIA_INFO / IDMXRTPDemux
-in EZVIZ Android 7.4.1 libSystemTransform. These describe a negotiated session,
-not decoded media, encryption, or RTP payload assignments.
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.media.header`.
+
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
 """
 
-from __future__ import annotations
+import sys
+from typing import TYPE_CHECKING
 
-import base64
-import binascii
-from dataclasses import dataclass
-import struct
-import xml.etree.ElementTree as ET
+from pyezvizapi.streaming.media import header as _implementation
 
-from .exceptions import PyEzvizError
+if TYPE_CHECKING:
+    import pyezvizapi.streaming.media.header as _compat_module_0
 
-_STREAM_HEADER_MAGIC = b"IMKH"
+    _AUDIO_CODECS = _compat_module_0._AUDIO_CODECS
+    _STREAM_HEADER_MAGIC = _compat_module_0._STREAM_HEADER_MAGIC
+    _VIDEO_CODECS = _compat_module_0._VIDEO_CODECS
+    ET = _compat_module_0.ET
+    EzvizStreamHeader = _compat_module_0.EzvizStreamHeader
+    PyEzvizError = _compat_module_0.PyEzvizError
+    annotations = _compat_module_0.annotations
+    base64 = _compat_module_0.base64
+    binascii = _compat_module_0.binascii
+    dataclass = _compat_module_0.dataclass
+    parse_ezviz_stream_header = _compat_module_0.parse_ezviz_stream_header
+    stream_header_from_preview = _compat_module_0.stream_header_from_preview
+    struct = _compat_module_0.struct
 
-_VIDEO_CODECS = {
-    1: "h264", 0x100: "h264", 2: "mpeg2video", 3: "mpeg4video",
-    4: "mjpeg", 5: "hevc", 6: "svac",
-}
-_AUDIO_CODECS = {
-    0x2000: "mp2", 0x2001: "aac", 0x2002: "aac-ld", 0x3002: "opus",
-    0x7000: "pcm", 0x7001: "pcm", 0x7110: "pcm_mulaw",
-    0x7111: "pcm_alaw", 0x7221: "g722",
-}
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-
-@dataclass(frozen=True)
-class EzvizStreamHeader:
-    """Sanitized negotiated media fields; raw header/session keys excluded."""
-
-    version: int
-    system_format_code: int
-    video_codec_code: int
-    audio_codec_code: int
-    video_codec: str | None
-    audio_codec: str | None
-    audio_channels: int | None
-    audio_bits_per_sample: int | None
-    audio_sample_rate: int | None
-    audio_bitrate_bps: int | None
-
-
-def parse_ezviz_stream_header(data: bytes) -> EzvizStreamHeader:
-    """Parse the evidenced 40-byte IMKH v1.1 layout without guessing variants."""
-    if len(data) != 40 or data[:4] != _STREAM_HEADER_MAGIC:
-        raise PyEzvizError("Unsupported EZVIZ stream header layout")
-    version, = struct.unpack_from("<I", data, 4)
-    if version != 0x101:
-        raise PyEzvizError("Unsupported EZVIZ stream header version")
-    system, video, audio, channels, bits, rate, bitrate = struct.unpack_from(
-        "<HHHBBII", data, 8
-    )
-    return EzvizStreamHeader(
-        version=version, system_format_code=system, video_codec_code=video,
-        audio_codec_code=audio, video_codec=_VIDEO_CODECS.get(video),
-        audio_codec=_AUDIO_CODECS.get(audio), audio_channels=channels or None,
-        audio_bits_per_sample=bits or None, audio_sample_rate=rate or None,
-        audio_bitrate_bps=bitrate or None,
+    _declare_compatibility_exports(
+        _AUDIO_CODECS,
+        _STREAM_HEADER_MAGIC,
+        _VIDEO_CODECS,
+        ET,
+        EzvizStreamHeader,
+        PyEzvizError,
+        annotations,
+        base64,
+        binascii,
+        dataclass,
+        parse_ezviz_stream_header,
+        stream_header_from_preview,
+        struct,
     )
 
-
-def stream_header_from_preview(body: bytes) -> EzvizStreamHeader | None:
-    """Read optional StreamHeader attributes from a local preview response.
-
-    Base64Length counts encoded characters (56 for the 40-byte native header),
-    not decoded bytes. Malformed/present data raises; absent data stays unknown.
-    """
-    try:
-        root = ET.fromstring(body.rstrip(b"\0"))
-        elements = [e for e in root.iter() if e.tag.rsplit("}", 1)[-1] == "StreamHeader"]
-        if not elements:
-            return None
-        if len(elements) != 1:
-            raise ValueError("Duplicate header")
-        element = elements[0]
-        encoded = element.attrib["Base64Data"]
-        if len(encoded) != 56 or int(element.attrib["Base64Length"]) != len(encoded):
-            raise ValueError("Invalid encoded length")
-        data = base64.b64decode(encoded, validate=True)
-    except (ET.ParseError, KeyError, ValueError, binascii.Error) as exc:
-        raise PyEzvizError("Malformed EZVIZ preview stream header") from exc
-    return parse_ezviz_stream_header(data)
+sys.modules[__name__] = _implementation

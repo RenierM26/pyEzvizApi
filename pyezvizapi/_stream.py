@@ -1,2496 +1,326 @@
-"""Helpers for EZVIZ cloud stream discovery and VTM/VTDU framing."""
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-from __future__ import annotations
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.cloud.protocol`.
 
-from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass, field
-from enum import IntEnum
-import hashlib
-from ipaddress import IPv6Address, ip_address
-from itertools import pairwise
-import re
-import socket
-import ssl
-import struct
-import time
-from typing import Any, cast
-from urllib.parse import parse_qsl, urlencode, urlparse
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
-from Crypto.Cipher import AES
+import sys
+from typing import TYPE_CHECKING
 
-from .exceptions import DeviceException, PyEzvizError
-from .media import (
-    DeadlineLegacyPacketSource,
-    MediaPacket,
-    MediaPacketMetadata,
-    MediaPacketSourceAdapter,
-    is_positive_finite_duration_bound,
-)
-from .rtp import rtp_payload as _rtp_payload
+from pyezvizapi.streaming.cloud import protocol as _implementation
 
-VTM_MAGIC = 0x24
-VTM_HEADER_SIZE = 8
-MPEG_PS_START_CODE = b"\x00\x00\x01\xba"
-MPEG_TS_SYNC_BYTE = b"\x47"
-MPEG_START_CODE_PREFIX = b"\x00\x00\x01"
-ANNEX_B_LONG_START_CODE = b"\x00\x00\x00\x01"
-HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH = 4096
-VIDEO_PES_STREAM_ID = 0xE0
-_PACK_HEADER_STREAM_ID = 0xBA
-_SYSTEM_HEADER_STREAM_ID = 0xBB
-_PROGRAM_STREAM_MAP_ID = 0xBC
-_PRIVATE_STREAM_1_ID = 0xBD
-_PADDING_STREAM_ID = 0xBE
-_PRIVATE_STREAM_2_ID = 0xBF
-CLOUD_REPLAY_MAGIC = 0x9EBAACE9
-CLOUD_REPLAY_OPEN_CMD = 0x5003
-CLOUD_REPLAY_HEARTBEAT_CMD = 0x5010
-CLOUD_REPLAY_HEADER_SIZE = 32
-XML_PREFIX = b"<?xml"
-_XML_END_RE = re.compile(br"</(Request|Response)>")
+if TYPE_CHECKING:
+    import Crypto.Cipher.AES as _compat_typed_AES
 
+    AES = _compat_typed_AES
 
-def rtp_payload(data: bytes) -> bytes:
-    """Compatibility wrapper for the shared RTP parser."""
+    import pyezvizapi.streaming.cloud.protocol as _compat_module_1
 
-    return _rtp_payload(data)
-
-
-def _ezviz_md5_hex(data: bytes) -> str:
-    """Return the EZVIZ protocol MD5 checksum for non-security integrity fields."""
-
-    return hashlib.md5(data, usedforsecurity=False).hexdigest()
-
-
-def _hikvision_aes_ecb_cipher(key: bytes) -> Any:
-    """Return the AES-ECB cipher required by the legacy Hikvision media format.
-
-    EZVIZ/Hikvision local MPEG-PS payloads encrypt only fixed NAL prefixes with
-    AES-ECB and no IV. This is protocol compatibility code for camera media, not
-    a general-purpose cryptographic API.
-    """
-
-    return AES.new(key, AES.MODE_ECB)  # codeql[py/weak-cryptographic-algorithm]
-
-
-class VtmChannel(IntEnum):
-    """Known VTM/VTDU channels."""
-
-    MESSAGE = 0x00
-    STREAM = 0x01
-    ENCRYPTED_MESSAGE = 0x0A
-    ENCRYPTED_STREAM = 0x0B
-
-
-class VtmMessageCode(IntEnum):
-    """Known VTM/VTDU message codes."""
-
-    KEEPALIVE_REQ = 0x132
-    KEEPALIVE_RSP = 0x133
-    STREAMINFO_REQ = 0x13B
-    STREAMINFO_RSP = 0x13C
-    STREAMINFO_NOTIFY = 0x13D
-    STREAM_VTMSTREAM_ECDH_NOTIFY = 0x14A
-
-
-class StreamTransport(IntEnum):
-    """Best-effort transport detection for stream-channel payloads."""
-
-    UNKNOWN = 0
-    MPEG_TS = 2
-    MPEG_PS = 3
-    RTP = 4
-
-
-@dataclass(frozen=True)
-class VtmPacket:
-    """Decoded VTM/VTDU packet container."""
-
-    channel: int
-    length: int
-    sequence: int
-    message_code: int
-    body: bytes = b""
-
-    @property
-    def encrypted(self) -> bool:
-        """Return True when the channel is one of the encrypted channel IDs."""
-
-        return self.channel in (
-            VtmChannel.ENCRYPTED_MESSAGE,
-            VtmChannel.ENCRYPTED_STREAM,
-        )
-
-
-def vtm_packet_to_media_packet(packet: VtmPacket) -> MediaPacket:
-    """Normalize a cloud VTM packet without changing its wire model."""
-
-    return MediaPacket(
-        body=packet.body,
-        metadata=MediaPacketMetadata(
-            source="cloud_vtm",
-            channel=packet.channel,
-            encrypted=packet.encrypted,
-            sequence=packet.sequence,
-            message_code=packet.message_code,
-        ),
+    _PACK_HEADER_STREAM_ID = _compat_module_1._PACK_HEADER_STREAM_ID
+    _PADDING_STREAM_ID = _compat_module_1._PADDING_STREAM_ID
+    _PRIVATE_STREAM_1_ID = _compat_module_1._PRIVATE_STREAM_1_ID
+    _PRIVATE_STREAM_2_ID = _compat_module_1._PRIVATE_STREAM_2_ID
+    _PROGRAM_STREAM_MAP_ID = _compat_module_1._PROGRAM_STREAM_MAP_ID
+    _SYSTEM_HEADER_STREAM_ID = _compat_module_1._SYSTEM_HEADER_STREAM_ID
+    _XML_END_RE = _compat_module_1._XML_END_RE
+    ANNEX_B_LONG_START_CODE = _compat_module_1.ANNEX_B_LONG_START_CODE
+    CLOUD_REPLAY_HEADER_SIZE = _compat_module_1.CLOUD_REPLAY_HEADER_SIZE
+    CLOUD_REPLAY_HEARTBEAT_CMD = _compat_module_1.CLOUD_REPLAY_HEARTBEAT_CMD
+    CLOUD_REPLAY_MAGIC = _compat_module_1.CLOUD_REPLAY_MAGIC
+    CLOUD_REPLAY_OPEN_CMD = _compat_module_1.CLOUD_REPLAY_OPEN_CMD
+    HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH = _compat_module_1.HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+    MPEG_PS_START_CODE = _compat_module_1.MPEG_PS_START_CODE
+    MPEG_START_CODE_PREFIX = _compat_module_1.MPEG_START_CODE_PREFIX
+    MPEG_TS_SYNC_BYTE = _compat_module_1.MPEG_TS_SYNC_BYTE
+    VIDEO_PES_STREAM_ID = _compat_module_1.VIDEO_PES_STREAM_ID
+    VTM_HEADER_SIZE = _compat_module_1.VTM_HEADER_SIZE
+    VTM_MAGIC = _compat_module_1.VTM_MAGIC
+    XML_PREFIX = _compat_module_1.XML_PREFIX
+    Any = _compat_module_1.Any
+    Callable = _compat_module_1.Callable
+    DeadlineLegacyPacketSource = _compat_module_1.DeadlineLegacyPacketSource
+    DeviceException = _compat_module_1.DeviceException
+    IntEnum = _compat_module_1.IntEnum
+    IPv6Address = _compat_module_1.IPv6Address
+    Iterator = _compat_module_1.Iterator
+    MediaPacket = _compat_module_1.MediaPacket
+    MediaPacketMetadata = _compat_module_1.MediaPacketMetadata
+    MediaPacketSourceAdapter = _compat_module_1.MediaPacketSourceAdapter
+    ProtoValue = _compat_module_1.ProtoValue
+    PyEzvizError = _compat_module_1.PyEzvizError
+    SocketFactory = _compat_module_1.SocketFactory
+    StopStreamResponse = _compat_module_1.StopStreamResponse
+    StreamInfoResponse = _compat_module_1.StreamInfoResponse
+    StreamTransport = _compat_module_1.StreamTransport
+    VtduInfoResponse = _compat_module_1.VtduInfoResponse
+    VtduStreamResponse = _compat_module_1.VtduStreamResponse
+    VtmChannel = _compat_module_1.VtmChannel
+    VtmMessageCode = _compat_module_1.VtmMessageCode
+    VtmPacket = _compat_module_1.VtmPacket
+    VtmStreamClient = _compat_module_1.VtmStreamClient
+    VtmTraceEvent = _compat_module_1.VtmTraceEvent
+    _build_cloud_replay_open_xml = _compat_module_1._build_cloud_replay_open_xml
+    _cloud_replay_frame = _compat_module_1._cloud_replay_frame
+    _cloud_replay_heartbeat_xml = _compat_module_1._cloud_replay_heartbeat_xml
+    _cloud_replay_recv = _compat_module_1._cloud_replay_recv
+    _cloud_xml_attr_int = _compat_module_1._cloud_xml_attr_int
+    _cloud_xml_int = _compat_module_1._cloud_xml_int
+    _CloudReplayMessage = _compat_module_1._CloudReplayMessage
+    _decrypt_hikvision_ps_video_packets = _compat_module_1._decrypt_hikvision_ps_video_packets
+    _encode_varint = _compat_module_1._encode_varint
+    _enum_name = _compat_module_1._enum_name
+    _ezviz_md5_hex = _compat_module_1._ezviz_md5_hex
+    _find_h264_nal_start_codes = _compat_module_1._find_h264_nal_start_codes
+    _find_hevc_nal_start_codes = _compat_module_1._find_hevc_nal_start_codes
+    _find_nal_start_codes = _compat_module_1._find_nal_start_codes
+    _format_url_host = _compat_module_1._format_url_host
+    _h264_header_score = _compat_module_1._h264_header_score
+    _h264_nal_type = _compat_module_1._h264_nal_type
+    _has_non_video_pes_packet = _compat_module_1._has_non_video_pes_packet
+    _hevc_header_score = _compat_module_1._hevc_header_score
+    _hevc_nal_type = _compat_module_1._hevc_nal_type
+    _hikvision_aes_ecb_cipher = _compat_module_1._hikvision_aes_ecb_cipher
+    _is_mpeg2_pack_header = _compat_module_1._is_mpeg2_pack_header
+    _is_mpeg_ps_metadata_stream_id = _compat_module_1._is_mpeg_ps_metadata_stream_id
+    _is_mpeg_ps_packet_start_id = _compat_module_1._is_mpeg_ps_packet_start_id
+    _is_plausible_h264_header = _compat_module_1._is_plausible_h264_header
+    _is_plausible_hevc_header = _compat_module_1._is_plausible_hevc_header
+    _is_plausible_hevc_header_bytes = _compat_module_1._is_plausible_hevc_header_bytes
+    _is_video_pes_stream_id = _compat_module_1._is_video_pes_stream_id
+    _is_zero_length_video_pes_start = _compat_module_1._is_zero_length_video_pes_start
+    _maybe_int = _compat_module_1._maybe_int
+    _maybe_str = _compat_module_1._maybe_str
+    _mpeg_ps_anchored_recovery_start = _compat_module_1._mpeg_ps_anchored_recovery_start
+    _mpeg_ps_complete_packet_ranges = _compat_module_1._mpeg_ps_complete_packet_ranges
+    _mpeg_ps_packet_end = _compat_module_1._mpeg_ps_packet_end
+    _mpeg_ps_packet_pts = _compat_module_1._mpeg_ps_packet_pts
+    _mpeg_ps_video_decrypt_ranges = _compat_module_1._mpeg_ps_video_decrypt_ranges
+    _MpegPsPacketRange = _compat_module_1._MpegPsPacketRange
+    _MpegPsVideoDecryptState = _compat_module_1._MpegPsVideoDecryptState
+    _next_complete_mpeg_ps_packet_start = _compat_module_1._next_complete_mpeg_ps_packet_start
+    _next_mpeg_ps_packet_start = _compat_module_1._next_mpeg_ps_packet_start
+    _next_unbounded_video_pes_boundary = _compat_module_1._next_unbounded_video_pes_boundary
+    _parse_cloud_replay_stream_url = _compat_module_1._parse_cloud_replay_stream_url
+    _parse_stream_biz_params = _compat_module_1._parse_stream_biz_params
+    _parse_vtdu_stream_response = _compat_module_1._parse_vtdu_stream_response
+    _pes_payload_start = _compat_module_1._pes_payload_start
+    _proto_bytes = _compat_module_1._proto_bytes
+    _proto_bytes_values = _compat_module_1._proto_bytes_values
+    _proto_key = _compat_module_1._proto_key
+    _proto_last_int = _compat_module_1._proto_last_int
+    _proto_last_str = _compat_module_1._proto_last_str
+    _proto_string = _compat_module_1._proto_string
+    _proto_varint = _compat_module_1._proto_varint
+    _read_cloud_replay_message = _compat_module_1._read_cloud_replay_message
+    _read_proto_fields = _compat_module_1._read_proto_fields
+    _read_varint = _compat_module_1._read_varint
+    _rtp_payload = _compat_module_1._rtp_payload
+    _video_pes_payload_ranges = _compat_module_1._video_pes_payload_ranges
+    _VtmReadDeadlineExpired = _compat_module_1._VtmReadDeadlineExpired
+    annotations = _compat_module_1.annotations
+    asdict = _compat_module_1.asdict
+    build_get_vtdu_info_request = _compat_module_1.build_get_vtdu_info_request
+    build_peer_stream_request = _compat_module_1.build_peer_stream_request
+    build_start_stream_request = _compat_module_1.build_start_stream_request
+    build_stop_stream_request = _compat_module_1.build_stop_stream_request
+    build_stream_info_request = _compat_module_1.build_stream_info_request
+    build_stream_keepalive_request = _compat_module_1.build_stream_keepalive_request
+    build_vtm_url = _compat_module_1.build_vtm_url
+    cast = _compat_module_1.cast
+    dataclass = _compat_module_1.dataclass
+    decode_vtm_header = _compat_module_1.decode_vtm_header
+    decode_vtm_packet = _compat_module_1.decode_vtm_packet
+    decrypt_hikvision_ps_video = _compat_module_1.decrypt_hikvision_ps_video
+    detect_hikvision_ps_video_nalu_header_size = (
+        _compat_module_1.detect_hikvision_ps_video_nalu_header_size
     )
-
-
-def vtm_media_packet_source(
-    stream: DeadlineLegacyPacketSource[VtmPacket],
-) -> MediaPacketSourceAdapter[VtmPacket]:
-    """Adapt an existing VTM stream to the shared media packet contract."""
-
-    return MediaPacketSourceAdapter(
-        stream,
-        vtm_packet_to_media_packet,
-        duration_from_start=True,
-    )
-
-
-@dataclass(frozen=True)
-class VtmTraceEvent:
-    """Sanitized VTM/VTDU packet summary for live stream tracing."""
-
-    index: int
-    channel: int
-    channel_name: str | None
-    length: int
-    sequence: int
-    message_code: int
-    message_name: str | None
-    encrypted: bool
-    transport: str
-
-    def as_dict(self) -> dict[str, int | str | bool | None]:
-        """Return a JSON-serializable trace event."""
-
-        return asdict(self)
-
-
-@dataclass(frozen=True)
-class StreamInfoResponse:
-    """Limited decoded fields from a StreamInfoRsp protobuf body."""
-
-    result: int | None = None
-    datakey: int | None = None
-    streamhead: str | None = None
-    streamssn: str | None = None
-    vtmstreamkey: str | None = None
-    serverinfo: str | None = None
-    streamurl: str | None = None
-    srvinfo: str | None = None
-    aesmd5: str | None = None
-    udptransinfo: str | None = None
-    peerpbkey: str | None = None
-    pdslist: tuple[bytes, ...] = ()
-    srvipv6_addr: str | None = None
-
-
-@dataclass(frozen=True)
-class VtduInfoResponse:
-    """Decoded fields from a GetVtduInfoRsp protobuf body."""
-
-    result: int | None = None
-    host: str | None = None
-    port: int | None = None
-    streamkey: str | None = None
-    peerhost: str | None = None
-    peerport: int | None = None
-    srvinfo: str | None = None
-
-
-@dataclass(frozen=True)
-class VtduStreamResponse:
-    """Decoded fields shared by StartStreamRsp and PeerStreamRsp."""
-
-    result: int | None = None
-    streamhead: str | None = None
-    streamssn: str | None = None
-    datakey: int | None = None
-
-
-@dataclass(frozen=True)
-class StopStreamResponse:
-    """Decoded fields from a StopStreamRsp protobuf body."""
-
-    result: int | None = None
-
-
-SocketFactory = Callable[[tuple[str, int], float | None], Any]
-
-
-class _VtmReadDeadlineExpired(TimeoutError):
-    """Internal signal that a bounded VTM read reached its caller deadline."""
-
-
-class VtmStreamClient:
-    """Experimental synchronous client for the APK-discovered VTM TCP stream.
-
-    This implements the unencrypted VTM framing path observed in the EZVIZ APK:
-    open TCP to the VTM endpoint, send ``StreamInfoReq`` on the message channel,
-    parse ``StreamInfoRsp``, then consume stream-channel packets. Encrypted ECDH
-    packets are surfaced as packets but not decrypted.
-    """
-
-    def __init__(
-        self,
-        stream_url: str,
-        *,
-        timeout: float | None = 10.0,
-        client_version: str = "v3.6.3.20221124",
-        socket_factory: SocketFactory = socket.create_connection,
-    ) -> None:
-        self.stream_url = stream_url
-        self.timeout = timeout
-        self.client_version = client_version
-        self._socket_factory = socket_factory
-        self._socket: Any | None = None
-        self._sequence = 0
-        self._recv_buffer = bytearray()
-        self._pending_header: VtmPacket | None = None
-        self._read_inactivity_deadline: float | None = None
-        self.stream_info: StreamInfoResponse | None = None
-
-    def __enter__(self) -> VtmStreamClient:
-        """Open the TCP connection when used as a context manager."""
-
-        return self.connect()
-
-    def __exit__(self, *_exc_info: object) -> None:
-        """Close the TCP connection when leaving a context manager."""
-
-        self.close()
-
-    @property
-    def connected(self) -> bool:
-        """Return True when a socket is currently attached."""
-
-        return self._socket is not None
-
-    def connect(
-        self,
-        *,
-        deadline: float | None = None,
-        monotonic: Callable[[], float] = time.monotonic,
-    ) -> VtmStreamClient:
-        """Open the VTM TCP connection."""
-
-        if self._socket is not None:
-            return self
-        host, port, _path, _params = parse_vtm_url(self.stream_url)
-        connect_timeout = self.timeout
-        if deadline is not None:
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                raise _VtmReadDeadlineExpired
-            connect_timeout = (
-                remaining
-                if connect_timeout is None
-                else min(connect_timeout, remaining)
-            )
-        sock = self._socket_factory((host, port), connect_timeout)
-        sock.settimeout(self.timeout)
-        self._socket = sock
-        return self
-
-    def close(self) -> None:
-        """Close the VTM TCP connection."""
-
-        sock = self._socket
-        self._socket = None
-        self._recv_buffer.clear()
-        self._pending_header = None
-        self._read_inactivity_deadline = None
-        if sock is not None:
-            sock.close()
-
-    def send_packet(
-        self,
-        body: bytes,
-        *,
-        channel: int = VtmChannel.MESSAGE,
-        message_code: int = VtmMessageCode.STREAMINFO_REQ,
-        deadline: float | None = None,
-        monotonic: Callable[[], float] = time.monotonic,
-    ) -> int:
-        """Send a VTM packet and return the sequence number used."""
-
-        sock = self._require_socket()
-        sequence = self._sequence
-        packet = encode_vtm_packet(
-            body,
-            channel=channel,
-            message_code=message_code,
-            sequence=sequence,
-        )
-        configured_timeout = sock.gettimeout()
-        if deadline is None:
-            sock.sendall(packet)
-        else:
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                raise _VtmReadDeadlineExpired
-            effective_timeout = (
-                remaining
-                if configured_timeout is None
-                else min(configured_timeout, remaining)
-            )
-            deadline_limits_write = (
-                configured_timeout is None or remaining <= configured_timeout
-            )
-            sock.settimeout(effective_timeout)
-            try:
-                sock.sendall(packet)
-            except TimeoutError as err:
-                if deadline_limits_write:
-                    self.close()
-                    raise _VtmReadDeadlineExpired from err
-                raise
-            finally:
-                if self._socket is sock:
-                    cast(Any, sock).settimeout(configured_timeout)
-        self._sequence = (self._sequence + 1) & 0xFFFF
-        return sequence
-
-    def read_packet(
-        self,
-        *,
-        deadline: float | None = None,
-        monotonic: Callable[[], float] = time.monotonic,
-    ) -> VtmPacket:
-        """Read one complete VTM packet from the TCP stream."""
-
-        try:
-            header = self._pending_header
-            if header is None:
-                header = decode_vtm_header(
-                    self._recv_exact(
-                        VTM_HEADER_SIZE,
-                        deadline=deadline,
-                        monotonic=monotonic,
-                    )
-                )
-                self._pending_header = header
-            body = self._recv_exact(
-                header.length,
-                deadline=deadline,
-                monotonic=monotonic,
-            )
-        except _VtmReadDeadlineExpired:
-            raise
-        except Exception:
-            self._read_inactivity_deadline = None
-            raise
-        self._pending_header = None
-        self._read_inactivity_deadline = None
-        return VtmPacket(
-            channel=header.channel,
-            length=header.length,
-            sequence=header.sequence,
-            message_code=header.message_code,
-            body=body,
-        )
-
-    def start(
-        self,
-        *,
-        vtm_stream_key: str | None = None,
-        max_control_packets: int = 20,
-        max_redirects: int = 3,
-        deadline: float | None = None,
-        monotonic: Callable[[], float] = time.monotonic,
-    ) -> StreamInfoResponse:
-        """Request stream info and return the decoded ``StreamInfoRsp``."""
-
-        redirect_count = 0
-        try:
-            while True:
-                self.connect(deadline=deadline, monotonic=monotonic)
-                request = build_stream_info_request(
-                    self.stream_url,
-                    vtm_stream_key=vtm_stream_key,
-                    client_version=self.client_version,
-                )
-                self.send_packet(
-                    request,
-                    deadline=deadline,
-                    monotonic=monotonic,
-                )
-
-                for _ in range(max_control_packets):
-                    packet = self.read_packet(
-                        deadline=deadline,
-                        monotonic=monotonic,
-                    )
-                    if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
-                        self.stream_info = parse_stream_info_response(packet.body)
-                        redirect_url = self.stream_info.streamurl
-                        redirect_key = self.stream_info.vtmstreamkey
-                        if (
-                            self.stream_info.result
-                            and redirect_url
-                            and redirect_key
-                            and redirect_count < max_redirects
-                        ):
-                            self.close()
-                            self.stream_url = redirect_url
-                            vtm_stream_key = redirect_key
-                            redirect_count += 1
-                            break
-                        return self.stream_info
-                else:
-                    raise PyEzvizError("Timed out waiting for VTM stream info response")
-        except _VtmReadDeadlineExpired as err:
-            self.close()
-            raise DeviceException(
-                "Device offline or unreachable: timed out waiting for VTM stream info"
-            ) from err
-
-    def send_keepalive(
-        self,
-        stream_ssn: str | None = None,
-        *,
-        message_code: int = VtmMessageCode.KEEPALIVE_REQ,
-        deadline: float | None = None,
-        monotonic: Callable[[], float] = time.monotonic,
-    ) -> int:
-        """Send a VTM stream keepalive request."""
-
-        stream_ssn = stream_ssn or (
-            self.stream_info.streamssn if self.stream_info is not None else None
-        )
-        if not stream_ssn:
-            raise PyEzvizError("Cannot send keepalive without a stream session")
-        return self.send_packet(
-            build_stream_keepalive_request(stream_ssn),
-            message_code=message_code,
-            deadline=deadline,
-            monotonic=monotonic,
-        )
-
-    def iter_packets(  # noqa: PLR0912, PLR0915
-        self,
-        *,
-        max_packets: int | None = None,
-        duration_seconds: float | None = None,
-        duration_from_start: bool = False,
-        first_packet_timeout: float | None = None,
-        first_packet_deadline: float | None = None,
-        stream_packet_timeout_seconds: float | None = None,
-        include_control: bool = False,
-        keepalive_interval: float | None = 5.0,
-        monotonic: Callable[[], float] = time.monotonic,
-    ) -> Iterator[VtmPacket]:
-        """Yield stream packets from the VTM connection.
-
-        Control packets are normally handled internally. Set ``include_control``
-        to surface them to callers while still iterating over the same TCP feed.
-        """
-
-        if duration_seconds is not None and duration_seconds <= 0:
-            return
-        if first_packet_timeout is not None and first_packet_timeout <= 0:
-            return
-        if stream_packet_timeout_seconds is not None and not is_positive_finite_duration_bound(
-            stream_packet_timeout_seconds
-        ):
-            raise PyEzvizError("VTM stream packet timeout must be positive and finite")
-        if keepalive_interval is not None and keepalive_interval <= 0:
-            raise PyEzvizError("keepalive_interval must be positive or None")
-
-        seen = 0
-        started_at = monotonic()
-        capture_deadline = (
-            started_at + duration_seconds
-            if duration_from_start and duration_seconds is not None
-            else None
-        )
-        relative_first_packet_deadline = (
-            None
-            if first_packet_timeout is None
-            else started_at + first_packet_timeout
-        )
-        if relative_first_packet_deadline is not None:
-            first_packet_deadline = (
-                relative_first_packet_deadline
-                if first_packet_deadline is None
-                else min(first_packet_deadline, relative_first_packet_deadline)
-            )
-        next_keepalive = (
-            None if keepalive_interval is None else started_at + keepalive_interval
-        )
-        next_stream_packet_deadline = (
-            None
-            if stream_packet_timeout_seconds is None
-            else started_at + stream_packet_timeout_seconds
-        )
-        while max_packets is None or seen < max_packets:
-            now = monotonic()
-            if capture_deadline is not None and now >= capture_deadline:
-                self._read_inactivity_deadline = None
-                break
-            if first_packet_deadline is not None and now >= first_packet_deadline:
-                self._read_inactivity_deadline = None
-                break
-            if (
-                next_stream_packet_deadline is not None
-                and now >= next_stream_packet_deadline
-            ):
-                self._read_inactivity_deadline = None
-                break
-            active_stream_deadlines = [
-                deadline
-                for deadline in (
-                    capture_deadline,
-                    first_packet_deadline,
-                    next_stream_packet_deadline,
-                )
-                if deadline is not None
-            ]
-            keepalive_deadline = (
-                min(active_stream_deadlines) if active_stream_deadlines else None
-            )
-            if next_keepalive is not None and now >= next_keepalive:
-                assert keepalive_interval is not None
-                if self.stream_info is not None and self.stream_info.streamssn:
-                    try:
-                        self.send_keepalive(
-                            deadline=keepalive_deadline,
-                            monotonic=monotonic,
-                        )
-                    except _VtmReadDeadlineExpired:
-                        self._read_inactivity_deadline = None
-                        break
-                next_keepalive = now + keepalive_interval
-
-            read_deadlines = [
-                deadline
-                for deadline in (
-                    capture_deadline,
-                    first_packet_deadline,
-                    next_stream_packet_deadline,
-                    next_keepalive,
-                )
-                if deadline is not None
-            ]
-            read_deadline = min(read_deadlines) if read_deadlines else None
-
-            try:
-                packet = self.read_packet(deadline=read_deadline, monotonic=monotonic)
-            except _VtmReadDeadlineExpired:
-                continue
-            if packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
-                try:
-                    self.send_keepalive(
-                        message_code=VtmMessageCode.KEEPALIVE_RSP,
-                        deadline=keepalive_deadline,
-                        monotonic=monotonic,
-                    )
-                except _VtmReadDeadlineExpired:
-                    self._read_inactivity_deadline = None
-                    break
-                if keepalive_interval is not None:
-                    next_keepalive = monotonic() + keepalive_interval
-                if include_control:
-                    seen += 1
-                    yield packet
-                continue
-
-            if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
-                if stream_packet_timeout_seconds is not None:
-                    next_stream_packet_deadline = monotonic() + stream_packet_timeout_seconds
-                if capture_deadline is None and duration_seconds is not None:
-                    capture_deadline = monotonic() + duration_seconds
-                first_packet_deadline = None
-                seen += 1
-                yield packet
-                continue
-
-            if include_control:
-                seen += 1
-                yield packet
-
-    def iter_payloads(
-        self,
-        *,
-        max_packets: int | None = None,
-        duration_seconds: float | None = None,
-        first_packet_timeout: float | None = None,
-    ) -> Iterator[bytes]:
-        """Yield stream packet bodies from the VTM connection."""
-
-        for packet in self.iter_packets(
-            max_packets=max_packets,
-            duration_seconds=duration_seconds,
-            first_packet_timeout=first_packet_timeout,
-        ):
-            yield packet.body
-
-    def trace_packets(
-        self,
-        *,
-        max_packets: int = 20,
-        vtm_stream_key: str | None = None,
-        max_redirects: int = 3,
-    ) -> list[VtmTraceEvent]:
-        """Return sanitized packet summaries from the VTM connection.
-
-        The trace opens the connection, sends ``StreamInfoReq``, records packet
-        metadata only, parses ``StreamInfoRsp`` when seen, and auto-responds to
-        keepalive requests so the server continues sending packets. Packet
-        bodies are intentionally not included because they may contain tokens,
-        keys, or encrypted media.
-        """
-
-        if max_packets < 1:
-            raise PyEzvizError("VTM trace must request at least one packet")
-
-        events: list[VtmTraceEvent] = []
-        redirect_count = 0
-        while len(events) < max_packets:
-            self.connect()
-            request = build_stream_info_request(
-                self.stream_url,
-                vtm_stream_key=vtm_stream_key,
-                client_version=self.client_version,
-            )
-            self.send_packet(request)
-
-            redirected = False
-            while len(events) < max_packets:
-                packet = self.read_packet()
-                events.append(summarize_vtm_packet(packet, index=len(events)))
-
-                if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
-                    self.stream_info = parse_stream_info_response(packet.body)
-                    redirect_url = self.stream_info.streamurl
-                    redirect_key = self.stream_info.vtmstreamkey
-                    if (
-                        self.stream_info.result
-                        and redirect_url
-                        and redirect_key
-                        and redirect_count < max_redirects
-                        and len(events) < max_packets
-                    ):
-                        self.close()
-                        self.stream_url = redirect_url
-                        vtm_stream_key = redirect_key
-                        redirect_count += 1
-                        redirected = True
-                        break
-                elif packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
-                    self.send_packet(
-                        packet.body,
-                        message_code=VtmMessageCode.KEEPALIVE_RSP,
-                    )
-
-            if not redirected:
-                break
-        return events
-
-    def _require_socket(self) -> Any:
-        sock = self._socket
-        if sock is None:
-            raise PyEzvizError("VTM socket is not connected")
-        return sock
-
-    def _recv_exact(
-        self,
-        length: int,
-        *,
-        deadline: float | None = None,
-        monotonic: Callable[[], float] = time.monotonic,
-    ) -> bytes:
-        sock = self._require_socket()
-        while len(self._recv_buffer) < length:
-            gettimeout = getattr(sock, "gettimeout", None)
-            configured_timeout = (
-                cast("float | None", gettimeout())
-                if callable(gettimeout)
-                else self.timeout
-            )
-            now = monotonic()
-            if (
-                self._read_inactivity_deadline is None
-                and configured_timeout is not None
-            ):
-                self._read_inactivity_deadline = now + configured_timeout
-            inactivity_remaining = (
-                None
-                if self._read_inactivity_deadline is None
-                else self._read_inactivity_deadline - now
-            )
-            if inactivity_remaining is not None and inactivity_remaining <= 0:
-                raise DeviceException(
-                    "Device offline or unreachable: timed out waiting for VTM stream data"
-                )
-
-            caller_remaining: float | None = None
-            if deadline is not None:
-                caller_remaining = deadline - now
-                if caller_remaining <= 0:
-                    raise _VtmReadDeadlineExpired
-
-            timeout_candidates = [
-                value
-                for value in (
-                    configured_timeout,
-                    inactivity_remaining,
-                    caller_remaining,
-                )
-                if value is not None
-            ]
-            effective_timeout = min(timeout_candidates) if timeout_candidates else None
-            caller_limited = caller_remaining is not None and (
-                inactivity_remaining is None
-                or caller_remaining < inactivity_remaining
-            )
-
-            timeout_changed = effective_timeout != configured_timeout
-            if timeout_changed:
-                sock.settimeout(effective_timeout)
-            try:
-                chunk = sock.recv(length - len(self._recv_buffer))
-            except TimeoutError as err:
-                if caller_limited:
-                    raise _VtmReadDeadlineExpired from err
-                raise DeviceException(
-                    "Device offline or unreachable: timed out waiting for VTM stream data"
-                ) from err
-            finally:
-                if timeout_changed:
-                    sock.settimeout(configured_timeout)
-            if not chunk:
-                raise PyEzvizError("VTM socket closed while reading packet")
-            self._recv_buffer.extend(chunk)
-            if configured_timeout is not None:
-                self._read_inactivity_deadline = monotonic() + configured_timeout
-
-        result = bytes(self._recv_buffer[:length])
-        del self._recv_buffer[:length]
-        return result
-
-
-def encode_vtm_packet(
-    body: bytes,
-    *,
-    channel: int = VtmChannel.MESSAGE,
-    message_code: int = VtmMessageCode.STREAMINFO_REQ,
-    sequence: int = 0,
-) -> bytes:
-    """Encode a VTM/VTDU packet using the 8-byte header."""
-
-    if len(body) > 0xFFFF:
-        raise PyEzvizError("VTM packet body is too large")
-    header = bytes(
-        (
-            VTM_MAGIC,
-            int(channel) & 0xFF,
-            *len(body).to_bytes(2, "big"),
-            *(sequence & 0xFFFF).to_bytes(2, "big"),
-            *int(message_code).to_bytes(2, "big"),
-        )
-    )
-    return header + body
-
-
-def decode_vtm_header(header: bytes) -> VtmPacket:
-    """Decode an 8-byte VTM/VTDU packet header."""
-
-    if len(header) != VTM_HEADER_SIZE:
-        raise PyEzvizError("VTM header must be exactly 8 bytes")
-    if header[0] != VTM_MAGIC:
-        raise PyEzvizError("VTM magic byte not found")
-
-    channel = header[1]
-    if channel not in {int(item) for item in VtmChannel}:
-        raise PyEzvizError(f"Unknown VTM channel: 0x{channel:02x}")
-
-    return VtmPacket(
-        channel=channel,
-        length=int.from_bytes(header[2:4], "big"),
-        sequence=int.from_bytes(header[4:6], "big"),
-        message_code=int.from_bytes(header[6:8], "big"),
-    )
-
-
-def decode_vtm_packet(packet: bytes) -> VtmPacket:
-    """Decode a complete VTM/VTDU packet."""
-
-    header = decode_vtm_header(packet[:VTM_HEADER_SIZE])
-    body = packet[VTM_HEADER_SIZE:]
-    if len(body) != header.length:
-        raise PyEzvizError(
-            f"VTM packet length mismatch: header={header.length} body={len(body)}"
-        )
-    return VtmPacket(
-        channel=header.channel,
-        length=header.length,
-        sequence=header.sequence,
-        message_code=header.message_code,
-        body=body,
-    )
-
-
-def summarize_vtm_packet(packet: VtmPacket, *, index: int = 0) -> VtmTraceEvent:
-    """Build a body-free packet summary for debugging live VTM streams."""
-
-    transport = StreamTransport.UNKNOWN
-    if packet.channel == VtmChannel.STREAM:
-        transport = detect_transport(packet.body)
-
-    return VtmTraceEvent(
-        index=index,
-        channel=packet.channel,
-        channel_name=_enum_name(VtmChannel, packet.channel),
-        length=packet.length,
-        sequence=packet.sequence,
-        message_code=packet.message_code,
-        message_name=_enum_name(VtmMessageCode, packet.message_code),
-        encrypted=packet.encrypted,
-        transport=transport.name,
-    )
-
-
-def build_vtm_url(
-    host: str,
-    port: int,
-    serial: str,
-    stream_biz_url: str,
-    vtdu_token: str,
-    *,
-    channel: int = 1,
-    client_type: int = 9,
-    timestamp_ms: int | None = None,
-) -> str:
-    """Build the ysproto live URL used for the VTM stream-info request."""
-
-    if timestamp_ms is None:
-        timestamp_ms = int(time.time() * 1000)
-    biz = _parse_stream_biz_params(stream_biz_url)
-    params = {
-        **biz,
-        "dev": serial,
-        "chn": str(channel),
-        "stream": "1",
-        "cln": str(client_type),
-        "isp": "0",
-        "auth": "1",
-        "ssn": vtdu_token,
-        "vip": "0",
-        "timestamp": str(timestamp_ms),
-    }
-    return f"ysproto://{_format_url_host(host)}:{port}/live?{urlencode(params)}"
-
-
-def parse_vtm_url(url: str) -> tuple[str, int, str, dict[str, str]]:
-    """Parse a ysproto URL into host, port, path, and query parameters."""
-
-    try:
-        parsed = urlparse(url)
-    except ValueError as err:
-        raise PyEzvizError("Invalid VTM URL host or port") from err
-    if parsed.scheme != "ysproto":
-        raise PyEzvizError("Invalid VTM URL scheme")
-    try:
-        port = parsed.port
-    except ValueError as err:
-        raise PyEzvizError("Invalid VTM URL host or port") from err
-    if not parsed.hostname or port is None:
-        raise PyEzvizError("Invalid VTM URL host or port")
-    return (
-        parsed.hostname,
-        port,
-        parsed.path,
-        dict(parse_qsl(parsed.query, keep_blank_values=True)),
-    )
-
-
-def build_stream_info_request(
-    stream_url: str,
-    *,
-    vtm_stream_key: str | None = None,
-    client_version: str = "v3.6.3.20221124",
-) -> bytes:
-    """Encode the limited StreamInfoReq protobuf used by VTM/VTDU."""
-
-    parts = [_proto_string(1, stream_url)]
-    if vtm_stream_key:
-        parts.append(_proto_string(2, vtm_stream_key))
-    parts.extend(
-        (
-            _proto_string(3, client_version),
-            _proto_varint(4, 0),
-            _proto_string(6, client_version),
-        )
-    )
-    return b"".join(parts)
-
-
-def build_stream_keepalive_request(stream_ssn: str) -> bytes:
-    """Encode the limited StreamKeepAliveReq protobuf."""
-
-    return _proto_bytes(1, stream_ssn.encode())
-
-
-def build_get_vtdu_info_request(
-    serial: str,
-    vtdu_token: str,
-    *,
-    channel: int = 1,
-    stream_type: int = 1,
-    business_type: int = 0,
-    client_isp_type: int = 0,
-    is_proxy: bool = False,
-) -> bytes:
-    """Encode the native GetVtduInfoReq protobuf."""
-
-    return b"".join(
-        (
-            _proto_string(1, serial),
-            _proto_varint(2, channel),
-            _proto_varint(3, stream_type),
-            _proto_varint(4, client_isp_type),
-            _proto_varint(5, business_type),
-            _proto_string(6, vtdu_token),
-            _proto_varint(7, int(is_proxy)),
-        )
-    )
-
-
-def build_start_stream_request(
-    serial: str,
-    vtdu_token: str,
-    stream_key: str,
-    *,
-    channel: int = 1,
-    stream_type: int = 1,
-    business_type: int = 0,
-    client_type: int = 9,
-    peer_host: str | None = None,
-    peer_port: int | None = None,
-) -> bytes:
-    """Encode the native StartStreamReq protobuf."""
-
-    parts = [
-        _proto_string(1, serial),
-        _proto_varint(2, channel),
-        _proto_varint(3, stream_type),
-        _proto_varint(4, business_type),
-        _proto_string(5, vtdu_token),
-        _proto_varint(6, client_type),
-        _proto_string(7, stream_key),
-    ]
-    if peer_host:
-        parts.append(_proto_string(8, peer_host))
-    if peer_port is not None:
-        parts.append(_proto_varint(9, peer_port))
-    return b"".join(parts)
-
-
-def build_peer_stream_request(
-    serial: str,
-    vtdu_token: str,
-    *,
-    channel: int = 1,
-    stream_type: int = 1,
-    business_type: int = 0,
-) -> bytes:
-    """Encode the native PeerStreamReq protobuf."""
-
-    return b"".join(
-        (
-            _proto_string(1, serial),
-            _proto_varint(2, channel),
-            _proto_varint(3, stream_type),
-            _proto_varint(4, business_type),
-            _proto_string(5, vtdu_token),
-        )
-    )
-
-
-def build_stop_stream_request(stream_ssn: str, *, ssn_info: str | None = None) -> bytes:
-    """Encode the native StopStreamReq protobuf."""
-
-    parts = [_proto_string(1, stream_ssn)]
-    if ssn_info:
-        parts.append(_proto_string(2, ssn_info))
-    return b"".join(parts)
-
-
-def parse_stream_info_response(data: bytes) -> StreamInfoResponse:
-    """Decode known scalar fields from a StreamInfoRsp protobuf body."""
-
-    fields = _read_proto_fields(data, "StreamInfoRsp")
-
-    return StreamInfoResponse(
-        result=_proto_last_int(fields, 1),
-        datakey=_proto_last_int(fields, 2),
-        streamhead=_proto_last_str(fields, 3),
-        streamssn=_proto_last_str(fields, 4),
-        vtmstreamkey=_proto_last_str(fields, 5),
-        serverinfo=_proto_last_str(fields, 6),
-        streamurl=_proto_last_str(fields, 7),
-        srvinfo=_proto_last_str(fields, 8),
-        aesmd5=_proto_last_str(fields, 9),
-        udptransinfo=_proto_last_str(fields, 10),
-        peerpbkey=_proto_last_str(fields, 11),
-        pdslist=tuple(_proto_bytes_values(fields, 12)),
-        srvipv6_addr=_proto_last_str(fields, 13),
-    )
-
-
-def parse_get_vtdu_info_response(data: bytes) -> VtduInfoResponse:
-    """Decode known scalar fields from a GetVtduInfoRsp protobuf body."""
-
-    fields = _read_proto_fields(data, "GetVtduInfoRsp")
-    return VtduInfoResponse(
-        result=_proto_last_int(fields, 1),
-        host=_proto_last_str(fields, 2),
-        port=_proto_last_int(fields, 3),
-        streamkey=_proto_last_str(fields, 4),
-        peerhost=_proto_last_str(fields, 5),
-        peerport=_proto_last_int(fields, 6),
-        srvinfo=_proto_last_str(fields, 7),
-    )
-
-
-def parse_start_stream_response(data: bytes) -> VtduStreamResponse:
-    """Decode known scalar fields from a StartStreamRsp protobuf body."""
-
-    return _parse_vtdu_stream_response(data, "StartStreamRsp")
-
-
-def parse_peer_stream_response(data: bytes) -> VtduStreamResponse:
-    """Decode known scalar fields from a PeerStreamRsp protobuf body."""
-
-    return _parse_vtdu_stream_response(data, "PeerStreamRsp")
-
-
-def parse_stop_stream_response(data: bytes) -> StopStreamResponse:
-    """Decode known scalar fields from a StopStreamRsp protobuf body."""
-
-    fields = _read_proto_fields(data, "StopStreamRsp")
-    return StopStreamResponse(result=_proto_last_int(fields, 1))
-
-
-def detect_transport(data: bytes) -> StreamTransport:
-    """Best-effort detection of stream payload transport."""
-
-    if len(data) >= len(MPEG_PS_START_CODE) and data[:4] == MPEG_PS_START_CODE:
-        return StreamTransport.MPEG_PS
-    if data[:1] == MPEG_TS_SYNC_BYTE:
-        return StreamTransport.MPEG_TS
-    if data and data[0] >> 6 == 2:
-        return StreamTransport.RTP
-    return StreamTransport.UNKNOWN
-
-
-def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
-    """Return bounded-capture video payloads from authoritative PS packet bounds.
-
-    Scanning every byte for a video start code can mistake AAC payload bytes
-    for PES headers and stop decryption of the remaining capture. The common
-    packet walker skips non-video bodies by their lengths and retains existing
-    pack-anchored recovery for overlong vendor video PES runs.
-    """
-
-    ranges: list[tuple[int, int]] = []
-    packets = {packet.start: packet for packet in _mpeg_ps_video_decrypt_ranges(data)}
-    offset = 0
-    while offset < len(data) - 9:
-        # Prefer authoritative bounds, including pack-anchored vendor recovery.
-        # Between those ranges resynchronize one byte at a time, but always skip
-        # a complete non-video packet's body rather than scanning its payload.
-        packet = packets.get(offset)
-        packet_end = packet.end if packet is not None else _mpeg_ps_packet_end(data, offset)
-        if packet_end is None:
-            if _is_zero_length_video_pes_start(data, offset):
-                payload_start = _pes_payload_start(data, offset)
-                assert payload_start is not None
-                packet_end = _next_unbounded_video_pes_boundary(data, payload_start)
-                packet_end = len(data) if packet_end is None else packet_end
-            else:
-                offset += 1
-                continue
-        if _is_video_pes_stream_id(data[offset + 3]):
-            payload_start = _pes_payload_start(data, offset)
-            if payload_start is not None and payload_start < packet_end:
-                ranges.append((payload_start, packet_end))
-        offset = packet_end
-    return ranges
-
-
-def _has_non_video_pes_packet(data: bytes, start: int, end: int) -> bool:
-    """Return True when a non-video PES packet appears in the byte range."""
-
-    i = start
-    while i < end - 3:
-        if data[i : i + 3] != MPEG_START_CODE_PREFIX:
-            i += 1
-            continue
-        stream_id = data[i + 3]
-        if _is_mpeg_ps_metadata_stream_id(stream_id):
-            i += 4
-            continue
-        if _is_mpeg_ps_packet_start_id(stream_id) and not _is_video_pes_stream_id(
-            stream_id
-        ):
-            return True
-        i += 4
-    return False
-
-
-@dataclass(frozen=True)
-class _MpegPsPacketRange:
-    """Parsed MPEG-PS packet bounds."""
-
-    start: int
-    end: int
-    stream_id: int
-
-
-@dataclass
-class _MpegPsVideoDecryptState:
-    """Pending NAL/AES bytes for one video stream and PES picture epoch."""
-
-    pending_block_positions: list[int] = field(default_factory=list)
-    pending_block: bytearray = field(default_factory=bytearray)
-    active_nal: bool = False
-    active_nal_decrypted: int = 0
-    active_nal_body_start: int = 0
-    picture_pts: int | None = None
-
-    def reset(self) -> None:
-        self.pending_block_positions.clear()
-        self.pending_block.clear()
-        self.active_nal = False
-        self.active_nal_decrypted = self.active_nal_body_start = 0
-
-
-def mpeg_ps_complete_prefix_length(data: bytes | bytearray) -> int:
-    """Return the length of the fully parsed MPEG-PS packet prefix."""
-
-    ranges = _mpeg_ps_complete_packet_ranges(data)
-    return ranges[-1].end if ranges else 0
-
-
-def mpeg_ps_decryptable_prefix_length(data: bytes | bytearray) -> int:
-    """Return complete MPEG-PS bytes that are safe to decrypt independently.
-
-    A video NAL can continue across adjacent video PES packets. Keep any trailing
-    video PES run buffered until a following non-video packet or stream end lets
-    the decryptor see the full run in one call.
-    """
-
-    ranges = _mpeg_ps_complete_packet_ranges(data)
-    if not ranges:
-        return 0
-
-    decryptable_end = ranges[-1].end
-    trailing_video_start = decryptable_end
-    for packet_range in reversed(ranges):
-        if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
-            continue
-        if not _is_video_pes_stream_id(packet_range.stream_id):
-            break
-        trailing_video_start = packet_range.start
-    return trailing_video_start if trailing_video_start != decryptable_end else decryptable_end
-
-
-def _mpeg_ps_complete_packet_ranges(
-    data: bytes | bytearray,
-    *,
-    include_trailing_unbounded_video: bool = False,
-    start_offset: int = 0,
-) -> list[_MpegPsPacketRange]:
-    """Return complete packet ranges with absolute bounds from ``start_offset``."""
-
-    view = data if isinstance(data, bytes) else bytes(data)
-    ranges: list[_MpegPsPacketRange] = []
-    i = start_offset
-    while i < len(view):
-        packet_end = _mpeg_ps_packet_end(view, i)
-        if packet_end is not None:
-            ranges.append(_MpegPsPacketRange(i, packet_end, view[i + 3]))
-            i = packet_end
-            continue
-
-        if (
-            i + 9 <= len(view)
-            and view[i : i + 3] == MPEG_START_CODE_PREFIX
-            and 0xC0 <= view[i + 3] <= 0xEF
-            and int.from_bytes(view[i + 4 : i + 6], "big") == 0
-        ):
-            payload_start = _pes_payload_start(view, i)
-            if payload_start is None:
-                break
-            next_start = _next_unbounded_video_pes_boundary(view, payload_start)
-            if next_start is None:
-                if (
-                    include_trailing_unbounded_video
-                    and _is_video_pes_stream_id(view[i + 3])
-                    and payload_start <= len(view)
-                ):
-                    ranges.append(_MpegPsPacketRange(i, len(view), view[i + 3]))
-                    i = len(view)
-                    continue
-                break
-            ranges.append(_MpegPsPacketRange(i, next_start, view[i + 3]))
-            i = next_start
-            continue
-
-        break
-    return ranges
-
-
-def _mpeg_ps_anchored_recovery_start(data: bytes, start: int, pack_start: int) -> int:
-    """Find a packet chain reaching the known pack, not an isolated lookalike.
-
-    Ciphertext can contain locally valid packet headers. Only boundaries whose
-    declared ends lead contiguously to the pack are evidence of real framing.
-    Resolve candidates backward once, avoiding repeated suffix walks/copies.
-    """
-
-    candidates: list[tuple[int, int | None]] = []
-    candidate = data.find(MPEG_START_CODE_PREFIX, start, pack_start)
-    while candidate >= 0:
-        packet_end = _mpeg_ps_packet_end(data, candidate)
-        if packet_end is not None or _is_zero_length_video_pes_start(data, candidate):
-            candidates.append((candidate, packet_end))
-        candidate = data.find(MPEG_START_CODE_PREFIX, candidate + 3, pack_start)
-
-    anchored = {pack_start}
-    next_boundary = pack_start
-    recovery_start = pack_start
-    for candidate, packet_end in reversed(candidates):
-        # The normal walker bounds a zero-length video at the next locally
-        # valid packet; require that boundary to be independently anchored too.
-        boundary = next_boundary if packet_end is None else packet_end
-        if boundary in anchored:
-            anchored.add(candidate)
-            recovery_start = candidate
-        next_boundary = candidate
-    return recovery_start
-
-
-def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
-    """Recover overlong EZVIZ video PES runs for the bounded decrypt pass.
-
-    Some cloud cameras advertise a capped PES length while continuing the
-    encrypted video payload until the next pack. The strict parser must retain
-    its prefix semantics for streaming; only the complete-capture decrypt pass
-    may bridge such a gap, anchored by a valid MPEG-2 pack header.
-    """
-
-    ranges: list[_MpegPsPacketRange] = []
-    offset = 0
-    while offset < len(data):
-        parsed = _mpeg_ps_complete_packet_ranges(
-            data, include_trailing_unbounded_video=True, start_offset=offset
-        )
-        if not parsed:
-            break
-        ranges.extend(parsed)
-        parsed_end = ranges[-1].end
-        if parsed_end >= len(data):
-            break
-        next_pack = data.find(b"\x00\x00\x01\xba", parsed_end)
-        while next_pack >= 0 and not (
-            next_pack + 14 <= len(data) and _is_mpeg2_pack_header(data, next_pack)
-        ):
-            next_pack = data.find(b"\x00\x00\x01\xba", next_pack + 4)
-        if next_pack < 0:
-            break
-        if _is_video_pes_stream_id(ranges[-1].stream_id):
-            previous = ranges[-1]
-            # A vendor continuation can bridge unparsed bytes, but must never
-            # include any later packet's clear header in the video payload.
-            # Resume the authoritative walker at that packet so its body is
-            # bounded independently, including zero-length video PES packets.
-            recovery_end = _mpeg_ps_anchored_recovery_start(data, parsed_end, next_pack)
-            ranges[-1] = _MpegPsPacketRange(
-                previous.start, recovery_end, previous.stream_id
-            )
-            offset = recovery_end
-            continue
-        offset = next_pack
-    return ranges
-
-
-def _mpeg_ps_packet_pts(data: bytes, start: int, end: int) -> int | None:
-    """Read a complete, marker-validated MPEG-2 PES presentation timestamp."""
-
-    if start + 14 > end or (data[start + 6] & 0xC0) != 0x80 or data[start + 8] < 5:
-        return None
-    if start + 9 + data[start + 8] > end:
-        return None
-    flags = data[start + 7] & 0xC0
-    if flags not in (0x80, 0xC0) or (flags == 0xC0 and data[start + 8] < 10):
-        return None
-    encoded = data[start + 9:start + 14]
-    prefix = 0x20 if flags == 0x80 else 0x30
-    if (encoded[0] & 0xF0) != prefix or not all(encoded[index] & 1 for index in (0, 2, 4)):
-        return None
-    if flags == 0xC0:
-        dts = data[start + 14:start + 19]
-        if (dts[0] & 0xF0) != 0x10 or not all(dts[index] & 1 for index in (0, 2, 4)):
-            return None
-    return (
-        ((encoded[0] >> 1) & 7) << 30
-        | encoded[1] << 22
-        | (encoded[2] >> 1) << 15
-        | encoded[3] << 7
-        | encoded[4] >> 1
-    )
-
-
-def mpeg_ps_video_pts_span_seconds(
-    data: bytes, *, max_gap_seconds: float | None = None
-) -> float | None:
-    """Measure video presentation span from clear MPEG-PS PES headers.
-
-    Video bodies may be encrypted, but their PES timestamps remain clear. Return
-    ``None`` when no valid video PTS is available rather than guessing from bytes.
-    ``max_gap_seconds`` treats sparse or jumped adjacent timestamps as ambiguous.
-    """
-
-    timestamps: list[int] = []
-    for packet in _mpeg_ps_video_decrypt_ranges(data):
-        start = packet.start
-        if not _is_video_pes_stream_id(packet.stream_id) or start + 14 > len(data):
-            continue
-        pts = _mpeg_ps_packet_pts(data, start, packet.end)
-        if pts is None:
-            continue
-        timestamps.append(pts)
-    if len(timestamps) < 2:
-        return None
-    wrap = 1 << 33
-    transition_window = 5 * 90_000
-    wraps = 0
-    for previous, current in pairwise(timestamps):
-        if current >= previous:
-            if (
-                max_gap_seconds is not None
-                and current - previous > max_gap_seconds * 90_000
-            ):
-                # Sparse or discontinuous PES timing cannot prove coverage.
-                return None
-            continue
-        if (
-            previous >= wrap - transition_window
-            and current <= transition_window
-            and wrap - previous + current <= transition_window
-        ):
-            wraps += 1
-            continue
-        # A reset, reordered PTS, or sparse boundary crossing is ambiguous;
-        # the caller must probe the staged media instead of guessing a span.
-        return None
-    return (timestamps[-1] + wraps * wrap - timestamps[0]) / 90_000
-
-
-def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:
-    """Return the end offset for a complete MPEG-PS packet at ``start``."""
-
-    packet_end = None
-    if start + 4 <= len(data) and data[start : start + 3] == MPEG_START_CODE_PREFIX:
-        stream_id = data[start + 3]
-        if (
-            stream_id == _PACK_HEADER_STREAM_ID
-            and start + 14 <= len(data)
-            and _is_mpeg2_pack_header(data, start)
-        ):
-            stuffing_length = data[start + 13] & 0x07
-            candidate_end = start + 14 + stuffing_length
-            if candidate_end <= len(data):
-                packet_end = candidate_end
-        elif _is_mpeg_ps_packet_start_id(stream_id) and start + 6 <= len(data):
-            packet_length = int.from_bytes(data[start + 4 : start + 6], "big")
-            candidate_end = start + 6 + packet_length
-            if packet_length and candidate_end <= len(data):
-                if _is_video_pes_stream_id(stream_id) or (
-                    stream_id == _PRIVATE_STREAM_1_ID
-                ):
-                    payload_start = _pes_payload_start(data, start)
-                elif 0xC0 <= stream_id <= 0xDF:
-                    payload_start = _pes_payload_start(data, start) or start + 6
-                else:
-                    payload_start = start + 6
-                if payload_start is not None and payload_start <= candidate_end:
-                    packet_end = candidate_end
-    return packet_end
-
-
-def _is_mpeg2_pack_header(data: bytes, start: int) -> bool:
-    """Return True when ``start`` has MPEG-2 pack-header marker bits."""
-
-    return (
-        (data[start + 4] & 0xC4) == 0x44
-        and (data[start + 6] & 0x04) == 0x04
-        and (data[start + 8] & 0x04) == 0x04
-        and (data[start + 12] & 0x01) == 0x01
-        and (data[start + 13] & 0xF8) == 0xF8
-    )
-
-
-def _pes_payload_start(data: bytes, packet_start: int) -> int | None:
-    """Return the payload start for a complete-enough PES header."""
-
-    if packet_start + 9 > len(data):
-        return None
-    stream_id = data[packet_start + 3]
-    flags = data[packet_start + 6]
-    if (flags & 0xC0) == 0x80:
-        return packet_start + 9 + data[packet_start + 8]
-    if 0xC0 <= stream_id <= 0xEF or stream_id == _PRIVATE_STREAM_1_ID:
-        return None
-    return packet_start + 6
-
-
-def _next_complete_mpeg_ps_packet_start(data: bytes, start: int) -> int | None:
-    """Return the next start code that parses as a complete MPEG-PS packet."""
-
-    i = start
-    while i < len(data) - 3:
-        if _mpeg_ps_packet_end(data, i) is not None:
-            return i
-        i += 1
-    return None
-
-
-def _next_unbounded_video_pes_boundary(data: bytes, start: int) -> int | None:
-    """Return the next packet boundary after a zero-length video PES payload."""
-
-    i = start
-    while i < len(data) - 3:
-        if _mpeg_ps_packet_end(data, i) is not None or _is_zero_length_video_pes_start(
-            data,
-            i,
-        ):
-            return i
-        i += 1
-    return None
-
-
-def _is_zero_length_video_pes_start(data: bytes, start: int) -> bool:
-    """Return True for a complete-enough zero-length video PES header."""
-
-    return (
-        start + 9 <= len(data)
-        and data[start : start + 3] == MPEG_START_CODE_PREFIX
-        and _is_video_pes_stream_id(data[start + 3])
-        and int.from_bytes(data[start + 4 : start + 6], "big") == 0
-        and _pes_payload_start(data, start) is not None
-    )
-
-
-def _is_video_pes_stream_id(stream_id: int) -> bool:
-    """Return True for MPEG-PS video PES stream IDs."""
-
-    return 0xE0 <= stream_id <= 0xEF
-
-
-def _is_mpeg_ps_metadata_stream_id(stream_id: int) -> bool:
-    """Return True for MPEG-PS container metadata that carries no ES bytes."""
-
-    return stream_id in {
+    detect_transport = _compat_module_1.detect_transport
+    download_ezviz_cloud_replay = _compat_module_1.download_ezviz_cloud_replay
+    encode_vtm_packet = _compat_module_1.encode_vtm_packet
+    field = _compat_module_1.field
+    hashlib = _compat_module_1.hashlib
+    ip_address = _compat_module_1.ip_address
+    is_positive_finite_duration_bound = _compat_module_1.is_positive_finite_duration_bound
+    mpeg_ps_complete_prefix_length = _compat_module_1.mpeg_ps_complete_prefix_length
+    mpeg_ps_decryptable_prefix_length = _compat_module_1.mpeg_ps_decryptable_prefix_length
+    mpeg_ps_video_pts_span_seconds = _compat_module_1.mpeg_ps_video_pts_span_seconds
+    pairwise = _compat_module_1.pairwise
+    parse_get_vtdu_info_response = _compat_module_1.parse_get_vtdu_info_response
+    parse_peer_stream_response = _compat_module_1.parse_peer_stream_response
+    parse_qsl = _compat_module_1.parse_qsl
+    parse_start_stream_response = _compat_module_1.parse_start_stream_response
+    parse_stop_stream_response = _compat_module_1.parse_stop_stream_response
+    parse_stream_info_response = _compat_module_1.parse_stream_info_response
+    parse_vtm_url = _compat_module_1.parse_vtm_url
+    re = _compat_module_1.re
+    rtp_payload = _compat_module_1.rtp_payload
+    socket = _compat_module_1.socket
+    ssl = _compat_module_1.ssl
+    struct = _compat_module_1.struct
+    summarize_vtm_packet = _compat_module_1.summarize_vtm_packet
+    time = _compat_module_1.time
+    urlencode = _compat_module_1.urlencode
+    urlparse = _compat_module_1.urlparse
+    vtm_media_packet_source = _compat_module_1.vtm_media_packet_source
+    vtm_packet_to_media_packet = _compat_module_1.vtm_packet_to_media_packet
+
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        AES,
         _PACK_HEADER_STREAM_ID,
-        _SYSTEM_HEADER_STREAM_ID,
-        _PROGRAM_STREAM_MAP_ID,
         _PADDING_STREAM_ID,
-    }
-
-
-def _is_mpeg_ps_packet_start_id(stream_id: int) -> bool:
-    """Return True for MPEG-PS packet start codes, excluding Annex B NAL IDs."""
-
-    return (
-        stream_id
-        in {
-            _PACK_HEADER_STREAM_ID,
-            _SYSTEM_HEADER_STREAM_ID,
-            _PROGRAM_STREAM_MAP_ID,
-            _PRIVATE_STREAM_1_ID,
-            _PADDING_STREAM_ID,
-            _PRIVATE_STREAM_2_ID,
-        }
-        or 0xC0 <= stream_id <= 0xEF
-    )
-
-
-def _next_mpeg_ps_packet_start(data: bytes, start: int) -> int | None:
-    """Return the next plausible MPEG-PS packet start code at or after ``start``."""
-
-    i = start
-    while i < len(data) - 3:
-        if data[i : i + 3] == MPEG_START_CODE_PREFIX and _is_mpeg_ps_packet_start_id(
-            data[i + 3]
-        ):
-            return i
-        i += 1
-    return None
-
-
-def _find_nal_start_codes(
-    data: bytes, start: int, end: int
-) -> list[tuple[int, int]]:
-    """Find Annex B NAL start codes in ``data[start:end]``."""
-
-    positions: list[tuple[int, int]] = []
-    i = start
-    while i < end - 3:
-        if data[i : i + 4] == ANNEX_B_LONG_START_CODE:
-            positions.append((i, 4))
-            i += 4
-        elif data[i : i + 3] == MPEG_START_CODE_PREFIX:
-            positions.append((i, 3))
-            i += 3
-        else:
-            i += 1
-    return positions
-
-
-def _hevc_nal_type(data: bytes, start_code_pos: int, start_code_len: int) -> int | None:
-    """Return the HEVC NAL unit type after an Annex B start code."""
-
-    header_pos = start_code_pos + start_code_len
-    if header_pos + 1 >= len(data):
-        return None
-    return (data[header_pos] >> 1) & 0x3F
-
-
-def _h264_nal_type(data: bytes, start_code_pos: int, start_code_len: int) -> int | None:
-    """Return the H.264 NAL unit type after an Annex B start code."""
-
-    header_pos = start_code_pos + start_code_len
-    if header_pos >= len(data):
-        return None
-    return data[header_pos] & 0x1F
-
-
-def _is_plausible_hevc_header(data: bytes, start_code_pos: int, start_code_len: int) -> bool:
-    """Return True when the bytes after an Annex B start look like clear HEVC."""
-
-    header_pos = start_code_pos + start_code_len
-    if header_pos + 1 >= len(data):
-        return False
-    if (data[header_pos] & 0x80) != 0:
-        return False
-    nal_type = (data[header_pos] >> 1) & 0x3F
-    layer_id = ((data[header_pos] & 0x01) << 5) | (data[header_pos + 1] >> 3)
-    return nal_type <= 40 and layer_id == 0 and (data[header_pos + 1] & 0x07) != 0
-
-
-def _is_plausible_h264_header(data: bytes, start_code_pos: int, start_code_len: int) -> bool:
-    """Return True when the byte after an Annex B start looks like clear H.264."""
-
-    header_pos = start_code_pos + start_code_len
-    if header_pos >= len(data):
-        return False
-    nal_header = data[header_pos]
-    return (nal_header & 0x80) == 0 and 1 <= (nal_header & 0x1F) <= 23
-
-
-def _h264_header_score(nal_type: int) -> int:
-    """Return a small confidence score for a plausible H.264 NAL type."""
-
-    if nal_type in {1, 5, 7, 8}:
-        return 4
-    if nal_type in {2, 3, 4}:
-        return 2
-    return 1
-
-
-def _hevc_header_score(nal_type: int) -> int:
-    """Return a small confidence score for a plausible HEVC NAL type."""
-
-    if nal_type in {32, 33, 34}:
-        return 4
-    if nal_type < 32:
-        return 2
-    return 1
-
-
-def detect_hikvision_ps_video_nalu_header_size(
-    data: bytes,
-    key: str | bytes,
-    *,
-    default: int | None = 2,
-) -> int | None:
-    """Best-effort detect the NAL header mode for Hikvision/EZVIZ PS video.
-
-    Returns the number of clear codec header bytes to preserve before AES
-    decryption: ``2`` for HEVC, ``1`` for H.264 with a clear header, and ``0``
-    for H.264 where the NAL header is encrypted. ``default`` is returned when
-    no video NAL evidence is present.
-    """
-
-    key_bytes = key.encode() if isinstance(key, str) else key
-    aes_key = key_bytes.ljust(16, b"\0")[:16]
-    scores = {
-        "hevc": 0,
-        "hevc-encrypted-header": 0,
-        "h264-clear-header": 0,
-        "h264": 0,
-    }
-
-    for payload_start, payload_end in _video_pes_payload_ranges(data):
-        for start_code_pos, start_code_len in _find_nal_start_codes(
-            data,
-            payload_start,
-            payload_end,
-        ):
-            header_pos = start_code_pos + start_code_len
-            if _is_plausible_hevc_header(data, start_code_pos, start_code_len):
-                scores["hevc"] += _hevc_header_score(
-                    (data[header_pos] >> 1) & 0x3F,
-                )
-            has_clear_h264_header = _is_plausible_h264_header(
-                data,
-                start_code_pos,
-                start_code_len,
-            )
-            if has_clear_h264_header:
-                scores["h264-clear-header"] += _h264_header_score(
-                    data[header_pos] & 0x1F,
-                )
-            if header_pos + AES.block_size <= payload_end:
-                cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
-                    aes_key
-                )
-                decrypted_header = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-                    bytes(data[header_pos : header_pos + AES.block_size]),
-                )  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-                first_byte = decrypted_header[0]
-                if _is_plausible_hevc_header_bytes(decrypted_header[:2]):
-                    scores["hevc-encrypted-header"] += _hevc_header_score(
-                        (decrypted_header[0] >> 1) & 0x3F,
-                    )
-                if (first_byte & 0x80) == 0:
-                    nal_type = first_byte & 0x1F
-                    if 1 <= nal_type <= 23:
-                        scores["h264"] += _h264_header_score(nal_type)
-
-    if not any(scores.values()):
-        return default
-    if (
-        scores["hevc-encrypted-header"] > scores["hevc"]
-        and scores["hevc-encrypted-header"] >= scores["h264"]
-        and scores["hevc-encrypted-header"] >= scores["h264-clear-header"]
-    ):
-        return 0
-    if (
-        scores["h264"] > scores["hevc"]
-        and scores["h264"] > scores["h264-clear-header"]
-    ):
-        return 0
-    if scores["h264-clear-header"] > scores["hevc"]:
-        return 1
-    return 2
-
-
-def _find_hevc_nal_start_codes(
-    data: bytes, start: int, end: int
-) -> list[tuple[int, int]]:
-    """Find plausible HEVC Annex B NAL start codes.
-
-    Encrypted NAL payloads can contain accidental ``00 00 01`` byte sequences.
-    Treating those ciphertext bytes as real NAL boundaries shifts AES block
-    alignment and corrupts the decrypted frame.
-    """
-
-    return [
-        (pos, length)
-        for pos, length in _find_nal_start_codes(data, start, end)
-        if (nal_type := _hevc_nal_type(data, pos, length)) is not None
-        and nal_type <= 40
-    ]
-
-
-def _is_plausible_hevc_header_bytes(header: bytes) -> bool:
-    """Return True when two decrypted bytes look like a HEVC Annex B header."""
-
-    if len(header) < 2:
-        return False
-    forbidden_zero = header[0] & 0x80 == 0
-    layer_id = ((header[0] & 0x01) << 5) | (header[1] >> 3)
-    temporal_id_plus1 = header[1] & 0x07
-    nal_type = (header[0] >> 1) & 0x3F
-    return forbidden_zero and layer_id == 0 and temporal_id_plus1 > 0 and nal_type <= 40
-
-
-def _find_h264_nal_start_codes(
-    data: bytes, start: int, end: int
-) -> list[tuple[int, int]]:
-    """Find plausible H.264 Annex B NAL start codes."""
-
-    return [
-        (pos, length)
-        for pos, length in _find_nal_start_codes(data, start, end)
-        if (nal_type := _h264_nal_type(data, pos, length)) is not None
-        and 1 <= nal_type <= 23
-    ]
-
-
-def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
-    data: bytes,
-    output: bytearray,
-    *,
-    aes_key: bytes,
-    nalu_header_size: int,
-    states: dict[int, _MpegPsVideoDecryptState],
-    data_offset: int = 0,
-    output_offset: int = 0,
-) -> None:
-    """Apply the shared per-PES-stream cipher state to newly parsed packets.
-
-    Positions are absolute in the input byte stream. Streaming callers retain
-    every byte at/after the earliest pending AES position until it is resolved;
-    whole-buffer callers use zero offsets and the identical state machine.
-    """
-    find_nal_start_codes = (_find_h264_nal_start_codes if nalu_header_size == 1
-                           else _find_hevc_nal_start_codes)
-
-    def decrypt_nal_body_segment(state: _MpegPsVideoDecryptState, start: int, end: int) -> None:
-        if end <= start:
-            return
-        remaining = HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH - state.active_nal_decrypted
-        if remaining <= 0:
-            return
-        decrypt_end = min(end, start + remaining)
-        for pos in range(start, decrypt_end):
-            state.pending_block_positions.append(data_offset + pos)
-            state.pending_block.append(output[data_offset + pos - output_offset])
-            state.active_nal_decrypted += 1
-            if len(state.pending_block) != AES.block_size:
-                continue
-            cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
-                aes_key
-            )
-            decrypted = cipher.decrypt(  # lgtm [py/weak-cryptographic-algorithm]
-                bytes(state.pending_block)
-            )  # lgtm [py/weak-cryptographic-algorithm]
-            for block_pos, decrypted_byte in zip(
-                state.pending_block_positions,
-                decrypted,
-                strict=True,
-            ):
-                output[block_pos - output_offset] = decrypted_byte
-            state.pending_block_positions.clear()
-            state.pending_block.clear()
-
-    def is_post_prefix_tail_lookalike(
-        start_code_pos: int,
-        start_code_len: int,
-    ) -> bool:
-        if nalu_header_size == 1:
-            nal_type = _h264_nal_type(data, start_code_pos, start_code_len)
-            return nal_type is None or not 1 <= nal_type <= 5
-        nal_type = _hevc_nal_type(data, start_code_pos, start_code_len)
-        return nal_type is None or nal_type >= 32
-
-    for packet_range in _mpeg_ps_video_decrypt_ranges(data):
-        if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
-            continue
-        if not _is_video_pes_stream_id(packet_range.stream_id):
-            # Untimed legacy packets retain their old non-video boundary
-            # semantics. Timed picture continuations may span audio packets.
-            for legacy_state in states.values():
-                if legacy_state.picture_pts is None:
-                    legacy_state.reset()
-            continue
-
-        state = states.setdefault(packet_range.stream_id, _MpegPsVideoDecryptState())
-        payload_start = _pes_payload_start(data, packet_range.start)
-        if payload_start is None or payload_start >= packet_range.end:
-            continue
-        payload_end = packet_range.end
-        picture_pts = _mpeg_ps_packet_pts(data, packet_range.start, payload_end)
-        new_picture = picture_pts is not None and picture_pts != state.picture_pts
-        nal_starts = find_nal_start_codes(data, payload_start, payload_end)
-        segment_start = payload_start
-        if not nal_starts:
-            if state.active_nal:
-                decrypt_nal_body_segment(state, payload_start, payload_end)
-            continue
-
-        for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
-            decrypt_end = (
-                nal_starts[idx + 1][0]
-                if idx + 1 < len(nal_starts)
-                else payload_end
-            )
-            # PTS alone does not locate an AU within a PES that may start
-            # with an older NAL's tail. Only an explicitly aligned payload
-            # start may promote a post-prefix non-VCL candidate here.
-            aligned_picture_start = (
-                new_picture and bool(data[packet_range.start + 6] & 0x04)
-                and start_code_pos == payload_start
-            )
-            if (
-                state.active_nal
-                and state.active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                and data_offset + start_code_pos
-                > state.active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                and is_post_prefix_tail_lookalike(start_code_pos, start_code_len)
-                and not aligned_picture_start
-            ):
-                continue
-            if new_picture:
-                # PES PTS belongs to the first access unit starting here;
-                # its payload may first finish the previous picture's NAL.
-                if state.active_nal and segment_start < start_code_pos:
-                    decrypt_nal_body_segment(state, segment_start, start_code_pos)
-                state.reset()
-                state.picture_pts = picture_pts
-                new_picture = False
-            if state.active_nal:
-                candidate_decrypted = state.active_nal_decrypted + max(
-                    0,
-                    start_code_pos - segment_start,
-                )
-                if (
-                    candidate_decrypted
-                    < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                    and candidate_decrypted == 0
-                ):
-                    continue
-            if state.active_nal and segment_start < start_code_pos:
-                decrypt_nal_body_segment(state, segment_start, start_code_pos)
-            state.reset()
-            state.active_nal = True
-            decrypt_start = start_code_pos + start_code_len + nalu_header_size
-            state.active_nal_body_start = data_offset + decrypt_start
-            decrypt_nal_body_segment(state, decrypt_start, decrypt_end)
-            segment_start = decrypt_end
-        if state.active_nal and segment_start < payload_end:
-            decrypt_nal_body_segment(state, segment_start, payload_end)
-
-
-
-def decrypt_hikvision_ps_video(  # noqa: PLR0915
-    data: bytes,
-    key: str | bytes,
-    *,
-    nalu_header_size: int | None = 2,
-) -> bytes:
-    """Decrypt Hikvision/EZVIZ encrypted MPEG-PS video NAL payloads.
-
-    EZVIZ battery-camera VTM streams keep MPEG-PS/PES and Annex B NAL framing
-    clear, but encrypt the video NAL body after the codec NAL header. The mobile
-    SDK's native transform layer accepts the camera encrypt key as AES material;
-    observed HEVC streams decrypt the first encrypted prefix of each NAL body
-    with AES-ECB, key zero-padded/truncated to 16 bytes, while preserving the
-    two-byte HEVC NAL header.
-    """
-
-    if nalu_header_size is None:
-        nalu_header_size = detect_hikvision_ps_video_nalu_header_size(data, key)
-    if nalu_header_size is None:
-        nalu_header_size = 2
-    if nalu_header_size < 0:
-        raise ValueError("nalu_header_size must be non-negative")
-
-    key_bytes = key.encode() if isinstance(key, str) else key
-    aes_key = key_bytes.ljust(16, b"\0")[:16]
-    def is_short_clear_h264_pps(
-        payload: bytes,
-        start_code_pos: int,
-        start_code_len: int,
-        nal_end: int,
-    ) -> bool:
-        header_pos = start_code_pos + start_code_len
-        return (
-            2 <= nal_end - header_pos < AES.block_size
-            and _h264_nal_type(payload, start_code_pos, start_code_len) == 8
-        )
-
-    def find_encrypted_nal_start_codes(
-        data: bytes,
-        start: int,
-        end: int,
-    ) -> list[tuple[int, int]]:
-        starts: list[tuple[int, int]] = []
-        candidates = _find_nal_start_codes(data, start, end)
-        for index, (start_code_pos, start_code_len) in enumerate(candidates):
-            encrypted_header = start_code_pos + start_code_len
-            nal_end = candidates[index + 1][0] if index + 1 < len(candidates) else end
-            if is_short_clear_h264_pps(
-                data, start_code_pos, start_code_len, nal_end
-            ):
-                starts.append((start_code_pos, start_code_len))
-                continue
-            if encrypted_header + AES.block_size > end:
-                continue
-            cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
-                aes_key
-            )
-            decrypted_header = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-                bytes(data[encrypted_header : encrypted_header + AES.block_size])
-            )  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-            first_byte = decrypted_header[0]
-            h264_nal_type = first_byte & 0x1F
-            if _is_plausible_hevc_header_bytes(decrypted_header[:2]) or (
-                (first_byte & 0x80) == 0 and 1 <= h264_nal_type <= 23
-            ):
-                starts.append((start_code_pos, start_code_len))
-        return starts
-
-    find_nal_start_codes = (
-        find_encrypted_nal_start_codes
-        if nalu_header_size == 0
-        else _find_h264_nal_start_codes
-        if nalu_header_size == 1
-        else _find_hevc_nal_start_codes
-    )
-
-    if nalu_header_size != 0:
-        output = bytearray(data)
-        _decrypt_hikvision_ps_video_packets(
-            data, output, aes_key=aes_key, nalu_header_size=nalu_header_size, states={},
-        )
-        return bytes(output)
-
-    def decrypt_video_payload_run(payload: bytes) -> bytes:  # noqa: PLR0915
-        payload_output = bytearray(payload)
-        pending_block_positions: list[int] = []
-        pending_block = bytearray()
-        active_nal = False
-        active_nal_decrypted = active_nal_body_start = 0
-
-        def reset_nal_state() -> None:
-            nonlocal active_nal, active_nal_body_start, active_nal_decrypted
-            pending_block_positions.clear()
-            pending_block.clear()
-            active_nal = False
-            active_nal_decrypted = active_nal_body_start = 0
-
-        def decrypt_nal_body_segment(start: int, end: int) -> None:
-            nonlocal active_nal_decrypted
-            if end <= start:
-                return
-            remaining = HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH - active_nal_decrypted
-            if remaining <= 0:
-                return
-            decrypt_end = min(end, start + remaining)
-            for pos in range(start, decrypt_end):
-                pending_block_positions.append(pos)
-                pending_block.append(payload_output[pos])
-                active_nal_decrypted += 1
-                if len(pending_block) != AES.block_size:
-                    continue
-                cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
-                    aes_key
-                )
-                decrypted = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-                    bytes(pending_block)
-                )  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-                for block_pos, decrypted_byte in zip(
-                    pending_block_positions,
-                    decrypted,
-                    strict=True,
-                ):
-                    payload_output[block_pos] = decrypted_byte
-                pending_block_positions.clear()
-                pending_block.clear()
-
-        def starts_plausible_encrypted_nal(start: int, end: int) -> bool:
-            if end - start < AES.block_size:
-                return False
-            cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
-                aes_key
-            )
-            decrypted_header = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-                bytes(payload_output[start : start + AES.block_size])
-            )  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-            h264_nal_type = decrypted_header[0] & 0x1F
-            return _is_plausible_hevc_header_bytes(decrypted_header[:2]) or (
-                1 <= h264_nal_type <= 23
-            )
-
-        def is_post_prefix_tail_lookalike(
-            start_code_pos: int,
-            start_code_len: int,
-        ) -> bool:
-            if nalu_header_size == 1:
-                nal_type = _h264_nal_type(payload, start_code_pos, start_code_len)
-                return nal_type is None or not 1 <= nal_type <= 5
-            nal_type = _hevc_nal_type(payload, start_code_pos, start_code_len)
-            return nal_type is None or nal_type >= 32
-
-        nal_starts = find_nal_start_codes(payload, 0, len(payload))
-        segment_start = 0
-        for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
-            decrypt_end = (
-                nal_starts[idx + 1][0]
-                if idx + 1 < len(nal_starts)
-                else len(payload)
-            )
-            clear_short_pps = nalu_header_size == 0 and is_short_clear_h264_pps(
-                payload, start_code_pos, start_code_len, decrypt_end
-            )
-            if active_nal:
-                candidate_decrypted = active_nal_decrypted + max(
-                    0,
-                    start_code_pos - segment_start,
-                )
-                if candidate_decrypted < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH:
-                    if nalu_header_size == 0 and not clear_short_pps and (
-                        candidate_decrypted == 0
-                        or not starts_plausible_encrypted_nal(
-                            start_code_pos + start_code_len,
-                            decrypt_end,
-                        )
-                    ):
-                        continue
-                    if nalu_header_size != 0 and candidate_decrypted == 0:
-                        continue
-            if (
-                active_nal
-                and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                and start_code_pos
-                > active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                and (
-                    (
-                        nalu_header_size == 0
-                        and not clear_short_pps
-                        and not starts_plausible_encrypted_nal(
-                            start_code_pos + start_code_len,
-                            decrypt_end,
-                        )
-                    )
-                    or (
-                        nalu_header_size != 0
-                        and is_post_prefix_tail_lookalike(
-                            start_code_pos,
-                            start_code_len,
-                        )
-                    )
-                )
-            ):
-                continue
-            if active_nal and segment_start < start_code_pos:
-                decrypt_nal_body_segment(segment_start, start_code_pos)
-            reset_nal_state()
-            active_nal = True
-            decrypt_start = start_code_pos + start_code_len + nalu_header_size
-            active_nal_body_start = decrypt_start
-            decrypt_nal_body_segment(decrypt_start, decrypt_end)
-            segment_start = decrypt_end
-        if active_nal and segment_start < len(payload):
-            decrypt_nal_body_segment(segment_start, len(payload))
-
-        return bytes(payload_output)
-
-    output = bytearray(data)
-    video_payload_offsets: list[int] = []
-    video_payload = bytearray()
-
-    def flush_video_payload_run() -> None:
-        if not video_payload:
-            return
-        decrypted = decrypt_video_payload_run(bytes(video_payload))
-        for output_pos, decrypted_byte in zip(
-            video_payload_offsets,
-            decrypted,
-            strict=True,
-        ):
-            output[output_pos] = decrypted_byte
-        video_payload_offsets.clear()
-        video_payload.clear()
-
-    previous_video_end: int | None = None
-    for payload_start, payload_end in _video_pes_payload_ranges(data):
-        if previous_video_end is not None and _has_non_video_pes_packet(
-            data,
-            previous_video_end,
-            payload_start,
-        ):
-            flush_video_payload_run()
-        for output_pos in range(payload_start, payload_end):
-            video_payload_offsets.append(output_pos)
-            video_payload.append(data[output_pos])
-        previous_video_end = payload_end
-    flush_video_payload_run()
-
-    return bytes(output)
-
-
-def download_ezviz_cloud_replay(  # noqa: PLR0913
-    *,
-    stream_url: str,
-    ticket: str,
-    serial: str,
-    channel: int,
-    seq_id: str | int,
-    begin_cas: str,
-    end_cas: str,
-    storage_version: int = 2,
-    video_type: int = 2,
-    file_size: int | None = None,
-    timeout: float = 30.0,
-) -> bytes:
-    """Download encrypted cloud replay bytes from the EZVIZ cloud replay server.
-
-    This reproduces the native ``EZStreamClient.startDownloadFromCloud`` wire
-    path for regular cloud-storage clips. The returned bytes are still the
-    encrypted MPEG-PS ``.tmp`` payload and should be passed through
-    :func:`decrypt_hikvision_ps_video` with the camera verification key.
-    """
-
-    host, port = _parse_cloud_replay_stream_url(stream_url)
-    request_xml = _build_cloud_replay_open_xml(
-        ticket=ticket,
-        serial=serial,
-        channel=channel,
-        seq_id=seq_id,
-        begin_cas=begin_cas,
-        end_cas=end_cas,
-        storage_version=storage_version,
-        video_type=video_type,
-    )
-
-    context = ssl.create_default_context()
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    output = bytearray()
-    buffer = b""
-    sequence = 1
-    last_heartbeat = time.monotonic()
-
-    with (
-        socket.create_connection((host, port), timeout=timeout) as raw_socket,
-        context.wrap_socket(raw_socket, server_hostname=host) as tls_socket,
-    ):
-            tls_socket.settimeout(timeout)
-            tls_socket.sendall(
-                _cloud_replay_frame(
-                    request_xml,
-                    sequence=sequence,
-                    command=CLOUD_REPLAY_OPEN_CMD,
-                )
-            )
-            sequence += 1
-
-            while True:
-                message, buffer = _read_cloud_replay_message(tls_socket, buffer)
-                if not message.md5_ok:
-                    raise PyEzvizError("Cloud replay packet failed MD5 validation")
-                if message.result not in (None, 0):
-                    raise PyEzvizError(f"Cloud replay returned error result {message.result}")
-                if message.err_code not in (None, 0):
-                    raise PyEzvizError(f"Cloud replay returned packet error {message.err_code}")
-
-                if message.data_type in (0, 1, 2) and message.data:
-                    output.extend(message.data)
-                    if file_size is not None and len(output) >= file_size:
-                        return bytes(output[:file_size])
-                elif message.data_type == 100:
-                    if file_size is not None and len(output) < file_size:
-                        raise PyEzvizError(
-                            "Cloud replay ended before expected file size: "
-                            f"{len(output)}/{file_size} bytes"
-                        )
-                    return bytes(output)
-
-                if time.monotonic() - last_heartbeat >= 5:
-                    tls_socket.sendall(
-                        _cloud_replay_frame(
-                            _cloud_replay_heartbeat_xml(),
-                            sequence=sequence,
-                            command=CLOUD_REPLAY_HEARTBEAT_CMD,
-                        )
-                    )
-                    sequence += 1
-                    last_heartbeat = time.monotonic()
-
-
-@dataclass(frozen=True)
-class _CloudReplayMessage:
-    xml: bytes
-    data: bytes
-    md5_ok: bool
-    result: int | None = None
-    err_code: int | None = None
-    data_type: int | None = None
-
-
-def _parse_cloud_replay_stream_url(stream_url: str) -> tuple[str, int]:
-    host, sep, port_text = stream_url.partition(":")
-    if not host or sep != ":":
-        raise PyEzvizError(f"Invalid cloud replay streamUrl: {stream_url!r}")
-    try:
-        port = int(port_text)
-    except ValueError as exc:
-        raise PyEzvizError(f"Invalid cloud replay streamUrl port: {stream_url!r}") from exc
-    return host, port
-
-
-def _build_cloud_replay_open_xml(
-    *,
-    ticket: str,
-    serial: str,
-    channel: int,
-    seq_id: str | int,
-    begin_cas: str,
-    end_cas: str,
-    storage_version: int,
-    video_type: int,
-) -> bytes:
-    return (
-        '<?xml version="1.0" encoding="utf-8"?>\n'
-        "<Request>\n"
-        "\t<Authorization></Authorization>\n"
-        "\t<Session></Session>\n"
-        f"\t<Token>{ticket}</Token>\n"
-        "\t<FrontType>2</FrontType>\n"
-        "\t<PlayType>2</PlayType>\n"
-        "\t<BusType>2</BusType>\n"
-        "\t<FileInfo>\n"
-        "\t\t<FileType>1</FileType>\n"
-        f'\t\t<File StorageVersion="{storage_version}" Id="{seq_id}" />\n'
-        f"\t\t<VideoType>{video_type}</VideoType>\n"
-        f'\t\t<Time Begin="{begin_cas}" End="{end_cas}" />\n'
-        f'\t\t<CameraInfo SubSerial="{serial}_{channel}" ChannelNo="{channel}" />\n'
-        "\t\t<InterlaceFlag>0</InterlaceFlag>\n"
-        "\t</FileInfo>\n"
-        "\t<ClientType>3</ClientType>\n"
-        "\t<PlaySpeed>0</PlaySpeed>\n"
-        "</Request>\n"
-    ).encode()
-
-
-def _cloud_replay_heartbeat_xml() -> bytes:
-    return (
-        b'<?xml version="1.0" encoding="utf-8"?>\n'
-        b"<Response>\n"
-        b"\t<Result>0</Result>\n"
-        b"\t<Command>HB</Command>\n"
-        b"</Response>\n"
-    )
-
-
-def _cloud_replay_frame(payload: bytes, *, sequence: int, command: int) -> bytes:
-    header = struct.pack(
-        ">IIIIIIII",
+        _PRIVATE_STREAM_1_ID,
+        _PRIVATE_STREAM_2_ID,
+        _PROGRAM_STREAM_MAP_ID,
+        _SYSTEM_HEADER_STREAM_ID,
+        _XML_END_RE,
+        ANNEX_B_LONG_START_CODE,
+        CLOUD_REPLAY_HEADER_SIZE,
+        CLOUD_REPLAY_HEARTBEAT_CMD,
         CLOUD_REPLAY_MAGIC,
-        1,
-        sequence,
-        0,
-        command,
-        0,
-        len(payload),
-        0,
-    )
-    return header + payload + _ezviz_md5_hex(payload).encode()
-
-
-def _read_cloud_replay_message(
-    tls_socket: ssl.SSLSocket,
-    buffer: bytes,
-) -> tuple[_CloudReplayMessage, bytes]:
-    while XML_PREFIX not in buffer:
-        buffer += _cloud_replay_recv(tls_socket)
-
-    prefix = buffer.index(XML_PREFIX)
-    if prefix:
-        # Server packets carry the same 32-byte frame prefix used by the client.
-        buffer = buffer[prefix:]
-
-    while (match := _XML_END_RE.search(buffer)) is None:
-        buffer += _cloud_replay_recv(tls_socket)
-
-    xml_end = match.end()
-    while len(buffer) < xml_end + 2:
-        buffer += _cloud_replay_recv(tls_socket)
-
-    body_end = xml_end + 2
-    xml = buffer[:xml_end]
-    length = _cloud_xml_int(xml, b"Length")
-    if length is not None:
-        while len(buffer) < body_end + length + 32:
-            buffer += _cloud_replay_recv(tls_socket)
-        data = buffer[body_end : body_end + length]
-        body = buffer[: body_end + length]
-        digest = buffer[body_end + length : body_end + length + 32]
-        rest = buffer[body_end + length + 32 :]
-    else:
-        while len(buffer) < body_end + 32:
-            buffer += _cloud_replay_recv(tls_socket)
-        data = b""
-        body = buffer[:body_end]
-        digest = buffer[body_end : body_end + 32]
-        rest = buffer[body_end + 32 :]
-
-    return (
-        _CloudReplayMessage(
-            xml=xml,
-            data=data,
-            md5_ok=_ezviz_md5_hex(body).encode() == digest,
-            result=_cloud_xml_int(xml, b"Result"),
-            err_code=_cloud_xml_attr_int(xml, b"Type", b"ErrCode"),
-            data_type=_cloud_xml_int(xml, b"Type"),
-        ),
-        rest,
-    )
-
-
-def _cloud_xml_int(xml: bytes, tag: bytes) -> int | None:
-    match = re.search(rb"<" + tag + rb"(?: [^>]*)?>(-?\d+)</" + tag + rb">", xml)
-    return int(match.group(1)) if match else None
-
-
-def _cloud_replay_recv(tls_socket: ssl.SSLSocket) -> bytes:
-    chunk = tls_socket.recv(8192)
-    if not chunk:
-        raise PyEzvizError("Cloud replay socket closed unexpectedly")
-    return chunk
-
-
-def _cloud_xml_attr_int(xml: bytes, tag: bytes, attr: bytes) -> int | None:
-    match = re.search(rb"<" + tag + rb" [^>]*" + attr + rb'="(-?\d+)"', xml)
-    return int(match.group(1)) if match else None
-
-
-def _proto_key(field: int, wire_type: int) -> bytes:
-    return _encode_varint((field << 3) | wire_type)
-
-
-def _enum_name(enum_type: type[IntEnum], value: int) -> str | None:
-    try:
-        return enum_type(value).name
-    except ValueError:
-        return None
-
-
-def _format_url_host(host: str) -> str:
-    host = host.strip()
-    if host.startswith("[") and host.endswith("]"):
-        return host
-    try:
-        address = ip_address(host)
-    except ValueError:
-        return host
-    if isinstance(address, IPv6Address):
-        return f"[{host}]"
-    return host
-
-
-def _parse_stream_biz_params(stream_biz_url: str) -> dict[str, str]:
-    parsed = urlparse(stream_biz_url)
-    query = parsed.query or stream_biz_url.lstrip("?")
-    return dict(parse_qsl(query, keep_blank_values=True))
-
-
-def _proto_varint(field: int, value: int) -> bytes:
-    return _proto_key(field, 0) + _encode_varint(value)
-
-
-def _proto_bytes(field: int, value: bytes) -> bytes:
-    return _proto_key(field, 2) + _encode_varint(len(value)) + value
-
-
-def _proto_string(field: int, value: str) -> bytes:
-    return _proto_bytes(field, value.encode())
-
-
-ProtoValue = int | bytes
-
-
-def _read_proto_fields(data: bytes, message_name: str) -> dict[int, list[ProtoValue]]:
-    values: dict[int, list[ProtoValue]] = {}
-    pos = 0
-    while pos < len(data):
-        key, pos = _read_varint(data, pos)
-        field = key >> 3
-        wire_type = key & 0x07
-        if wire_type == 0:
-            value, pos = _read_varint(data, pos)
-            values.setdefault(field, []).append(value)
-            continue
-        if wire_type == 2:
-            length, pos = _read_varint(data, pos)
-            if pos + length > len(data):
-                raise PyEzvizError(
-                    f"{message_name} length-delimited field exceeds payload"
-                )
-            values.setdefault(field, []).append(data[pos : pos + length])
-            pos += length
-            continue
-        raise PyEzvizError(f"Unsupported {message_name} wire type: {wire_type}")
-    return values
-
-
-def _proto_last_int(fields: dict[int, list[ProtoValue]], field: int) -> int | None:
-    values = fields.get(field)
-    if not values:
-        return None
-    value = values[-1]
-    return value if isinstance(value, int) else None
-
-
-def _proto_last_str(fields: dict[int, list[ProtoValue]], field: int) -> str | None:
-    values = fields.get(field)
-    if not values:
-        return None
-    value = values[-1]
-    if isinstance(value, int):
-        return None
-    return value.decode("utf-8", errors="replace")
-
-
-def _proto_bytes_values(fields: dict[int, list[ProtoValue]], field: int) -> list[bytes]:
-    return [value for value in fields.get(field, []) if isinstance(value, bytes)]
-
-
-def _parse_vtdu_stream_response(data: bytes, message_name: str) -> VtduStreamResponse:
-    fields = _read_proto_fields(data, message_name)
-    return VtduStreamResponse(
-        result=_proto_last_int(fields, 1),
-        streamhead=_proto_last_str(fields, 2),
-        streamssn=_proto_last_str(fields, 3),
-        datakey=_proto_last_int(fields, 4),
+        CLOUD_REPLAY_OPEN_CMD,
+        HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
+        MPEG_PS_START_CODE,
+        MPEG_START_CODE_PREFIX,
+        MPEG_TS_SYNC_BYTE,
+        VIDEO_PES_STREAM_ID,
+        VTM_HEADER_SIZE,
+        VTM_MAGIC,
+        XML_PREFIX,
+        Any,
+        Callable,
+        DeadlineLegacyPacketSource,
+        DeviceException,
+        IntEnum,
+        IPv6Address,
+        Iterator,
+        MediaPacket,
+        MediaPacketMetadata,
+        MediaPacketSourceAdapter,
+        ProtoValue,
+        PyEzvizError,
+        SocketFactory,
+        StopStreamResponse,
+        StreamInfoResponse,
+        StreamTransport,
+        VtduInfoResponse,
+        VtduStreamResponse,
+        VtmChannel,
+        VtmMessageCode,
+        VtmPacket,
+        VtmStreamClient,
+        VtmTraceEvent,
+        _build_cloud_replay_open_xml,
+        _cloud_replay_frame,
+        _cloud_replay_heartbeat_xml,
+        _cloud_replay_recv,
+        _cloud_xml_attr_int,
+        _cloud_xml_int,
+        _CloudReplayMessage,
+        _decrypt_hikvision_ps_video_packets,
+        _encode_varint,
+        _enum_name,
+        _ezviz_md5_hex,
+        _find_h264_nal_start_codes,
+        _find_hevc_nal_start_codes,
+        _find_nal_start_codes,
+        _format_url_host,
+        _h264_header_score,
+        _h264_nal_type,
+        _has_non_video_pes_packet,
+        _hevc_header_score,
+        _hevc_nal_type,
+        _hikvision_aes_ecb_cipher,
+        _is_mpeg2_pack_header,
+        _is_mpeg_ps_metadata_stream_id,
+        _is_mpeg_ps_packet_start_id,
+        _is_plausible_h264_header,
+        _is_plausible_hevc_header,
+        _is_plausible_hevc_header_bytes,
+        _is_video_pes_stream_id,
+        _is_zero_length_video_pes_start,
+        _maybe_int,
+        _maybe_str,
+        _mpeg_ps_anchored_recovery_start,
+        _mpeg_ps_complete_packet_ranges,
+        _mpeg_ps_packet_end,
+        _mpeg_ps_packet_pts,
+        _mpeg_ps_video_decrypt_ranges,
+        _MpegPsPacketRange,
+        _MpegPsVideoDecryptState,
+        _next_complete_mpeg_ps_packet_start,
+        _next_mpeg_ps_packet_start,
+        _next_unbounded_video_pes_boundary,
+        _parse_cloud_replay_stream_url,
+        _parse_stream_biz_params,
+        _parse_vtdu_stream_response,
+        _pes_payload_start,
+        _proto_bytes,
+        _proto_bytes_values,
+        _proto_key,
+        _proto_last_int,
+        _proto_last_str,
+        _proto_string,
+        _proto_varint,
+        _read_cloud_replay_message,
+        _read_proto_fields,
+        _read_varint,
+        _rtp_payload,
+        _video_pes_payload_ranges,
+        _VtmReadDeadlineExpired,
+        annotations,
+        asdict,
+        build_get_vtdu_info_request,
+        build_peer_stream_request,
+        build_start_stream_request,
+        build_stop_stream_request,
+        build_stream_info_request,
+        build_stream_keepalive_request,
+        build_vtm_url,
+        cast,
+        dataclass,
+        decode_vtm_header,
+        decode_vtm_packet,
+        decrypt_hikvision_ps_video,
+        detect_hikvision_ps_video_nalu_header_size,
+        detect_transport,
+        download_ezviz_cloud_replay,
+        encode_vtm_packet,
+        field,
+        hashlib,
+        ip_address,
+        is_positive_finite_duration_bound,
+        mpeg_ps_complete_prefix_length,
+        mpeg_ps_decryptable_prefix_length,
+        mpeg_ps_video_pts_span_seconds,
+        pairwise,
+        parse_get_vtdu_info_response,
+        parse_peer_stream_response,
+        parse_qsl,
+        parse_start_stream_response,
+        parse_stop_stream_response,
+        parse_stream_info_response,
+        parse_vtm_url,
+        re,
+        rtp_payload,
+        socket,
+        ssl,
+        struct,
+        summarize_vtm_packet,
+        time,
+        urlencode,
+        urlparse,
+        vtm_media_packet_source,
+        vtm_packet_to_media_packet,
     )
 
-
-def _encode_varint(value: int) -> bytes:
-    if value < 0:
-        raise PyEzvizError("Negative protobuf varints are not supported")
-    out = bytearray()
-    while True:
-        to_write = value & 0x7F
-        value >>= 7
-        if value:
-            out.append(to_write | 0x80)
-        else:
-            out.append(to_write)
-            return bytes(out)
-
-
-def _read_varint(data: bytes, pos: int) -> tuple[int, int]:
-    shift = 0
-    value = 0
-    while pos < len(data):
-        byte = data[pos]
-        pos += 1
-        value |= (byte & 0x7F) << shift
-        if not byte & 0x80:
-            return value, pos
-        shift += 7
-        if shift >= 64:
-            break
-    raise PyEzvizError("Malformed protobuf varint")
-
-
-def _maybe_int(value: int | str | None) -> int | None:
-    return value if isinstance(value, int) else None
-
-
-def _maybe_str(value: int | str | None) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-__all__ = [name for name in globals() if not name.startswith("_")]
+sys.modules[__name__] = _implementation

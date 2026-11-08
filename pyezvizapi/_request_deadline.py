@@ -1,64 +1,53 @@
-"""Context-local HTTP bootstrap budgets, without mutating client settings."""
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
-import time
-from typing import Any
+# Compatibility export assignments include retained private attributes.
+# ruff: noqa: SLF001
+# Compatibility aliases are explicit type-checker re-exports.
+# Compatibility aliases are explicit type-checker re-exports.
 
-from urllib3.util import Timeout
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.deadline`.
 
-_BUDGET: ContextVar[tuple[float, Callable[[], float]] | None] = ContextVar("ezviz_request_budget", default=None)
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
 
+import sys
+from typing import TYPE_CHECKING
 
-def remaining_request_budget() -> float | None:
-    """Reject an exhausted scoped request budget before doing more work."""
-    budget = _BUDGET.get()
-    if budget is None:
-        return None
-    remaining = budget[0] - budget[1]()
-    if remaining <= 0:
-        raise TimeoutError("Cloud bootstrap exhausted capture deadline")
-    return remaining
+from pyezvizapi.cloud import deadline as _implementation
 
+if TYPE_CHECKING:
+    import pyezvizapi.cloud.deadline as _compat_module_0
 
-@contextmanager
-def request_deadline(deadline: float | None, monotonic: Callable[[], float] = time.monotonic) -> Iterator[None]:
-    """Apply a budget to nested HTTP calls and authentication retries."""
-    if deadline is None:
-        yield
-        return
-    parent_remaining = remaining_request_budget()
-    if parent_remaining is not None:
-        deadline = min(deadline, monotonic() + parent_remaining)
-    token = _BUDGET.set((deadline, monotonic))
-    try:
-        remaining_request_budget()
-        yield
-        remaining_request_budget()
-    finally:
-        _BUDGET.reset(token)
+    _BUDGET = _compat_module_0._BUDGET
+    Any = _compat_module_0.Any
+    Callable = _compat_module_0.Callable
+    ContextVar = _compat_module_0.ContextVar
+    Iterator = _compat_module_0.Iterator
+    Timeout = _compat_module_0.Timeout
+    bounded_request_timeout = _compat_module_0.bounded_request_timeout
+    contextmanager = _compat_module_0.contextmanager
+    remaining_request_budget = _compat_module_0.remaining_request_budget
+    request_budget_lock = _compat_module_0.request_budget_lock
+    request_deadline = _compat_module_0.request_deadline
+    time = _compat_module_0.time
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
 
-def bounded_request_timeout(default: float | None) -> Any:
-    """Give requests one total connect/read budget; preserve ordinary calls."""
-    remaining = remaining_request_budget()
-    if remaining is None:
-        return default
-    return Timeout(total=remaining if default is None else min(default, remaining))
+    _declare_compatibility_exports(
+        _BUDGET,
+        Any,
+        Callable,
+        ContextVar,
+        Iterator,
+        Timeout,
+        bounded_request_timeout,
+        contextmanager,
+        remaining_request_budget,
+        request_budget_lock,
+        request_deadline,
+        time,
+    )
 
-
-@contextmanager
-def request_budget_lock(lock: Any) -> Iterator[None]:
-    """Include token-lock contention in the scoped bootstrap deadline."""
-    remaining = remaining_request_budget()
-    if remaining is None:
-        with lock:
-            yield
-        return
-    if not lock.acquire(timeout=remaining):
-        raise TimeoutError("Cloud bootstrap token lock exhausted capture deadline")
-    try:
-        remaining_request_budget()
-        yield
-    finally:
-        lock.release()
+sys.modules[__name__] = _implementation

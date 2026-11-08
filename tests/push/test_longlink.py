@@ -7,7 +7,7 @@ import json
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import pytest
 
-from pyezvizapi import _longlink as protocol
+from pyezvizapi.push.longlink import codec as protocol
 from tests._paths import FIXTURES
 
 FIXTURE = json.loads((FIXTURES / "longlink_native.json").read_text())

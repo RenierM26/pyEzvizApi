@@ -6,9 +6,13 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.native_session import NativeMpegTsSession
-from pyezvizapi.native_stream import NativeMpegTsStream, NativeTrackSelection
-from tests.streaming.test_native_session import choices, collect, sample as sample  # noqa: PLC0414 -- retained cross-test fixture re-export
+from pyezvizapi.streaming.native_session import NativeMpegTsSession
+from pyezvizapi.streaming.native_stream import NativeMpegTsStream, NativeTrackSelection
+from tests.streaming.test_native_session import (
+    choices,
+    collect,
+    sample as sample,  # noqa: PLC0414 -- pytest fixture registration
+)
 from tests.streaming.test_native_stream import Source, options
 from tests.streaming.test_stream_sample import packet_oracle
 

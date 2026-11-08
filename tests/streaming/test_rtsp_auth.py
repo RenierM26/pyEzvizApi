@@ -6,7 +6,7 @@ import socket
 import pytest
 
 from pyezvizapi.exceptions import AuthTestResultFailed
-from pyezvizapi.test_cam_rtsp import TestRTSPAuth, genmsg_describe
+from pyezvizapi.streaming.rtsp_compat import TestRTSPAuth, genmsg_describe
 
 
 def test_genmsg_describe_builds_rtsp_describe_request() -> None:

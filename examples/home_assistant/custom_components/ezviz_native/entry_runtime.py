@@ -12,8 +12,8 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.clip import AutoClipSource
-from pyezvizapi.native_stream import NativeMpegTsStream, NativePacketStream
+from pyezvizapi.streaming.capture import AutoClipSource
+from pyezvizapi.streaming.native_stream import NativeMpegTsStream, NativePacketStream
 
 from .config import Settings
 from .const import DOMAIN

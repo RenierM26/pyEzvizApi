@@ -10,16 +10,16 @@ from typing import Any, BinaryIO, ClassVar, cast
 
 import pytest
 
-import pyezvizapi.__main__ as cli_module
+import pyezvizapi.cli.main as cli_module
 from pyezvizapi.constants import MAX_RETRIES
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, EzvizNoMediaError, PyEzvizError
-from pyezvizapi.hcnetsdk import (
+from pyezvizapi.streaming.cloud.protocol import VtmChannel, VtmPacket, VtmStreamClient
+from pyezvizapi.streaming.local.hcnetsdk.api import (
     HcNetSdkCommandPortExchange,
     build_hcnetsdk_tcp_frame,
     hcnetsdk_command_port_control_frame,
     parse_hcnetsdk_tcp_frame,
 )
-from pyezvizapi.stream import VtmChannel, VtmPacket, VtmStreamClient
 from tests.cli.fakes import (
     FakeClient as _FakeClient,
     install_fake_camera as _install_fake_camera,
@@ -242,7 +242,7 @@ def test_main_refreshes_saved_token_for_cas_service_metadata(
                 }
             }
 
-    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+    monkeypatch.setattr("pyezvizapi.streaming.local.session.EzvizCAS", FakeCas)
 
     assert (
         cli_module.main(
@@ -341,7 +341,7 @@ def test_main_refreshes_saved_session_for_cas_service_metadata_without_credentia
                 }
             }
 
-    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+    monkeypatch.setattr("pyezvizapi.streaming.local.session.EzvizCAS", FakeCas)
 
     assert (
         cli_module.main(
@@ -5298,7 +5298,7 @@ def test_local_sdk_keys_fetches_endpoint_cas_and_media_key(
                 }
             }
 
-    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+    monkeypatch.setattr("pyezvizapi.streaming.local.session.EzvizCAS", FakeCas)
 
     assert (
         cli_module.main(
@@ -5376,7 +5376,7 @@ def test_local_sdk_keys_can_skip_p2p_register(monkeypatch, tmp_path) -> None:
                 }
             }
 
-    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+    monkeypatch.setattr("pyezvizapi.streaming.local.session.EzvizCAS", FakeCas)
 
     assert (
         cli_module.main(
@@ -6282,7 +6282,7 @@ def test_camera_alarm_and_select_commands_dispatch(monkeypatch, tmp_path) -> Non
     assert fake_camera.instances[-1].calls == [
         ("alarm_sound", (1,)),
         ("alarm_notify", (0,)),
-        ("alarm_detection_sensibility", (42,)),
+        ("alarm_detection_sensitivity", (42,)),
         ("do_not_disturb", (1,)),
         ("change_defence_schedule", ('{"enabled": true}',)),
     ]

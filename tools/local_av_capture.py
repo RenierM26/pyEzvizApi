@@ -12,7 +12,7 @@ import runpy
 import time
 from typing import Any
 
-from pyezvizapi.media import CaptureLimits
+from pyezvizapi.streaming.media.models import CaptureLimits
 
 DECRYPT = runpy.run_path(str(Path(__file__).with_name('local_av_decrypted.py')))
 LIMIT_REASONS = {'packet_limit', 'byte_limit', 'duration_limit'}

@@ -33,8 +33,12 @@ def data(tmp_path):
 
 @pytest.fixture
 def runtime(data):
-    from custom_components.ezviz_native.config import load_settings  # noqa: PLC0415 -- fixture-scoped HA dependency
-    from custom_components.ezviz_native.route import Runtime  # noqa: PLC0415 -- fixture-scoped HA dependency
+    from custom_components.ezviz_native.config import (  # noqa: PLC0415 -- fixture-scoped HA dependency
+        load_settings,
+    )
+    from custom_components.ezviz_native.route import (  # noqa: PLC0415 -- fixture-scoped HA dependency
+        Runtime,
+    )
 
     from pyezvizapi.client import EzvizClient  # noqa: PLC0415 -- fixture-scoped HA dependency
 
@@ -45,8 +49,12 @@ def runtime(data):
 @pytest.fixture
 def supported_host(monkeypatch):
     """Declare the complete public host surface without creating HLS delivery."""
-    from custom_components.ezviz_native import completion  # noqa: PLC0415 -- fixture-scoped HA dependency
-    from homeassistant.components.camera import Camera  # noqa: PLC0415 -- fixture-scoped HA dependency
+    from custom_components.ezviz_native import (  # noqa: PLC0415 -- fixture-scoped HA dependency
+        completion,
+    )
+    from homeassistant.components.camera import (  # noqa: PLC0415 -- fixture-scoped HA dependency
+        Camera,
+    )
 
     monkeypatch.setattr(completion.ha_stream, "FINITE_SOURCE_COMPLETION_CONTRACT",
                         completion.CONTRACT, raising=False)
@@ -60,8 +68,12 @@ def supported_host(monkeypatch):
 
 @pytest.fixture
 def clear_finite(monkeypatch):
-    from custom_components.ezviz_native.config import load_settings  # noqa: PLC0415 -- fixture-scoped HA dependency
-    from custom_components.ezviz_native.group import GroupRegistry  # noqa: PLC0415 -- fixture-scoped HA dependency
+    from custom_components.ezviz_native.config import (  # noqa: PLC0415 -- fixture-scoped HA dependency
+        load_settings,
+    )
+    from custom_components.ezviz_native.group import (  # noqa: PLC0415 -- fixture-scoped HA dependency
+        GroupRegistry,
+    )
 
     original, declare = load_settings, GroupRegistry.declare
 

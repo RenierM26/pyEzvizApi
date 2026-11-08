@@ -23,7 +23,7 @@ New code should import from the focused module that owns the behavior:
   and terminate/kill cleanup.
 - `clip`: grouped public source and clip configuration objects.
 
-`pyezvizapi.stream` and `pyezvizapi.local_stream` are compatibility aliases for
+`pyezvizapi.streaming.cloud.protocol` and `pyezvizapi.streaming.local.session` are compatibility aliases for
 older imports. They remain supported, but new lower-level integrations should
 use the focused modules above.
 
@@ -346,8 +346,8 @@ from pyezvizapi import (
     AutoClipSource, CaptureLimits, ClipOptions, EzvizClient,
     MediaDecodeOptions,
 )
-from pyezvizapi.hcnetsdk import EzvizCasDeviceInfo, HcNetSdkLanEndpoint
-from pyezvizapi.local_stream_transport import EzvizLocalSdkCredentials
+from pyezvizapi.streaming.local.hcnetsdk.api import EzvizCasDeviceInfo, HcNetSdkLanEndpoint
+from pyezvizapi.streaming.local.transport import EzvizLocalSdkCredentials
 
 credentials = EzvizLocalSdkCredentials(
     endpoint=HcNetSdkLanEndpoint(

@@ -30,8 +30,8 @@ from tests.tools.test_local_av_timeline import encode_three_track_ps
 
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.native_stream import NativeMpegTsStream
-from pyezvizapi.stream_selection import select_stream_source
+from pyezvizapi.streaming.native_stream import NativeMpegTsStream
+from pyezvizapi.streaming.selection import select_stream_source
 
 
 async def route_client(hass, aiohttp_client, runtime):

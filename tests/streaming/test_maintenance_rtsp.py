@@ -3,10 +3,10 @@ import socket
 
 import pytest
 
-from pyezvizapi import rtsp_auth
 from pyezvizapi.exceptions import AuthTestResultFailed, InvalidHost
-from pyezvizapi.rtsp_auth import TestRTSPAuth as Implementation
-from pyezvizapi.test_cam_rtsp import TestRTSPAuth
+from pyezvizapi.streaming import rtsp_auth
+from pyezvizapi.streaming.rtsp_auth import TestRTSPAuth as Implementation
+from pyezvizapi.streaming.rtsp_compat import TestRTSPAuth
 
 REPLY = b"RTSP/1.0 200 OK\r\nCSeq: 1\r\nContent-Length: 4\r\n\r\ndata"
 

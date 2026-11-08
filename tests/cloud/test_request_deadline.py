@@ -5,14 +5,14 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from pyezvizapi._request_deadline import (
+from pyezvizapi.client import EzvizClient
+from pyezvizapi.cloud.deadline import (
     bounded_request_timeout,
     remaining_request_budget,
     request_budget_lock,
     request_deadline,
 )
-from pyezvizapi.client import EzvizClient
-from pyezvizapi.cloud_stream import open_cloud_stream
+from pyezvizapi.streaming.cloud.bootstrap import open_cloud_stream
 
 
 def test_deadline_bounds_http_without_mutating_client_and_resets(monkeypatch) -> None:
@@ -52,8 +52,8 @@ def test_cloud_metadata_exhaustion_prevents_transport_construction(monkeypatch) 
         assert bounded_request_timeout(30).total == 2
         clock[0] = 12
         return {"stream_url": "unused"}
-    monkeypatch.setattr("pyezvizapi.cloud_stream.get_cloud_stream_info", metadata)
-    monkeypatch.setattr("pyezvizapi.cloud_stream.VtmStreamClient", lambda *_a, **_kw: pytest.fail("expired metadata must not open transport"))
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.get_cloud_stream_info", metadata)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.VtmStreamClient", lambda *_a, **_kw: pytest.fail("expired metadata must not open transport"))
     with pytest.raises(TimeoutError):
         open_cloud_stream(object(), "camera", capture_deadline=12, monotonic=lambda: clock[0])
     assert remaining_request_budget() is None

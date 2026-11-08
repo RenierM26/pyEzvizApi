@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from pyezvizapi import stream_selection
-from pyezvizapi.clip import AutoClipSource, CloudClipSource
-from pyezvizapi.media import CaptureLimits
+from pyezvizapi.streaming import selection as stream_selection
+from pyezvizapi.streaming.capture import AutoClipSource, CloudClipSource
+from pyezvizapi.streaming.media.models import CaptureLimits
 from tests._paths import ROOT, resolve_test_module
 
 M = runpy.run_path(str(ROOT / 'tools/local_av_capture_playback.py'))

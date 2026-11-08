@@ -14,7 +14,21 @@ from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 import pytest
 
-from pyezvizapi._local_stream import (
+from pyezvizapi.exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
+from pyezvizapi.streaming.local.hcnetsdk.api import (
+    EzvizCasDeviceInfo,
+    EzvizInterleavedRtpFrame,
+    EzvizInterleavedRtpFrameHeader,
+    EzvizInterleavedRtpFrameWithPrefix,
+    EzvizLocalPreviewRequest,
+    EzvizLocalReceiverInfoAttrs,
+    HcNetSdkCommandPortControlTemplate,
+    HcNetSdkLanEndpoint,
+    build_hcnetsdk_tcp_frame,
+    hcnetsdk_command_port_control_frame,
+    hcnetsdk_command_port_play_login_body_tail_for_today,
+)
+from pyezvizapi.streaming.local.session import (
     EzvizLocalSdkMediaStream,
     EzvizLocalStreamPacket,
     HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
@@ -35,21 +49,7 @@ from pyezvizapi._local_stream import (
     open_local_sdk_stream_from_client,
     time as local_stream_time,
 )
-from pyezvizapi.exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
-from pyezvizapi.hcnetsdk import (
-    EzvizCasDeviceInfo,
-    EzvizInterleavedRtpFrame,
-    EzvizInterleavedRtpFrameHeader,
-    EzvizInterleavedRtpFrameWithPrefix,
-    EzvizLocalPreviewRequest,
-    EzvizLocalReceiverInfoAttrs,
-    HcNetSdkCommandPortControlTemplate,
-    HcNetSdkLanEndpoint,
-    build_hcnetsdk_tcp_frame,
-    hcnetsdk_command_port_control_frame,
-    hcnetsdk_command_port_play_login_body_tail_for_today,
-)
-from pyezvizapi.media import CaptureLimits
+from pyezvizapi.streaming.media.models import CaptureLimits
 
 FIRST_PREFIX = b"preface"
 
@@ -1408,7 +1408,7 @@ def test_generated_stream_creates_rsa_key_before_startup_budget(monkeypatch) -> 
         raise EzvizLocalSdkDeadlineExpired
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.hcnetsdk_command_port_rsa_key",
+        "pyezvizapi.streaming.local.session.hcnetsdk_command_port_rsa_key",
         generate,
     )
     monkeypatch.setattr(stream, "start", start)
@@ -1434,7 +1434,7 @@ def test_prestarted_generated_stream_skips_unused_rsa_key(monkeypatch) -> None:
     vars(stream)["_stream"] = cast(Any, RenderedStream())
     stream.rsa_key = None
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.hcnetsdk_command_port_rsa_key",
+        "pyezvizapi.streaming.local.session.hcnetsdk_command_port_rsa_key",
         lambda: pytest.fail("pre-started stream must not generate an unused RSA key"),
     )
 
@@ -1769,7 +1769,7 @@ def test_open_local_sdk_stream_from_client_fetches_endpoint_and_cas(monkeypatch)
                 }
             }
 
-    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+    monkeypatch.setattr("pyezvizapi.streaming.local.session.EzvizCAS", FakeCas)
 
     stream = open_local_sdk_stream_from_client(
         FakeClient(),
@@ -1846,7 +1846,7 @@ def test_get_local_sdk_stream_credentials_from_client_fetches_media_key(monkeypa
                 }
             }
 
-    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+    monkeypatch.setattr("pyezvizapi.streaming.local.session.EzvizCAS", FakeCas)
 
     credentials = get_local_sdk_stream_credentials_from_client(
         FakeClient(),
@@ -1940,7 +1940,7 @@ def test_get_local_sdk_stream_credentials_registers_p2p_before_cas(
                 }
             }
 
-    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+    monkeypatch.setattr("pyezvizapi.streaming.local.session.EzvizCAS", FakeCas)
 
     get_local_sdk_stream_credentials_from_client(
         FakeClient(),
@@ -1996,7 +1996,7 @@ def test_get_local_sdk_stream_credentials_can_skip_p2p_register(
                 }
             }
 
-    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+    monkeypatch.setattr("pyezvizapi.streaming.local.session.EzvizCAS", FakeCas)
 
     get_local_sdk_stream_credentials_from_client(
         FakeClient(),
@@ -2053,9 +2053,9 @@ def test_copy_local_sdk_stream_from_client_copies_decrypted_mpegps(monkeypatch) 
                 }
             }
 
-    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+    monkeypatch.setattr("pyezvizapi.streaming.local.session.EzvizCAS", FakeCas)
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.decrypt_hikvision_ps_video",
+        "pyezvizapi.streaming.local.session.decrypt_hikvision_ps_video",
         lambda data, key, *, nalu_header_size: (
             b"decrypted:" + data + b":" + (key.encode() if isinstance(key, str) else key)
         ),
@@ -2088,7 +2088,7 @@ def test_copy_local_sdk_stream_from_client_copies_decrypted_mpegps(monkeypatch) 
         return stream
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.open_local_sdk_stream",
+        "pyezvizapi.streaming.local.session.open_local_sdk_stream",
         fake_open_local_sdk_stream,
     )
     output = io.BytesIO()

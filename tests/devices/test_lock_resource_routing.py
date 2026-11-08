@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from pyezvizapi.camera import EzvizCamera
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import FEATURE_CODE
+from pyezvizapi.devices.camera import EzvizCamera
 from pyezvizapi.exceptions import PyEzvizError
 
 

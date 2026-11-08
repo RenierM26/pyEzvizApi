@@ -9,7 +9,7 @@ import requests
 
 from pyezvizapi import HcNetSdkStreamDetails, discover_hcnetsdk_stream_details
 from pyezvizapi.exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
-from pyezvizapi.hcnetsdk import (
+from pyezvizapi.streaming.local.hcnetsdk.api import (
     HcNetSdkCommandPortClient,
     HcNetSdkLanEndpoint,
     HcNetSdkPurePythonClient,
@@ -216,7 +216,7 @@ def test_non_capability_xml_is_not_success(wire) -> None:
 
 
 def test_pure_client_discovery_convenience_preserves_inputs(monkeypatch) -> None:
-    from pyezvizapi import hcnetsdk  # noqa: PLC0415
+    from pyezvizapi.streaming.local.hcnetsdk import api as hcnetsdk  # noqa: PLC0415
     calls = []
     def query(endpoint, password, **kwargs):
         calls.append((endpoint, password, kwargs))

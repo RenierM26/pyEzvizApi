@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from pyezvizapi.media import CaptureLimits
+from pyezvizapi.streaming.media.models import CaptureLimits
 from tests._paths import ROOT, resolve_test_module
 
 M = runpy.run_path(str(ROOT / 'tools/local_av_capture_preparation.py'))

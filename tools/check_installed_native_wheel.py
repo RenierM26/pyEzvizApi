@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 
 import pyezvizapi
-from pyezvizapi.native_stream import (
+from pyezvizapi.streaming.native_stream import (
     NativeMpegTsStream,
     NativeSourceClock,
     NativeStreamOptions,

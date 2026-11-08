@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-import pyezvizapi.__main__ as cli
+import pyezvizapi.cli.main as cli
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, EzvizTokenPersistenceError
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pyezvizapi.feature import (
+from pyezvizapi.devices.features import (
     blc_current_value,
     custom_voice_volume_config,
     day_night_mode_value,

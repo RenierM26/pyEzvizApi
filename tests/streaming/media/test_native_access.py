@@ -2,8 +2,8 @@
 
 import pytest
 
-from pyezvizapi.native_access import _Bits, _hevc_sps, self_contained_idr
-from pyezvizapi.native_ps import MAX_PENDING_PS_BYTES
+from pyezvizapi.streaming.media.access import _Bits, _hevc_sps, self_contained_idr
+from pyezvizapi.streaming.media.native_ps import MAX_PENDING_PS_BYTES
 
 
 def unsigned_golomb(value):

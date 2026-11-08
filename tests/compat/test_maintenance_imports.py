@@ -17,7 +17,7 @@ class BlockOptional(importlib.abc.MetaPathFinder):
             raise AssertionError('unexpected optional runtime import: ' + fullname)
 sys.meta_path.insert(0, BlockOptional())
 import pyezvizapi
-from pyezvizapi._cli_arguments import build_parser
+from pyezvizapi.cli.arguments import build_parser
 for name in pyezvizapi.__all__:
     getattr(pyezvizapi, name)
 assert build_parser().parse_args([]).action is None

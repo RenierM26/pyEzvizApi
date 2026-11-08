@@ -14,7 +14,7 @@ from pyezvizapi import (
     copy_app_timed_frames_to_mpegts,
 )
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.remux import ffmpeg_mpegts_command
+from pyezvizapi.streaming.media.remux import ffmpeg_mpegts_command
 from tests._paths import FIXTURES
 
 
@@ -129,7 +129,7 @@ def test_map_all_streams_is_explicit_and_single_input():
 
 
 def test_stream_copy_helper_wires_explicit_clock_and_all_tracks(monkeypatch):
-    module = importlib.import_module('pyezvizapi.app_timing')
+    module = importlib.import_module('pyezvizapi.streaming.app_timing')
     sentinel = object()
     calls = []
     payload = b'payload'

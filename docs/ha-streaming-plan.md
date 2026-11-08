@@ -93,7 +93,7 @@ verification or accept arbitrary FFmpeg arguments.
 ```sh
 pyezvizapi-capabilities private-inventory.json --decode-samples > capabilities.json
 # Equivalent before installing the new console script:
-python -m pyezvizapi.capabilities_cli private-inventory.json
+python -m pyezvizapi.cli.capabilities private-inventory.json
 ```
 
 Exit 0: all metadata queries completed (including partial ability rejection).
@@ -122,7 +122,7 @@ bound. The typed clip API does not currently accept transport byte bounds.
 Do not use this helper to claim sustained or fleet-wide preview validation.
 
 ```python
-from pyezvizapi.stream_sample import (
+from pyezvizapi.streaming.sample import (
     EncodedTrackSelection,
     inspect_media_sample,
     remux_media_sample,

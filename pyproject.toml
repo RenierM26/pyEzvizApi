@@ -43,8 +43,8 @@ Changelog = "https://github.com/RenierM26/pyEzvizApi/blob/main/CHANGELOG.md"
 Issues = "https://github.com/RenierM26/pyEzvizApi/issues"
 
 [project.scripts]
-pyezvizapi = "pyezvizapi.__main__:main"
-pyezvizapi-capabilities = "pyezvizapi.capabilities_cli:main"
+pyezvizapi = "pyezvizapi.cli.main:main"
+pyezvizapi-capabilities = "pyezvizapi.cli.capabilities:main"
 
 [project.optional-dependencies]
 streaming = ["av>=19.0.0,<20"]

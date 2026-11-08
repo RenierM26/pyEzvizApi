@@ -8,7 +8,7 @@ import runpy
 import time
 from typing import Any
 
-from pyezvizapi.media import CaptureLimits
+from pyezvizapi.streaming.media.models import CaptureLimits
 
 BASE = Path(__file__).parent
 CAPTURE = runpy.run_path(str(BASE / 'local_av_capture.py'))

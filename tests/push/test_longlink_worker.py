@@ -5,8 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from pyezvizapi._longlink_worker import PushWorker
 from pyezvizapi.exceptions import EzvizTokenPersistenceError
+from pyezvizapi.push.longlink.worker import PushWorker
 
 
 class Session:

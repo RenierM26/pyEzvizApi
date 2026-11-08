@@ -6,10 +6,10 @@ import pytest
 
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import DeviceSwitchType
+from pyezvizapi.devices.light_bulb import EzvizLightBulb
+from pyezvizapi.devices.smart_plug import EzvizSmartPlug
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.light_bulb import EzvizLightBulb
 from pyezvizapi.models import EzvizDeviceRecord
-from pyezvizapi.smart_plug import EzvizSmartPlug
 
 
 def _feature_json() -> str:

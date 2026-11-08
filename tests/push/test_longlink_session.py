@@ -10,11 +10,11 @@ import paho.mqtt.client as mqtt
 from paho.mqtt.enums import _ConnectionState
 import pytest
 
-from pyezvizapi import _longlink as wire
-from pyezvizapi._longlink_auth import PushCredentials
-from pyezvizapi._longlink_session import Channel99Session
-from pyezvizapi._paho import set_keepalive
 from pyezvizapi.exceptions import EzvizPushFatalError
+from pyezvizapi.push.longlink import codec as wire
+from pyezvizapi.push.longlink.auth import PushCredentials
+from pyezvizapi.push.longlink.session import Channel99Session
+from pyezvizapi.push.paho import set_keepalive
 
 SERIAL = b"MOBILE:ys7:synthetic-user:synthetic-phone"
 KEY = bytes(range(16))
@@ -101,7 +101,7 @@ def test_stop_during_registration_prevents_later_socket_creation(monkeypatch) ->
     connection = session(Mock())
     connection.prepare = connection.close
     create = Mock(side_effect=AssertionError("Must not open socket after stop"))
-    monkeypatch.setattr("pyezvizapi._longlink_session.socket.create_connection", create)
+    monkeypatch.setattr("pyezvizapi.push.longlink.session.socket.create_connection", create)
     connection.run(Event())
     create.assert_not_called()
 
@@ -131,7 +131,7 @@ def test_prepare_rejection_is_fatal_only_for_current_credentials(
 
     connection.prepare = reject
     create = Mock(side_effect=AssertionError("Must not open socket after registration failure"))
-    monkeypatch.setattr("pyezvizapi._longlink_session.socket.create_connection", create)
+    monkeypatch.setattr("pyezvizapi.push.longlink.session.socket.create_connection", create)
 
     if superseded:
         connection.run(Event())
@@ -158,9 +158,9 @@ def test_auth_rejection_is_fatal_only_for_current_credentials(monkeypatch, super
             return None
 
     monkeypatch.setattr(
-        "pyezvizapi._longlink_session.socket.create_connection", lambda *_args, **_kwargs: Mock()
+        "pyezvizapi.push.longlink.session.socket.create_connection", lambda *_args, **_kwargs: Mock()
     )
-    monkeypatch.setattr("pyezvizapi._longlink_session.LbsConnection", lambda _sock: FakeLbs())
+    monkeypatch.setattr("pyezvizapi.push.longlink.session.LbsConnection", lambda _sock: FakeLbs())
 
     def reject(*_args, **_kwargs):
         nonlocal current
@@ -168,7 +168,7 @@ def test_auth_rejection_is_fatal_only_for_current_credentials(monkeypatch, super
             current = False
         raise EzvizPushFatalError("stale authentication rejection")
 
-    monkeypatch.setattr("pyezvizapi._longlink_session.authenticate", reject)
+    monkeypatch.setattr("pyezvizapi.push.longlink.session.authenticate", reject)
 
     if superseded:
         connection.run(Event())

@@ -86,7 +86,7 @@ def build(root: Path, output: Path, python: str) -> None:
         wheel, = (output / "dist").glob("*.whl")
         with zipfile.ZipFile(wheel) as archive:
             names = set(archive.namelist())
-            if not {"pyezvizapi/native_stream.py", "pyezvizapi/native_ps.py", "pyezvizapi/py.typed"} <= names:
+            if not {"pyezvizapi/streaming/native_stream.py", "pyezvizapi/streaming/media/native_ps.py", "pyezvizapi/py.typed"} <= names:
                 raise RuntimeError("Wheel is missing required native modules or typing marker")
             if any(n.startswith(("custom_components/", "examples/")) for n in names):
                 raise RuntimeError("The HA example must not become a library wheel dependency")

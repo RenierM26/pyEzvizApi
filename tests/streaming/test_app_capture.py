@@ -9,23 +9,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyezvizapi import (
-    CaptureLimits,
-    ClipOptions,
-    EzvizClient,
-    MediaDecodeOptions,
-    MediaMuxOptions,
-    _local_stream as local,
-)
-from pyezvizapi.app_capture import native_app_timed_payloads
-from pyezvizapi.clip import (
+from pyezvizapi import CaptureLimits, ClipOptions, EzvizClient, MediaDecodeOptions, MediaMuxOptions
+from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
+from pyezvizapi.streaming.app_capture import native_app_timed_payloads
+from pyezvizapi.streaming.capture import (
     AutoClipSource,
     CloudClipSource,
     HcNetSdkCommandPortClipSource,
     LocalSdkClipSource,
 )
-from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
-from pyezvizapi.rtp import RtpAacStream
+from pyezvizapi.streaming.local import session as local
+from pyezvizapi.streaming.media.rtp import RtpAacStream
 
 _ADTS = b"\xff\xf1\x60\x40\x00\xff\xfc"
 _UNITS = (b"\x40\x01header", b"\x26\x01\x80first", b"\x02\x01\x80second")

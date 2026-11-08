@@ -31,8 +31,8 @@ encode, timestamp repair, audio mixing or media listener is created.
 from contextlib import aclosing
 import asyncio
 
-from pyezvizapi.native_session import NativeMpegTsSession
-from pyezvizapi.native_stream import NativeStreamOptions, NativeTrackSelection
+from pyezvizapi.streaming.native_session import NativeMpegTsSession
+from pyezvizapi.streaming.native_stream import NativeStreamOptions, NativeTrackSelection
 
 # Illustrative observed IDs for one verified shared source, not universal lenses.
 options = tuple(

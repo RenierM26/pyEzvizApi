@@ -6,9 +6,13 @@ from threading import Event, get_ident
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.native_session import NativeMpegTsSession
+from pyezvizapi.streaming.native_session import NativeMpegTsSession
 from tests.streaming.test_native_late_join import gated_session, oracle
-from tests.streaming.test_native_session import choices, collect, sample as sample  # noqa: PLC0414 -- retained cross-test fixture re-export
+from tests.streaming.test_native_session import (
+    choices,
+    collect,
+    sample as sample,  # noqa: PLC0414 -- pytest fixture registration
+)
 from tests.streaming.test_native_stream import Source, repeated_ps_packets
 
 

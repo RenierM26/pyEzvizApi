@@ -6,7 +6,7 @@ import pytest
 
 # ruff: noqa: PLR2004
 from pyezvizapi.exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
-from pyezvizapi.hcnetsdk import (
+from pyezvizapi.streaming.local.hcnetsdk.api import (
     EZVIZ_LOCAL_SDK_STOP_DRAIN_BYTES,
     EzvizCasDeviceInfo,
     EzvizLocalPreviewRequest,

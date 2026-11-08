@@ -23,8 +23,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pyezvizapi
-from pyezvizapi.hcnetsdk import EzvizCasDeviceInfo, HcNetSdkLanEndpoint
-from pyezvizapi.local_stream_transport import EzvizLocalSdkCredentials
+from pyezvizapi.streaming.local.hcnetsdk.api import EzvizCasDeviceInfo, HcNetSdkLanEndpoint
+from pyezvizapi.streaming.local.transport import EzvizLocalSdkCredentials
 
 BASE = Path(__file__).parent
 CAPTURE = runpy.run_path(str(BASE / "local_av_capture_playback.py"))

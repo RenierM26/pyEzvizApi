@@ -22,21 +22,7 @@ from pyezvizapi.exceptions import (
     EzvizUnsupportedMediaError,
     PyEzvizError,
 )
-from pyezvizapi.hcnetsdk import (
-    EzvizCasDeviceInfo,
-    EzvizInterleavedRtpFrame,
-    EzvizInterleavedRtpFrameHeader,
-    EzvizInterleavedRtpFrameWithPrefix,
-    EzvizLocalPreviewRequest,
-    EzvizLocalSdkStreamBootstrap,
-    HcNetSdkLanEndpoint,
-)
-from pyezvizapi.local_stream import (
-    EzvizLocalSdkCredentials,
-    EzvizLocalSdkEcdhStreamDecoder as LocalStreamEcdhStreamDecoder,
-    generate_ezviz_local_sdk_ecdh_keypair as local_stream_generate_ecdh_keypair,
-)
-from pyezvizapi.local_stream_ecdh import (
+from pyezvizapi.streaming.local.ecdh import (
     LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET,
     LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH,
     LOCAL_SDK_ECDH_H264_SPS_4B,
@@ -65,9 +51,21 @@ from pyezvizapi.local_stream_ecdh import (
     parse_ezviz_local_sdk_ecdh_handshake_packet,
     transform_ezviz_local_sdk_ecdh_nonce,
 )
-from pyezvizapi.local_stream_probe import (
+from pyezvizapi.streaming.local.hcnetsdk.api import (
+    EzvizCasDeviceInfo,
+    EzvizInterleavedRtpFrame,
+    EzvizInterleavedRtpFrameHeader,
+    EzvizInterleavedRtpFrameWithPrefix,
+    EzvizLocalPreviewRequest,
+    EzvizLocalSdkStreamBootstrap,
+    HcNetSdkLanEndpoint,
+)
+from pyezvizapi.streaming.local.probe import (
     LocalSdkProtocolDetector,
     probe_local_sdk_stream_from_client,
+)
+from pyezvizapi.streaming.local.session import (
+    EzvizLocalSdkCredentials,
 )
 
 TEST_NONCE = b"\x01\x02\x03\x04"
@@ -93,9 +91,7 @@ REPLAY_PACKET_8 = b"packet-8"
 
 
 def test_local_stream_namespace_reexports_ecdh_helpers() -> None:
-    assert LocalStreamEcdhStreamDecoder is EzvizLocalSdkEcdhStreamDecoder
     assert PackageLocalSdkEcdhStreamDecoder is EzvizLocalSdkEcdhStreamDecoder
-    assert local_stream_generate_ecdh_keypair is generate_ezviz_local_sdk_ecdh_keypair
     assert package_generate_local_sdk_ecdh_keypair is generate_ezviz_local_sdk_ecdh_keypair
 
 
@@ -673,7 +669,7 @@ def test_ecdh_copy_enables_encrypted_ps_only_after_key_and_bound_validation(monk
     calls: list[bool] = []
     def transformed(*_args: Any, **_kwargs: Any) -> None:
         calls.append(stream.decoder.allow_encrypted_mpegps)
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.copy_local_stream_to_decrypted_mpegts", transformed)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.copy_local_stream_to_decrypted_mpegts", transformed)
     with pytest.raises(PyEzvizError, match="media_key"):
         copy_local_sdk_ecdh_stream_to_media(stream, BytesIO(), output_format="mpegts", decrypt_video=True, duration_seconds=5)
     assert stream.decoder.allow_encrypted_mpegps is False
@@ -746,7 +742,7 @@ def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream_ecdh.get_local_sdk_stream_credentials_from_client",
+        "pyezvizapi.streaming.local.ecdh.get_local_sdk_stream_credentials_from_client",
         fake_credentials,
     )
 
@@ -799,7 +795,7 @@ def discovered_credentials(monkeypatch: pytest.MonkeyPatch) -> EzvizLocalSdkCred
         device_info=EzvizCasDeviceInfo(serial="CAM123", operation_code="0123456", key="1234567890abcdef"),
         media_key="media-secret",
     )
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.get_local_sdk_stream_credentials_from_client", lambda *_a, **_kw: result)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.get_local_sdk_stream_credentials_from_client", lambda *_a, **_kw: result)
     return result
 
 
@@ -826,7 +822,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
         return FakeStream()
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client",
+        "pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client",
         fake_open,
     )
 
@@ -916,11 +912,11 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
         output.write(LOCAL_SDK_ECDH_TEST_MPEGTS_PAYLOAD)
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client",
+        "pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client",
         fake_open,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream_ecdh.copy_local_stream_to_decrypted_mpegts",
+        "pyezvizapi.streaming.local.ecdh.copy_local_stream_to_decrypted_mpegts",
         fake_copy,
     )
     output = BytesIO()
@@ -972,11 +968,11 @@ def test_copy_local_sdk_ecdh_retries_rate_zero_after_premedia_close(
         output.write(LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD)
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client",
+        "pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client",
         fake_open,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream_ecdh.copy_local_sdk_ecdh_stream_to_media",
+        "pyezvizapi.streaming.local.ecdh.copy_local_sdk_ecdh_stream_to_media",
         fake_copy,
     )
     output = BytesIO()
@@ -1010,11 +1006,11 @@ def test_copy_local_sdk_ecdh_does_not_retry_after_output(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client",
+        "pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client",
         fake_open,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream_ecdh.copy_local_sdk_ecdh_stream_to_media",
+        "pyezvizapi.streaming.local.ecdh.copy_local_sdk_ecdh_stream_to_media",
         fake_copy,
     )
     with pytest.raises(EzvizLocalSdkStreamClosed):
@@ -1052,7 +1048,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_rejects_unsafe_decrypt_bound_bef
         opened = True
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client",
+        "pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client",
         fake_open,
     )
 
@@ -1423,7 +1419,7 @@ class _ProbeStream:
 def test_local_protocol_probe_recommends_explicit_legacy_source(monkeypatch: Any) -> None:
 
     stream = _ProbeStream([_legacy_ps_rtp(i) for i in range(32)], EzvizLocalSdkEcdhStreamDecoder(None))
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
     result = probe_local_sdk_stream_from_client(None, "CAM123")
     assert result.protocol == "legacy_rtp_ps"
     assert result.recommended_source == "local-sdk"
@@ -1437,7 +1433,7 @@ def test_local_protocol_probe_recommends_explicit_legacy_source(monkeypatch: Any
 def test_protocol_probe_distinguishes_silence_from_unknown_data(monkeypatch: Any, payloads: list[bytes], protocol: str) -> None:
 
     stream = _ProbeStream(payloads, EzvizLocalSdkEcdhStreamDecoder(None))
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
     result = probe_local_sdk_stream_from_client(None, "CAM123")
     assert result.protocol == protocol
     assert result.recommended_source is None
@@ -1448,7 +1444,7 @@ def test_protocol_probe_distinguishes_silence_from_unknown_data(monkeypatch: Any
 def test_protocol_probe_honors_processing_budgets(monkeypatch: Any, limits: dict[str, int]) -> None:
 
     stream = _ProbeStream([_legacy_ps_rtp(i) for i in range(32)], EzvizLocalSdkEcdhStreamDecoder(None))
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
     result = probe_local_sdk_stream_from_client(None, "CAM123", **limits)
     assert result.protocol == "unknown"
     assert stream.reads == 1
@@ -1460,7 +1456,7 @@ def test_protocol_probe_validates_limits_before_network(monkeypatch: Any, limits
 
     def forbidden(*_args: Any, **_kwargs: Any) -> None:
         pytest.fail("invalid bounds must not open a network session")
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", forbidden)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client", forbidden)
     with pytest.raises(ValueError):
         probe_local_sdk_stream_from_client(None, "CAM123", **limits)
 
@@ -1476,7 +1472,7 @@ def test_protocol_probe_requires_verified_handshake(monkeypatch: Any, tampered: 
     if tampered:
         handshake = handshake[:-1] + bytes((handshake[-1] ^ 1,))
     stream = _ProbeStream([_legacy_ps_rtp(0), handshake], EzvizLocalSdkEcdhStreamDecoder(pair.private_key))
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
     if tampered:
         with pytest.raises(PyEzvizError, match="authentication failed"):
             probe_local_sdk_stream_from_client(None, "CAM123")
@@ -1495,7 +1491,7 @@ def test_protocol_probe_propagates_bootstrap_deadline_failure(monkeypatch: Any) 
         raise EzvizLocalSdkDeadlineExpired("preview setup deadline expired")
 
     monkeypatch.setattr(stream, "start", failed_start)
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
     with pytest.raises(EzvizLocalSdkDeadlineExpired, match="preview setup"):
         probe_local_sdk_stream_from_client(None, "CAM123")
     assert stream.reads == 0
@@ -1529,8 +1525,8 @@ def test_ecdh_rate_retry_preserves_total_duration_budget(
             raise EzvizLocalSdkStreamClosed("rate 1 closed")
         output.write(LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD)
 
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", open_stream)
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.copy_local_sdk_ecdh_stream_to_media", copy)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client", open_stream)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.copy_local_sdk_ecdh_stream_to_media", copy)
     output = BytesIO()
     if elapsed < 10:
         copy_local_sdk_ecdh_stream_from_client(object(), "CAM123", output,
@@ -1571,9 +1567,9 @@ def test_saved_ecdh_rate_retry_can_isolate_source_port(
             raise EzvizLocalSdkStreamClosed("rate 1 closed")
         output.write(LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD)
 
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.fresh_local_sdk_receiver_port", lambda: 12345)
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", open_stream)
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.copy_local_sdk_ecdh_stream_to_media", copy)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.fresh_local_sdk_receiver_port", lambda: 12345)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client", open_stream)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.copy_local_sdk_ecdh_stream_to_media", copy)
     copy_local_sdk_ecdh_stream_from_client(object(), "CAM123", BytesIO(),
                                           receiver_port=10101, fresh_retry_port=fresh)
     assert calls == [(1, 10101), (0, 12345 if fresh else 10101)]
@@ -1609,9 +1605,9 @@ def test_ecdh_retry_discovers_credentials_once_before_capture_budget(
             raise EzvizLocalSdkStreamClosed("rate 1 closed")
         output.write(b"media")
 
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.get_local_sdk_stream_credentials_from_client", discover)
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", open_stream)
-    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.copy_local_sdk_ecdh_stream_to_media", copy)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.get_local_sdk_stream_credentials_from_client", discover)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.open_local_sdk_ecdh_stream_from_client", open_stream)
+    monkeypatch.setattr("pyezvizapi.streaming.local.ecdh.copy_local_sdk_ecdh_stream_to_media", copy)
     copy_local_sdk_ecdh_stream_from_client(object(), "CAM123", BytesIO(),
                                           duration_seconds=10.0, monotonic=lambda: clock[0])
     assert discoveries == [True]

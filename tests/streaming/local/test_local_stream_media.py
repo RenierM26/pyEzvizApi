@@ -11,7 +11,16 @@ from typing import Any
 
 import pytest
 
-from pyezvizapi._local_stream import (
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.streaming.local.hcnetsdk.api import (
+    EzvizInterleavedRtpFrame,
+    EzvizInterleavedRtpFrameHeader,
+    EzvizInterleavedRtpFrameWithPrefix,
+    EzvizLocalPreviewRequest,
+    HcNetSdkRealDataPacket,
+    HcNetSdkRealDataType,
+)
+from pyezvizapi.streaming.local.session import (
     _ffmpeg_h264_decode_errors,
     _ffmpeg_stderr_tail,
     _start_ffmpeg_stderr_drain,
@@ -32,15 +41,6 @@ from pyezvizapi._local_stream import (
     trim_h264_annexb_to_first_error_free_suffix,
     trim_hevc_annexb_to_first_clean_irap_window,
     trim_hevc_annexb_to_first_error_free_suffix,
-)
-from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.hcnetsdk import (
-    EzvizInterleavedRtpFrame,
-    EzvizInterleavedRtpFrameHeader,
-    EzvizInterleavedRtpFrameWithPrefix,
-    EzvizLocalPreviewRequest,
-    HcNetSdkRealDataPacket,
-    HcNetSdkRealDataType,
 )
 
 FIRST_PREFIX = b"preface"
@@ -322,7 +322,7 @@ def test_copy_local_stream_to_decrypted_mpegps_collects_and_decrypts(
         return LOCAL_DECRYPTED_PAYLOAD
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.decrypt_hikvision_ps_video",
+        "pyezvizapi.streaming.local.session.decrypt_hikvision_ps_video",
         fake_decrypt,
     )
     output = io.BytesIO()
@@ -375,7 +375,7 @@ def test_copy_local_stream_to_decrypted_mpegts_remuxes_decrypted_payload(
             return [SimpleNamespace(body=b"encrypted")]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.decrypt_hikvision_ps_video",
+        "pyezvizapi.streaming.local.session.decrypt_hikvision_ps_video",
         lambda data, key, *, nalu_header_size: LOCAL_DECRYPTED_PAYLOAD,
     )
     output = io.BytesIO()
@@ -966,15 +966,15 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_idr_bounds_payloads(
         return clean_annexb, "h264"
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        "pyezvizapi.streaming.local.session._iter_local_stream_payloads",
         fake_iter_payloads,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._looks_like_idmx_local_payload",
+        "pyezvizapi.streaming.local.session._looks_like_idmx_local_payload",
         lambda payload: True,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.collect_idmx_annexb_after_first_clean_video_window",
+        "pyezvizapi.streaming.local.session.collect_idmx_annexb_after_first_clean_video_window",
         fake_collect,
     )
     output = io.BytesIO()
@@ -1030,15 +1030,15 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_irap_uses_hevc_remux(
         return clean_annexb, "hevc"
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        "pyezvizapi.streaming.local.session._iter_local_stream_payloads",
         lambda *args, **kwargs: iter([b"idmx-payload"]),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._looks_like_idmx_local_payload",
+        "pyezvizapi.streaming.local.session._looks_like_idmx_local_payload",
         lambda payload: True,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.collect_idmx_annexb_after_first_clean_video_window",
+        "pyezvizapi.streaming.local.session.collect_idmx_annexb_after_first_clean_video_window",
         fake_collect,
     )
     output = io.BytesIO()
@@ -1244,7 +1244,7 @@ def test_h264_decode_probe_reports_timeout(monkeypatch: pytest.MonkeyPatch) -> N
         timeouts.append(kwargs["timeout"])
         raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=kwargs["timeout"])
 
-    monkeypatch.setattr("pyezvizapi.local_stream.subprocess.run", fake_run)
+    monkeypatch.setattr("pyezvizapi.streaming.local.session.subprocess.run", fake_run)
 
     assert _ffmpeg_h264_decode_errors(
         b"\x00\x00\x00\x01\x65frame",
@@ -1447,7 +1447,7 @@ def test_copy_local_stream_to_mpegts_passes_clean_idr_max_windows(
             return [SimpleNamespace(body=idmx_frame(idr))]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.trim_h264_annexb_to_first_clean_idr_window",
+        "pyezvizapi.streaming.local.session.trim_h264_annexb_to_first_clean_idr_window",
         fake_trim,
     )
     output = io.BytesIO()
@@ -1509,7 +1509,7 @@ def test_copy_local_stream_to_mpegts_passes_clean_irap_max_windows_for_hevc(
             return [SimpleNamespace(body=idmx_frame(irap, sequence=sequence_base))]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.trim_hevc_annexb_to_first_clean_irap_window",
+        "pyezvizapi.streaming.local.session.trim_hevc_annexb_to_first_clean_irap_window",
         fake_trim,
     )
     output = io.BytesIO()
@@ -1738,7 +1738,7 @@ def test_trim_hevc_clean_irap_carries_prior_parameter_sets(monkeypatch) -> None:
         return ["PPS id out of range: 0"]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        "pyezvizapi.streaming.local.session._ffmpeg_hevc_decode_errors",
         fake_errors,
     )
 
@@ -1788,7 +1788,7 @@ def test_trim_hevc_clean_irap_rejects_dirty_returned_suffix(monkeypatch) -> None
         return []
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        "pyezvizapi.streaming.local.session._ffmpeg_hevc_decode_errors",
         fake_errors,
     )
 
@@ -1825,7 +1825,7 @@ def test_probe_hevc_clean_irap_carries_prior_parameter_sets(monkeypatch) -> None
         return b"".join(packets)
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_local_packets_to_hevc_annexb",
+        "pyezvizapi.streaming.local.session._idmx_local_packets_to_hevc_annexb",
         join_packets,
     )
 
@@ -1842,7 +1842,7 @@ def test_probe_hevc_clean_irap_carries_prior_parameter_sets(monkeypatch) -> None
         return ["PPS id out of range: 0"]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        "pyezvizapi.streaming.local.session._ffmpeg_hevc_decode_errors",
         fake_errors,
     )
 
@@ -1878,7 +1878,7 @@ def test_probe_hevc_clean_irap_prefixes_only_missing_parameter_sets(
         return b"".join(packets)
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_local_packets_to_hevc_annexb",
+        "pyezvizapi.streaming.local.session._idmx_local_packets_to_hevc_annexb",
         join_packets,
     )
 
@@ -1895,7 +1895,7 @@ def test_probe_hevc_clean_irap_prefixes_only_missing_parameter_sets(
         return ["VPS 0 does not exist"]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        "pyezvizapi.streaming.local.session._ffmpeg_hevc_decode_errors",
         fake_errors,
     )
 
@@ -1959,11 +1959,11 @@ def test_try_first_clean_hevc_irap_probe_rejects_successful_ffmpeg_with_stderr(
         return ["cu_qp_delta outside valid range"]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_local_packets_to_hevc_annexb",
+        "pyezvizapi.streaming.local.session._idmx_local_packets_to_hevc_annexb",
         lambda packets: annexb,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        "pyezvizapi.streaming.local.session._ffmpeg_hevc_decode_errors",
         fake_errors,
     )
 
@@ -2040,7 +2040,7 @@ def test_trim_hevc_suffix_carries_prior_parameter_sets(monkeypatch) -> None:
         return ["PPS id out of range: 0"]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        "pyezvizapi.streaming.local.session._ffmpeg_hevc_decode_errors",
         fake_errors,
     )
 
@@ -2082,7 +2082,7 @@ def test_trim_hevc_suffix_probes_recent_acceptable_candidates(monkeypatch) -> No
         return ["cu_qp_delta outside valid range"]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        "pyezvizapi.streaming.local.session._ffmpeg_hevc_decode_errors",
         fake_errors,
     )
 
@@ -2131,7 +2131,7 @@ def test_collect_idmx_annexb_after_first_clean_video_window_trims_hevc_suffix(
         return []
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        "pyezvizapi.streaming.local.session._ffmpeg_hevc_decode_errors",
         fake_errors,
     )
     def fake_probe(packets: list[bytes], *_args: Any, **_kwargs: Any) -> tuple[Any, ...]:
@@ -2140,7 +2140,7 @@ def test_collect_idmx_annexb_after_first_clean_video_window_trims_hevc_suffix(
         return 0, "hevc", None, SimpleNamespace()
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
+        "pyezvizapi.streaming.local.session._probe_first_clean_idmx_video_window",
         fake_probe,
     )
 
@@ -2183,7 +2183,7 @@ def test_collect_idmx_annexb_after_first_clean_video_window_starts_hevc_duration
     times = iter([0.0, 0.01, 0.02, 0.03, 0.04, 0.13, 0.14])
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        "pyezvizapi.streaming.local.session._ffmpeg_hevc_decode_errors",
         lambda *_args, **_kwargs: [],
     )
 
@@ -2212,7 +2212,7 @@ def test_collect_h264_after_clean_idr_waits_for_clean_final_suffix(
     times = iter([0.0, 0.02, *([0.05] * 257)])
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        "pyezvizapi.streaming.local.session._try_first_clean_h264_annexb_idr_window_offset",
         lambda *_args, **_kwargs: SimpleNamespace(
             start_offset=0,
             idr_start_offset=0,
@@ -2237,7 +2237,7 @@ def test_collect_h264_after_clean_idr_waits_for_clean_final_suffix(
         return data
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        "pyezvizapi.streaming.local.session.trim_h264_annexb_to_first_error_free_suffix",
         fake_trim,
     )
 
@@ -2261,7 +2261,7 @@ def test_collect_decrypted_h264_after_clean_idr_retries_final_suffix_clear_first
     annexb_by_count: list[int] = []
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        "pyezvizapi.streaming.local.session._try_first_clean_h264_annexb_idr_window_offset",
         lambda *_args, **_kwargs: SimpleNamespace(
             start_offset=0,
             idr_start_offset=0,
@@ -2269,7 +2269,7 @@ def test_collect_decrypted_h264_after_clean_idr_retries_final_suffix_clear_first
         ),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._h264_annexb_packet_index_for_offset",
+        "pyezvizapi.streaming.local.session._h264_annexb_packet_index_for_offset",
         lambda *_args, **_kwargs: 0,
     )
 
@@ -2278,7 +2278,7 @@ def test_collect_decrypted_h264_after_clean_idr_retries_final_suffix_clear_first
         return b"annexb-count-%d" % len(collected)
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_local_packets_to_h264_annexb",
+        "pyezvizapi.streaming.local.session._idmx_local_packets_to_h264_annexb",
         fake_packets_to_annexb,
     )
     trim_calls = 0
@@ -2299,7 +2299,7 @@ def test_collect_decrypted_h264_after_clean_idr_retries_final_suffix_clear_first
         return data
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        "pyezvizapi.streaming.local.session.trim_h264_annexb_to_first_error_free_suffix",
         fake_trim,
     )
 
@@ -2329,7 +2329,7 @@ def test_collect_h264_after_clean_idr_propagates_dirty_final_suffix(
     ]
     times = iter([0.0, 0.02, *([0.03] * 257)])
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        "pyezvizapi.streaming.local.session._try_first_clean_h264_annexb_idr_window_offset",
         lambda *_args, **_kwargs: SimpleNamespace(
             start_offset=0,
             idr_start_offset=0,
@@ -2337,7 +2337,7 @@ def test_collect_h264_after_clean_idr_propagates_dirty_final_suffix(
         ),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        "pyezvizapi.streaming.local.session.trim_h264_annexb_to_first_error_free_suffix",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             PyEzvizError("still dirty")
         ),
@@ -2358,7 +2358,7 @@ def test_collect_idmx_after_clean_video_times_out_on_dirty_final_suffix(
     packets = [b"packet-%03d" % index for index in range(259)]
     times = iter([0.0, 0.02, *([0.05] * 257)])
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
+        "pyezvizapi.streaming.local.session._probe_first_clean_idmx_video_window",
         lambda *_args, **_kwargs: (
             0,
             "h264",
@@ -2367,11 +2367,11 @@ def test_collect_idmx_after_clean_video_times_out_on_dirty_final_suffix(
         ),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_local_packets_to_h264_annexb",
+        "pyezvizapi.streaming.local.session._idmx_local_packets_to_h264_annexb",
         lambda collected: b"annexb-count-%d" % len(collected),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        "pyezvizapi.streaming.local.session.trim_h264_annexb_to_first_error_free_suffix",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             PyEzvizError("still dirty")
         ),
@@ -2392,7 +2392,7 @@ def test_collect_decrypted_h264_after_clean_idr_times_out_on_dirty_final_suffix(
     packets = [b"packet-%03d" % index for index in range(259)]
     times = iter([0.0, 0.02, *([0.05] * 257)])
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        "pyezvizapi.streaming.local.session._try_first_clean_h264_annexb_idr_window_offset",
         lambda *_args, **_kwargs: SimpleNamespace(
             start_offset=0,
             idr_start_offset=0,
@@ -2400,15 +2400,15 @@ def test_collect_decrypted_h264_after_clean_idr_times_out_on_dirty_final_suffix(
         ),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._h264_annexb_packet_index_for_offset",
+        "pyezvizapi.streaming.local.session._h264_annexb_packet_index_for_offset",
         lambda *_args, **_kwargs: 0,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_local_packets_to_h264_annexb",
+        "pyezvizapi.streaming.local.session._idmx_local_packets_to_h264_annexb",
         lambda collected: b"annexb-count-%d" % len(collected),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        "pyezvizapi.streaming.local.session.trim_h264_annexb_to_first_error_free_suffix",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             PyEzvizError("still dirty")
         ),
@@ -2443,7 +2443,7 @@ def test_collect_h264_after_clean_idr_stops_after_max_dirty_windows(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        "pyezvizapi.streaming.local.session._try_first_clean_h264_annexb_idr_window_offset",
         fake_probe,
     )
 
@@ -2485,7 +2485,7 @@ def test_collect_idmx_after_clean_video_stops_after_max_dirty_windows(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
+        "pyezvizapi.streaming.local.session._probe_first_clean_idmx_video_window",
         fake_probe,
     )
 
@@ -2527,7 +2527,7 @@ def test_collect_idmx_after_dirty_complete_window_throttles_repeated_probes(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
+        "pyezvizapi.streaming.local.session._probe_first_clean_idmx_video_window",
         fake_probe,
     )
 
@@ -2583,7 +2583,7 @@ def test_collect_idmx_after_clean_video_probes_final_buffer_after_throttle(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
+        "pyezvizapi.streaming.local.session._probe_first_clean_idmx_video_window",
         fake_probe,
     )
 
@@ -2591,11 +2591,11 @@ def test_collect_idmx_after_clean_video_probes_final_buffer_after_throttle(
         return b"".join(collected)
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_local_packets_to_h264_annexb",
+        "pyezvizapi.streaming.local.session._idmx_local_packets_to_h264_annexb",
         join_packets,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        "pyezvizapi.streaming.local.session.trim_h264_annexb_to_first_error_free_suffix",
         lambda data, **_kwargs: data,
     )
 
@@ -2616,7 +2616,7 @@ def test_collect_decrypted_h264_after_clean_idr_stops_after_max_dirty_windows(
     calls = 0
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        "pyezvizapi.streaming.local.session._try_first_clean_h264_annexb_idr_window_offset",
         lambda *_args, **_kwargs: SimpleNamespace(
             start_offset=None,
             first_decode_error=None,
@@ -2642,7 +2642,7 @@ def test_collect_decrypted_h264_after_clean_idr_stops_after_max_dirty_windows(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._try_first_clean_decrypted_h264_annexb_idr_window_offset",
+        "pyezvizapi.streaming.local.session._try_first_clean_decrypted_h264_annexb_idr_window_offset",
         fake_decrypted_probe,
     )
 

@@ -9,17 +9,7 @@ from typing import Any, Literal
 
 import pytest
 
-from pyezvizapi import (
-    AutoClipSource,
-    ClipOptions,
-    EzvizClient,
-    _local_stream,
-    local_stream_ecdh,
-    local_stream_transport,
-    stream_selection,
-)
-from pyezvizapi._stream import VtmStreamClient
-from pyezvizapi.clip import CloudClipSource, LocalSdkClipSource, LocalSdkEcdhClipSource
+from pyezvizapi import AutoClipSource, ClipOptions, EzvizClient
 from pyezvizapi.exceptions import (
     DeviceException,
     EzvizAuthVerificationCode,
@@ -29,10 +19,23 @@ from pyezvizapi.exceptions import (
     EzvizUnsupportedMediaError,
     PyEzvizError,
 )
-from pyezvizapi.hcnetsdk import EzvizCasDeviceInfo, HcNetSdkLanEndpoint
-from pyezvizapi.local_stream_transport import EzvizLocalSdkCredentials, EzvizLocalStreamPacket
-from pyezvizapi.media import CaptureLimits, MediaDecodeOptions, MediaPacket, MediaPacketMetadata
-from pyezvizapi.stream_selection import fallback_stream_source, select_stream_source
+from pyezvizapi.streaming import selection as stream_selection
+from pyezvizapi.streaming.capture import CloudClipSource, LocalSdkClipSource, LocalSdkEcdhClipSource
+from pyezvizapi.streaming.cloud.protocol import VtmStreamClient
+from pyezvizapi.streaming.local import (
+    ecdh as local_stream_ecdh,
+    session as _local_stream,
+    transport as local_stream_transport,
+)
+from pyezvizapi.streaming.local.hcnetsdk.api import EzvizCasDeviceInfo, HcNetSdkLanEndpoint
+from pyezvizapi.streaming.local.transport import EzvizLocalSdkCredentials, EzvizLocalStreamPacket
+from pyezvizapi.streaming.media.models import (
+    CaptureLimits,
+    MediaDecodeOptions,
+    MediaPacket,
+    MediaPacketMetadata,
+)
+from pyezvizapi.streaming.selection import fallback_stream_source, select_stream_source
 
 CAMERA = "TESTCAM"
 PAYLOAD = b"test-media"
@@ -1187,7 +1190,10 @@ def test_normal_generator_completion_inside_caller_except_does_not_hide_cleanup_
 
 def test_preview_channel_zero_and_one_do_not_share_discovery_or_acquire_transport(monkeypatch):
     """Preview channels are not devconfig's default-channel sentinel namespace."""
-    from pyezvizapi.stream_discovery import LocalStreamDiscovery, LocalStreamDiscoveryCache  # noqa: PLC0415
+    from pyezvizapi.streaming.discovery import (  # noqa: PLC0415
+        LocalStreamDiscovery,
+        LocalStreamDiscoveryCache,
+    )
     cache = LocalStreamDiscoveryCache()
     options = AutoClipSource(mode="offline", credentials=credentials(), device={},
                              receiver_port=10103, discovery_cache=cache)

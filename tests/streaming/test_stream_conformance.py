@@ -9,32 +9,32 @@ from typing import Any
 
 import pytest
 
-from pyezvizapi._local_stream import _idmx_local_packets_to_annexb_with_codec
-from pyezvizapi.local_stream_ecdh import (
-    EzvizLocalSdkEcdhStreamPacket,
-    local_ecdh_media_packet_source,
-    local_ecdh_packet_to_media_packet,
-)
-from pyezvizapi.local_stream_media import summarize_idmx_h264_local_packets
-from pyezvizapi.local_stream_transport import (
-    EzvizLocalStreamPacket,
-    local_media_packet_source,
-    local_stream_packet_to_media_packet,
-)
-from pyezvizapi.media import CaptureLimits, MediaPacket, MediaPacketSource
-from pyezvizapi.stream_media import (
-    detect_hikvision_ps_video_nalu_header_size,
-    detect_transport,
-    mpeg_ps_complete_prefix_length,
-    mpeg_ps_decryptable_prefix_length,
-)
-from pyezvizapi.stream_transport import (
+from pyezvizapi.streaming.cloud.transport import (
     StreamTransport,
     VtmChannel,
     VtmPacket,
     vtm_media_packet_source,
     vtm_packet_to_media_packet,
 )
+from pyezvizapi.streaming.local.ecdh import (
+    EzvizLocalSdkEcdhStreamPacket,
+    local_ecdh_media_packet_source,
+    local_ecdh_packet_to_media_packet,
+)
+from pyezvizapi.streaming.local.media import summarize_idmx_h264_local_packets
+from pyezvizapi.streaming.local.session import _idmx_local_packets_to_annexb_with_codec
+from pyezvizapi.streaming.local.transport import (
+    EzvizLocalStreamPacket,
+    local_media_packet_source,
+    local_stream_packet_to_media_packet,
+)
+from pyezvizapi.streaming.media.containers import (
+    detect_hikvision_ps_video_nalu_header_size,
+    detect_transport,
+    mpeg_ps_complete_prefix_length,
+    mpeg_ps_decryptable_prefix_length,
+)
+from pyezvizapi.streaming.media.models import CaptureLimits, MediaPacket, MediaPacketSource
 from tests._paths import FIXTURES
 
 FIXTURE_ROOT = FIXTURES / "stream"

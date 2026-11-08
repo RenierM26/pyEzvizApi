@@ -10,7 +10,7 @@ import hashlib
 import time
 from typing import Any
 
-from pyezvizapi.stream_media import (
+from pyezvizapi.streaming.media.containers import (
     decrypt_hikvision_ps_video,
     detect_hikvision_ps_video_nalu_header_size,
     mpeg_ps_decryptable_prefix_length,

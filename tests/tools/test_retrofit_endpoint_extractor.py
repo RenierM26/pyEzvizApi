@@ -135,12 +135,11 @@ def test_packaged_known_paths_find_nested_owner_expressions(tmp_path: Path, entr
     assert not extractor.is_implemented("/api/{serial}/unknown", known)
 
 
-def test_real_legacy_and_canonical_endpoint_inventories_match() -> None:
+def test_real_canonical_endpoint_inventory_finds_routes() -> None:
     extractor = load_extractor()
-    legacy = extractor.load_known_paths(ROOT / "pyezvizapi/api_endpoints.py")
     canonical = extractor.load_known_paths(ROOT / "pyezvizapi/cloud/endpoints.py")
-    assert legacy == canonical
-    assert extractor.is_implemented("/v3/devices/{serial}/ptzControl", legacy)
+    assert canonical.exact
+    assert extractor.is_implemented("/v3/devices/{serial}/ptzControl", canonical)
 
 
 def test_annotation_inventory_parses_java_signatures(tmp_path: Path) -> None:

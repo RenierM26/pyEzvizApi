@@ -196,7 +196,7 @@ def _handle_camera(
         if args.notify is not None:
             camera.alarm_notify(args.notify)
         if args.sensibility is not None:
-            camera.alarm_detection_sensibility(args.sensibility)
+            camera.alarm_detection_sensitivity(args.sensibility)
         if args.do_not_disturb is not None:
             camera.do_not_disturb(args.do_not_disturb)
         if args.schedule is not None:

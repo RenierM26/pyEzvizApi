@@ -1,9 +1,9 @@
 """Fallback branches identified by CodeQL must remain reachable and truthful."""
 import pytest
 
-from pyezvizapi import hcnetsdk
 from pyezvizapi.cli import main as cli
 from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.streaming.local.hcnetsdk import api as hcnetsdk
 
 
 def test_native_address_preserves_printable_non_ip_fallback():

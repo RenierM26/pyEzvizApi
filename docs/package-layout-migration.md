@@ -1,4 +1,7 @@
-# Package layout migration
+# Package layout migration (historical PR #413 plan)
+
+The preservation rules below describe PR #413, not the subsequent alias cleanup.
+Current supported paths are documented in [HA compatibility](ha-compatibility.md).
 
 Baseline: `bfa5aa5349a87a30bea5de0ff616d4dd17572b2d` (after PR #412).
 

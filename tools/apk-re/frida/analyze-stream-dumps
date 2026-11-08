@@ -17,7 +17,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 try:
     from pyezvizapi.exceptions import PyEzvizError
-    from pyezvizapi.local_stream import (
+    from pyezvizapi.streaming.local.session import (
         _idmx_local_packets_to_annexb_with_codec,
         _iter_idmx_local_frames,
         _looks_like_idmx_local_payload,
@@ -25,7 +25,7 @@ try:
         summarize_hevc_annexb_irap_windows,
         summarize_idmx_h264_local_packets,
     )
-    from pyezvizapi.stream import MPEG_PS_START_CODE, rtp_payload
+    from pyezvizapi.streaming.cloud.protocol import MPEG_PS_START_CODE, rtp_payload
 except ModuleNotFoundError:
     PyEzvizError = Exception  # type: ignore[misc,assignment]
     MPEG_PS_START_CODE = b"\x00\x00\x01\xba"

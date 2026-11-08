@@ -20,8 +20,12 @@ from typing import Any
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
-from pyezvizapi.native_session import NativeMpegTsSession
-from pyezvizapi.native_stream import NativeMpegTsStream, NativePacketStream, NativeStreamOptions
+from pyezvizapi.streaming.native_session import NativeMpegTsSession
+from pyezvizapi.streaming.native_stream import (
+    NativeMpegTsStream,
+    NativePacketStream,
+    NativeStreamOptions,
+)
 
 from .admission import Admission
 from .const import WRITE_TIMEOUT

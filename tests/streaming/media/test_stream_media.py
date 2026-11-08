@@ -16,7 +16,23 @@ from Crypto.Cipher import AES
 import pytest
 import requests
 
-from pyezvizapi._stream import (
+from pyezvizapi.client import EzvizClient
+from pyezvizapi.exceptions import (
+    EzvizIncompleteMediaError,
+    EzvizNoMediaError,
+    HTTPError,
+    PyEzvizError,
+    UnsupportedRtpVideoCodecError,
+)
+from pyezvizapi.streaming.cloud.bootstrap import (
+    _probe_cloud_video_duration,
+    cloud_rtp_packets_have_audio,
+    copy_cloud_stream_packets_to_mpegts,
+    copy_cloud_stream_to_mpegps,
+    copy_cloud_stream_to_mpegts,
+    copy_decrypted_cloud_stream_packets_to_mpegts,
+)
+from pyezvizapi.streaming.cloud.protocol import (
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     StreamTransport,
     VtmChannel,
@@ -34,22 +50,6 @@ from pyezvizapi._stream import (
     mpeg_ps_video_pts_span_seconds,
     rtp_payload,
 )
-from pyezvizapi.client import EzvizClient
-from pyezvizapi.cloud_stream import (
-    _probe_cloud_video_duration,
-    cloud_rtp_packets_have_audio,
-    copy_cloud_stream_packets_to_mpegts,
-    copy_cloud_stream_to_mpegps,
-    copy_cloud_stream_to_mpegts,
-    copy_decrypted_cloud_stream_packets_to_mpegts,
-)
-from pyezvizapi.exceptions import (
-    EzvizIncompleteMediaError,
-    EzvizNoMediaError,
-    HTTPError,
-    PyEzvizError,
-    UnsupportedRtpVideoCodecError,
-)
 
 BODY = b"abc"
 CLEAR_ANNEXB = b"clear-annexb"
@@ -61,9 +61,9 @@ AV_MPEGTS_PAYLOAD = b"av-mpegts"
 MPEGPS_PAYLOAD = b"mpegps"
 AAC_FRAME = b"aac-frame"
 
-cloud_stream_module = importlib.import_module("pyezvizapi.cloud_stream")
+cloud_stream_module = importlib.import_module("pyezvizapi.streaming.cloud.bootstrap")
 
-stream_module = importlib.import_module("pyezvizapi.stream")
+stream_module = importlib.import_module("pyezvizapi.streaming.cloud.protocol")
 
 CAMERA_SERIAL_BYTES = b"CAM123"
 
@@ -297,15 +297,15 @@ def test_decrypted_cloud_save_rejects_short_timestamp_span_unless_packet_capped(
     client = _client()
     monkeypatch.setattr(client, "get_cam_key", lambda _serial: "camera-key")
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.copy_decrypted_cloud_stream_packets_to_mpegts",
+        "pyezvizapi.streaming.cloud.bootstrap.copy_decrypted_cloud_stream_packets_to_mpegts",
         lambda _packets, output, **_kwargs: output.write(AV_MPEGTS_PAYLOAD),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        "pyezvizapi.streaming.cloud.bootstrap.decrypt_hikvision_ps_video",
         lambda *_args, **_kwargs: MPEGPS_PAYLOAD,
     )
     copy = (
@@ -368,15 +368,15 @@ def test_decrypted_cloud_save_probes_ambiguous_pts_before_publication(
     client = _client()
     monkeypatch.setattr(client, "get_cam_key", lambda _serial: "camera-key")
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.copy_decrypted_cloud_stream_packets_to_mpegts",
+        "pyezvizapi.streaming.cloud.bootstrap.copy_decrypted_cloud_stream_packets_to_mpegts",
         lambda _packets, output, **_kwargs: output.write(AV_MPEGTS_PAYLOAD),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        "pyezvizapi.streaming.cloud.bootstrap.decrypt_hikvision_ps_video",
         lambda *_args, **_kwargs: MPEGPS_PAYLOAD,
     )
     def fake_probe(_path: Path, **kwargs: Any) -> float:
@@ -384,7 +384,7 @@ def test_decrypted_cloud_save_probes_ambiguous_pts_before_publication(
         return video_duration
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._probe_cloud_video_duration", fake_probe
+        "pyezvizapi.streaming.cloud.bootstrap._probe_cloud_video_duration", fake_probe
     )
     copy = (
         copy_cloud_stream_to_mpegps
@@ -423,7 +423,7 @@ def test_cloud_video_probe_uses_video_frames_when_ps_stream_duration_is_absent(
             payload = {"streams": [{}], "format": {"duration": "20.0"}}
         return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.subprocess.run", fake_run)
 
     observed = _probe_cloud_video_duration(
         tmp_path / "short.ps", ffprobe_path="ffprobe", timeout_seconds=120
@@ -457,7 +457,7 @@ def test_cloud_video_probe_does_not_count_frame_timestamp_discontinuity(
             }
         return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.subprocess.run", fake_run)
 
     observed = _probe_cloud_video_duration(
         tmp_path / "reset.ps", ffprobe_path="ffprobe"
@@ -472,7 +472,7 @@ def test_cloud_video_probe_reports_missing_ffprobe(
     def missing_ffprobe(*_args: Any, **_kwargs: Any) -> Any:
         raise FileNotFoundError("ffprobe")
 
-    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", missing_ffprobe)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.subprocess.run", missing_ffprobe)
 
     with pytest.raises(PyEzvizError, match="ffprobe is required"):
         _probe_cloud_video_duration(tmp_path / "short.ts", ffprobe_path="ffprobe")
@@ -489,7 +489,7 @@ def test_cloud_video_probe_reports_frame_timeout(
             stdout=json.dumps({"streams": [{"duration": "120.0"}]}),
         )
 
-    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.subprocess.run", fake_run)
 
     with pytest.raises(PyEzvizError, match="timed out probing cloud video frames"):
         _probe_cloud_video_duration(
@@ -1734,7 +1734,7 @@ def test_copy_cloud_stream_to_mpegps_writes_clear_payloads(monkeypatch) -> None:
         return FakeCloudStream()
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         fake_open_cloud_stream,
     )
 
@@ -1812,10 +1812,10 @@ def test_copy_cloud_stream_to_mpegps_decrypts_bounded_payloads(monkeypatch) -> N
         return clear_payload
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
-    monkeypatch.setattr("pyezvizapi.cloud_stream.decrypt_hikvision_ps_video", fake_decrypt)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.decrypt_hikvision_ps_video", fake_decrypt)
 
     copy_cloud_stream_to_mpegps(
         client,
@@ -1868,11 +1868,11 @@ def test_copy_cloud_stream_to_mpegps_fetches_media_key_with_smscode(monkeypatch)
 
     monkeypatch.setattr(client, "get_cam_key", fake_get_cam_key)
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        "pyezvizapi.streaming.cloud.bootstrap.decrypt_hikvision_ps_video",
         lambda data, key, **_kwargs: b":".join((data, str(key).encode())),
     )
 
@@ -1964,11 +1964,11 @@ def test_copy_cloud_stream_to_mpegts_pipes_clear_payloads(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_mpegts_remux_process",
         fake_open_remux,
     )
 
@@ -2020,11 +2020,11 @@ def test_copy_cloud_stream_to_mpegts_depacketizes_clear_rtp_video(monkeypatch) -
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         fake_open_remux,
         raising=False,
     )
@@ -2095,11 +2095,11 @@ def test_copy_cloud_stream_to_mpegts_uses_idmx_codec_and_payload_descriptor(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         fake_open_remux,
     )
 
@@ -2180,7 +2180,7 @@ def test_copy_cloud_stream_to_mpegts_reports_descriptor_codec(monkeypatch) -> No
                 )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
 
@@ -2238,11 +2238,11 @@ def test_copy_cloud_stream_to_mpegts_defers_codec_fallback_past_h264_aud(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         fake_open_remux,
     )
 
@@ -2308,11 +2308,11 @@ def test_copy_cloud_stream_to_mpegts_accepts_late_fallback_confirmation(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         fake_open_remux,
     )
 
@@ -2372,11 +2372,11 @@ def test_copy_cloud_stream_to_mpegts_bounds_codec_probe_by_consumed_packets(
             )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         lambda *_args, **_kwargs: subprocess.Popen(
             ["cat"],
             stdin=subprocess.PIPE,
@@ -2438,7 +2438,7 @@ def test_copy_cloud_stream_to_mpegts_bounds_successful_fallback_probe(
             assert open_calls == ["h264"]
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     def fake_open_remux(
@@ -2455,7 +2455,7 @@ def test_copy_cloud_stream_to_mpegts_bounds_successful_fallback_probe(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         fake_open_remux,
     )
 
@@ -2493,11 +2493,11 @@ def test_copy_cloud_stream_to_mpegts_skips_empty_rtp_prelude_and_body(
                 )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         lambda *_args, **_kwargs: subprocess.Popen(
             ["cat"],
             stdin=subprocess.PIPE,
@@ -2540,11 +2540,11 @@ def test_copy_cloud_stream_to_mpegts_skips_unknown_prelude_before_rtp(
                 )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         lambda *_args, **_kwargs: subprocess.Popen(
             ["cat"],
             stdin=subprocess.PIPE,
@@ -2587,11 +2587,11 @@ def test_copy_cloud_stream_to_mpegts_skips_interleaved_non_rtp_body(
                 )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         lambda *_args, **_kwargs: subprocess.Popen(
             ["cat"],
             stdin=subprocess.PIPE,
@@ -2638,11 +2638,11 @@ def test_copy_cloud_stream_to_mpegts_accepts_ezviz_headerless_hevc_fu(
                 )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         lambda *_args, **_kwargs: subprocess.Popen(
             ["cat"],
             stdin=subprocess.PIPE,
@@ -2684,11 +2684,11 @@ def test_copy_cloud_stream_to_mpegts_rejects_incomplete_rtp_video(
             )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         lambda *_args, **_kwargs: subprocess.Popen(
             ["cat"],
             stdin=subprocess.PIPE,
@@ -2769,11 +2769,11 @@ def test_copy_cloud_stream_to_mpegts_passes_through_mpegts(monkeypatch) -> None:
             )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_mpegts_remux_process",
         lambda *_args, **_kwargs: pytest.fail("MPEG-TS input must not be remuxed"),
     )
 
@@ -2808,7 +2808,7 @@ def test_copy_cloud_stream_to_mpegps_rejects_rtp_transport(monkeypatch) -> None:
             )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
 
@@ -2894,12 +2894,12 @@ def test_copy_cloud_stream_to_mpegts_decrypts_and_remuxes(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "get_cam_key", fake_get_cam_key)
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
-    monkeypatch.setattr("pyezvizapi.cloud_stream.decrypt_hikvision_ps_video", fake_decrypt)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.decrypt_hikvision_ps_video", fake_decrypt)
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_mpegts_remux_process",
         lambda _ffmpeg_path: FakeRemuxProcess(),
     )
 
@@ -2983,15 +2983,15 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        "pyezvizapi.streaming.cloud.bootstrap.decrypt_hikvision_ps_video",
         fake_decrypt,
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        "pyezvizapi.streaming.cloud.bootstrap._open_cloud_elementary_mpegts_remux_process",
         fake_open_remux,
     )
 
@@ -3665,15 +3665,15 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(
         selected_output.write(AV_MPEGTS_PAYLOAD)
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        "pyezvizapi.streaming.cloud.bootstrap.decrypt_hikvision_ps_video",
         fake_decrypt,
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._remux_cloud_elementary_av_bytes_to_mpegts",
+        "pyezvizapi.streaming.cloud.bootstrap._remux_cloud_elementary_av_bytes_to_mpegts",
         fake_av_remux,
         raising=False,
     )
@@ -5361,7 +5361,7 @@ def test_copy_cloud_stream_to_mpegps_rejects_decrypted_rtp_transport(
             )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
 
@@ -5398,7 +5398,7 @@ def test_copy_cloud_stream_rejects_encrypted_vtm_packets(monkeypatch) -> None:
             )
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.open_cloud_stream",
+        "pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
     )
 
@@ -5415,7 +5415,7 @@ def test_open_cloud_mpegts_remux_process_builds_ffmpeg_command(monkeypatch) -> N
         calls.append({"args": args, **kwargs})
         return FakeProcess()
 
-    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.subprocess.Popen", fake_popen)
 
     process = cloud_stream_module._open_cloud_mpegts_remux_process(  # noqa: SLF001
         "/bin/ffmpeg"
@@ -5451,7 +5451,7 @@ def test_open_cloud_mpegts_remux_process_reports_launch_errors(
     def fake_popen(_args: list[str], **_kwargs: Any) -> None:
         raise OSError("missing")
 
-    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.subprocess.Popen", fake_popen)
 
     with pytest.raises(PyEzvizError, match="Could not launch FFmpeg"):
         cloud_stream_module._open_cloud_mpegts_remux_process(  # noqa: SLF001
@@ -5491,12 +5491,12 @@ def test_cloud_absolute_deadline_counts_metadata_and_startup(
         durations.append(kwargs["duration_seconds"])
         return [VtmPacket(VtmChannel.STREAM, len(MPEGPS_PAYLOAD), 1, 0, MPEGPS_PAYLOAD)]
 
-    monkeypatch.setattr("pyezvizapi.cloud_stream.open_cloud_stream", open_stream)
-    monkeypatch.setattr("pyezvizapi.cloud_stream._copy_cloud_stream_payloads_to_mpegps", copy)
-    monkeypatch.setattr("pyezvizapi.cloud_stream.copy_cloud_stream_packets_to_mpegts", copy)
-    monkeypatch.setattr("pyezvizapi.cloud_stream._collect_cloud_stream_packets", collect)
-    monkeypatch.setattr("pyezvizapi.cloud_stream.decrypt_hikvision_ps_video", lambda *_a, **_kw: MPEGPS_PAYLOAD)
-    monkeypatch.setattr("pyezvizapi.cloud_stream.copy_decrypted_cloud_stream_packets_to_mpegts", lambda _p, output, **_kw: output.write(MPEGPS_PAYLOAD))
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.open_cloud_stream", open_stream)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap._copy_cloud_stream_payloads_to_mpegps", copy)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.copy_cloud_stream_packets_to_mpegts", copy)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap._collect_cloud_stream_packets", collect)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.decrypt_hikvision_ps_video", lambda *_a, **_kw: MPEGPS_PAYLOAD)
+    monkeypatch.setattr("pyezvizapi.streaming.cloud.bootstrap.copy_decrypted_cloud_stream_packets_to_mpegts", lambda _p, output, **_kw: output.write(MPEGPS_PAYLOAD))
     capture = copy_cloud_stream_to_mpegps if output_format == "mpegps" else copy_cloud_stream_to_mpegts
     output = io.BytesIO()
     kwargs: dict[str, Any] = dict(duration_seconds=10.0, capture_deadline=110.0,

@@ -7,10 +7,8 @@ from typing import Any
 from Crypto.Cipher import AES
 import pytest
 
-from pyezvizapi import utils
-from pyezvizapi.constants import HIK_ENCRYPTION_HEADER
-from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.utils import (
+from pyezvizapi._shared import utils
+from pyezvizapi._shared.utils import (
     coerce_int,
     compute_motion_from_alarm,
     convert_to_dict,
@@ -25,6 +23,8 @@ from pyezvizapi.utils import (
     return_password_hash,
     string_to_list,
 )
+from pyezvizapi.constants import HIK_ENCRYPTION_HEADER
+from pyezvizapi.exceptions import PyEzvizError
 
 
 def test_coerce_int_handles_common_api_shapes() -> None:

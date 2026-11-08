@@ -6,14 +6,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyezvizapi import EzvizClient, client as client_module, stream_selection
-from pyezvizapi.clip import AutoClipSource, ClipOptions
+from pyezvizapi import EzvizClient, client as client_module
 from pyezvizapi.exceptions import EzvizNoMediaError, EzvizUnsupportedMediaError, PyEzvizError
-from pyezvizapi.local_stream_transport import EzvizLocalStreamPacket
-from pyezvizapi.media import CaptureLimits
-from pyezvizapi.stream_discovery import LocalStreamDiscovery, LocalStreamDiscoveryCache
-from pyezvizapi.stream_header import parse_ezviz_stream_header
-from pyezvizapi.stream_selection import AutoMediaStream, select_stream_source
+from pyezvizapi.streaming import selection as stream_selection
+from pyezvizapi.streaming.capture import AutoClipSource, ClipOptions
+from pyezvizapi.streaming.discovery import LocalStreamDiscovery, LocalStreamDiscoveryCache
+from pyezvizapi.streaming.local.transport import EzvizLocalStreamPacket
+from pyezvizapi.streaming.media.header import parse_ezviz_stream_header
+from pyezvizapi.streaming.media.models import CaptureLimits
+from pyezvizapi.streaming.selection import AutoMediaStream, select_stream_source
 from tests.streaming.test_stream_header import header
 from tests.streaming.test_stream_selection import CAMERA, PAYLOAD, NoCloudClient, credentials
 

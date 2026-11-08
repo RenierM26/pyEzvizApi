@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from unittest.mock import Mock
 
-import pyezvizapi.test_mqtt as mqtt_demo
+import pyezvizapi.cli.mqtt_listener as mqtt_demo
 
 
 def test_message_handler_appends_json_line(tmp_path, monkeypatch) -> None:

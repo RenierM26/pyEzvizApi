@@ -1,15 +1,15 @@
 # Utility contracts
 
-The historical `pyezvizapi.utils` imports remain a compatibility facade. Imported
-public helpers are the implementation objects, not wrappers. The two private
-image helper names delegate for compatibility:
+`pyezvizapi.utils` retains only the six exports required by `ha-ezviz`.
+New code should use `_shared.utils` or the focused `_shared` module below.
+The implementation still delegates image helpers to the crypto owner:
 
 | Family | Implementation | Contract |
 | --- | --- | --- |
-| Tolerant conversion | `_coercion` | `coerce_int` retains boolean and finite-float truncation; unconvertible/non-finite values return `None`. This is not a strict packet/count validator. |
-| Nested mappings | `_mapping` | Missing traversal returns the caller's default. `deep_merge` combines dicts, concatenates lists and otherwise chooses the right operand. It does not mutate inputs or deep-copy unchanged subtrees. |
-| Alarm/time | `_alarm_time` | UTC epochs are preferred (including zero), invalid/overflowing epochs can fall back to formatted time, and existing alarm tuple/motion-window semantics are preserved. |
-| Image envelope | `_image_crypto` | Retains the proprietary header/password hash/CBC wire format, concatenated blocks and legacy partial trailing-byte alignment handling. Final plaintext padding must be valid PKCS#7. |
+| Tolerant conversion | `_shared.coercion` | `coerce_int` retains boolean and finite-float truncation; unconvertible/non-finite values return `None`. This is not a strict packet/count validator. |
+| Nested mappings | `_shared.mapping` | Missing traversal returns the caller's default. `deep_merge` combines dicts, concatenates lists and otherwise chooses the right operand. It does not mutate inputs or deep-copy unchanged subtrees. |
+| Alarm/time | `_shared.alarm_time` | UTC epochs are preferred (including zero), invalid/overflowing epochs can fall back to formatted time, and existing alarm tuple/motion-window semantics are preserved. |
+| Image envelope | `_shared.image_crypto` | Retains the proprietary header/password hash/CBC wire format, concatenated blocks and legacy partial trailing-byte alignment handling. Final plaintext padding must be valid PKCS#7. |
 
 `decode_json` returns `None` for invalid JSON strings, not the original string.
 `convert_to_dict` mutates only a dict's top-level string values; it is not a

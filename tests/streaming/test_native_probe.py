@@ -5,8 +5,8 @@ import threading
 
 import pytest
 
-from pyezvizapi.native_session import NativeMpegTsSession
-from pyezvizapi.native_stream import NativeMpegTsStream, NativeTrackSelection
+from pyezvizapi.streaming.native_session import NativeMpegTsSession
+from pyezvizapi.streaming.native_stream import NativeMpegTsStream, NativeTrackSelection
 from tests.streaming.test_native_stream import Source, options
 from tests.streaming.test_stream_sample import packet_oracle
 from tests.tools.test_local_av_timeline import encode_three_track_ps

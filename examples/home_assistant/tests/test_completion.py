@@ -8,8 +8,8 @@ from custom_components.ezviz_native import completion
 from custom_components.ezviz_native.completion import CONTRACT, maybe_finite_delivery
 import pytest
 
-from pyezvizapi.native_completion import NativeMediaCompletion, NativeTrackCompletion
-from pyezvizapi.native_stream import NativeStreamOptions, NativeTrackSelection
+from pyezvizapi.streaming.media.completion import NativeMediaCompletion, NativeTrackCompletion
+from pyezvizapi.streaming.native_stream import NativeStreamOptions, NativeTrackSelection
 
 
 @dataclass(frozen=True)

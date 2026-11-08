@@ -21,7 +21,7 @@ from pyezvizapi.exceptions import (
     EzvizLocalSdkDeadlineExpired,
     PyEzvizError,
 )
-from pyezvizapi.hcnetsdk import (
+from pyezvizapi.streaming.local.hcnetsdk.api import (
     EZVIZ_CAS_PTZ_COMMAND_MAP,
     EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE,
     EZVIZ_HCNETUTIL_LOGIN_V40,
@@ -4439,7 +4439,7 @@ def test_local_sdk_source_port_uses_exclusive_binding_on_windows(
 
     exclusive_socket = ConnectSocket()
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        "pyezvizapi.streaming.local.hcnetsdk.api._WINDOWS_EXCLUSIVE_SOURCE_BIND",
         True,
     )
     monkeypatch.setattr(socket, "SO_EXCLUSIVEADDRUSE", exclusive_option, raising=False)
@@ -4487,15 +4487,15 @@ def test_windows_wildcard_source_retries_exclusive_bind_on_route_interface(
         return connected_socket
 
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        "pyezvizapi.streaming.local.hcnetsdk.api._WINDOWS_EXCLUSIVE_SOURCE_BIND",
         True,
     )
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        "pyezvizapi.streaming.local.hcnetsdk.api._connect_bound_source_socket",
         connect_bound_source_socket,
     )
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._windows_concrete_source_address",
+        "pyezvizapi.streaming.local.hcnetsdk.api._windows_concrete_source_address",
         lambda _address, _family, _target: ("192.0.2.25", 10103),
     )
     monkeypatch.setattr(
@@ -4540,11 +4540,11 @@ def test_source_connection_recomputes_timeout_between_addresses(
         return connected_socket
 
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        "pyezvizapi.streaming.local.hcnetsdk.api._WINDOWS_EXCLUSIVE_SOURCE_BIND",
         False,
     )
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        "pyezvizapi.streaming.local.hcnetsdk.api._connect_bound_source_socket",
         connect_bound_source_socket,
     )
     monkeypatch.setattr(
@@ -4587,11 +4587,11 @@ def test_source_connection_final_timeout_uses_deadline_exception(
         raise TimeoutError
 
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        "pyezvizapi.streaming.local.hcnetsdk.api._WINDOWS_EXCLUSIVE_SOURCE_BIND",
         False,
     )
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        "pyezvizapi.streaming.local.hcnetsdk.api._connect_bound_source_socket",
         connect_bound_source_socket,
     )
     monkeypatch.setattr(
@@ -4926,7 +4926,7 @@ def test_ezviz_local_sdk_client_temporarily_bounds_stream_read_timeout(
     stream_sock = _FakeSocket([stream_byte])
     stream_sock.timeout = 3.0
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk.read_ezviz_interleaved_rtp_frame_after_prefix",
+        "pyezvizapi.streaming.local.hcnetsdk.api.read_ezviz_interleaved_rtp_frame_after_prefix",
         lambda sock, *, max_prefix_bytes: sock.recv(1),
     )
     endpoint = HcNetSdkLanEndpoint(
@@ -4961,7 +4961,7 @@ def test_ezviz_local_sdk_client_preserves_configured_stream_timeout(monkeypatch)
     stream_sock = _FakeSocket([stream_byte])
     stream_sock.timeout = 3.0
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk.read_ezviz_interleaved_rtp_frame_after_prefix",
+        "pyezvizapi.streaming.local.hcnetsdk.api.read_ezviz_interleaved_rtp_frame_after_prefix",
         lambda sock, *, max_prefix_bytes: sock.recv(1),
     )
     endpoint = HcNetSdkLanEndpoint(
@@ -5003,7 +5003,7 @@ def test_ezviz_local_sdk_client_enforces_total_stream_read_deadline(
         return sock.recv(1)
 
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk.read_ezviz_interleaved_rtp_frame_after_prefix",
+        "pyezvizapi.streaming.local.hcnetsdk.api.read_ezviz_interleaved_rtp_frame_after_prefix",
         read_fragmented,
     )
     endpoint = HcNetSdkLanEndpoint(
@@ -5045,7 +5045,7 @@ def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
         return sock.recv(1)
 
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk.read_ezviz_local_sdk_frame",
+        "pyezvizapi.streaming.local.hcnetsdk.api.read_ezviz_local_sdk_frame",
         read_fragmented,
     )
     endpoint = HcNetSdkLanEndpoint(
@@ -5621,7 +5621,7 @@ def test_hcnetsdk_stdxml_response_json_rejects_invalid_payload() -> None:
 
 
 def test_hcnetsdk_runtime_code_does_not_import_or_load_native_libraries() -> None:
-    source = Path("pyezvizapi/hcnetsdk.py").read_text(encoding="utf-8")
+    source = Path("pyezvizapi/streaming/local/hcnetsdk/api.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     forbidden_imports: set[str] = set()
     forbidden_calls: set[str] = set()

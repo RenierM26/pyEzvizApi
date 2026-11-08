@@ -15,11 +15,11 @@ from typing import BinaryIO
 
 import pytest
 
-from pyezvizapi import cloud_stream
 from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
-from pyezvizapi.remux import copy_remuxed_output, open_mpegts_remux_process
-from pyezvizapi.rtp import RtpAacStream, RtpPacket
-from pyezvizapi.rtp_timing import NativeRtpPsMuxer, timed_rtp_mpegps_payloads
+from pyezvizapi.streaming.cloud import bootstrap as cloud_stream
+from pyezvizapi.streaming.media.remux import copy_remuxed_output, open_mpegts_remux_process
+from pyezvizapi.streaming.media.rtp import RtpAacStream, RtpPacket
+from pyezvizapi.streaming.media.rtp_timing import NativeRtpPsMuxer, timed_rtp_mpegps_payloads
 
 
 def test_video_clock_wrap_preserves_forward_gaps_and_rejects_reordering() -> None:

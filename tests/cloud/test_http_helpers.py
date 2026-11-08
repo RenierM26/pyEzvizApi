@@ -16,22 +16,10 @@ from typing import Any, BinaryIO, cast
 import pytest
 import requests
 
-from pyezvizapi._local_stream import (
-    HcNetSdkCommandPortMultiSocketPlan,
-    HcNetSdkCommandPortSocketStep,
-    _iter_local_stream_payloads,
-    local_media_packet_source,
-)
-from pyezvizapi.api_endpoints import (
+from pyezvizapi.client import EzvizClient, _LocalStreamPacketMetadataRecorder
+from pyezvizapi.cloud.endpoints import (
     API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
-)
-from pyezvizapi.client import EzvizClient, _LocalStreamPacketMetadataRecorder
-from pyezvizapi.clip import (
-    ClipOptions,
-    CloudClipSource,
-    HcNetSdkCommandPortClipSource,
-    LocalSdkEcdhClipSource,
 )
 from pyezvizapi.constants import (
     FEATURE_CODE,
@@ -49,7 +37,19 @@ from pyezvizapi.exceptions import (
     HTTPError,
     PyEzvizError,
 )
-from pyezvizapi.media import (
+from pyezvizapi.streaming.capture import (
+    ClipOptions,
+    CloudClipSource,
+    HcNetSdkCommandPortClipSource,
+    LocalSdkEcdhClipSource,
+)
+from pyezvizapi.streaming.local.session import (
+    HcNetSdkCommandPortMultiSocketPlan,
+    HcNetSdkCommandPortSocketStep,
+    _iter_local_stream_payloads,
+    local_media_packet_source,
+)
+from pyezvizapi.streaming.media.models import (
     CaptureLimits,
     MediaDecodeOptions,
     MediaMuxOptions,

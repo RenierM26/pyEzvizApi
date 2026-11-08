@@ -6,15 +6,18 @@ from pathlib import Path
 import pytest
 
 from pyezvizapi import CaptureLimits, ClipOptions, EzvizClient, MediaMuxOptions
-from pyezvizapi.clip import (
+from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
+from pyezvizapi.streaming.capture import (
     AutoClipSource,
     CloudClipSource,
     HcNetSdkCommandPortClipSource,
     LocalSdkClipSource,
 )
-from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
-from pyezvizapi.rtp import RtpAacStream
-from pyezvizapi.rtp_timing import shared_rtp_clock_offsets, timed_rtp_mpegps_payloads
+from pyezvizapi.streaming.media.rtp import RtpAacStream
+from pyezvizapi.streaming.media.rtp_timing import (
+    shared_rtp_clock_offsets,
+    timed_rtp_mpegps_payloads,
+)
 
 
 @pytest.mark.parametrize("uptime", [10, 47722, 100000, 268436, 999999])
@@ -208,7 +211,7 @@ def test_long_form_save_clip_preserves_shared_opt_in_when_building_mux(monkeypat
 
 
 def test_aac_provenance_tracks_only_accepted_media_not_metadata_or_invalid_packets():
-    from pyezvizapi.rtp import RtpPacket, decrypt_idmx_aac_packets  # noqa: PLC0415
+    from pyezvizapi.streaming.media.rtp import RtpPacket, decrypt_idmx_aac_packets  # noqa: PLC0415
     extension = b"\x80\x06\x00\x01\x21\x21\x02\x01"
     payload = b"\x00\x10\x00\x08x"
     packets = [RtpPacket(b"metadata", 112, 1, 0, 77, False),
@@ -224,7 +227,7 @@ def test_aac_provenance_tracks_only_accepted_media_not_metadata_or_invalid_packe
 def test_native_shared_clock_rejects_multiple_completed_video_sources_before_ffmpeg(monkeypatch):
     from fractions import Fraction  # noqa: PLC0415
 
-    from pyezvizapi import _local_stream as local  # noqa: PLC0415
+    from pyezvizapi.streaming.local import session as local  # noqa: PLC0415
     monkeypatch.setattr(local, "_idmx_local_video_payload_types", lambda *a, **k: frozenset({96}))
     monkeypatch.setattr(local, "_clear_native_rtp_packets_with_legacy_indices", lambda *a: ([], set()))
     monkeypatch.setattr(local, "idmx_video_frame_rate", lambda *a: Fraction(15))
@@ -254,8 +257,8 @@ def test_shared_mux_assertion_must_be_boolean(value):
 
 
 def test_encrypted_timed_path_rejects_mixed_video_sources_before_ffmpeg(monkeypatch):
-    from pyezvizapi import _local_stream as local  # noqa: PLC0415
-    from pyezvizapi.rtp import RtpPacket  # noqa: PLC0415
+    from pyezvizapi.streaming.local import session as local  # noqa: PLC0415
+    from pyezvizapi.streaming.media.rtp import RtpPacket  # noqa: PLC0415
     monkeypatch.setattr(local, "_iter_idmx_local_packet_frame", lambda packet, **kwargs: (packet,))
     monkeypatch.setattr(local, "_idmx_local_frame_header_size", lambda frame: 12)
     monkeypatch.setattr(local, "_idmx_local_frame_rtp_packet",

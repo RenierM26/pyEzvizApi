@@ -9,7 +9,7 @@ replace the official `ezviz` or existing `ezviz_cloud` integration.
 **This is an isolated validation integration, not a released dependency or
 upstream HA feature.** It has been tested against HA 2026.10.4 / Python 3.14 /
 PyAV 19.0.0, including Python 3.14.8 and 3.14.9 cancellation controls. Other HA versions, browser playback and live-camera operation need
-separate evidence. The shared `pyezvizapi.native_stream` API remains independent
+separate evidence. The shared `pyezvizapi.streaming.native_stream` API remains independent
 of HA. This example is not included in the library wheel.
 
 ## Delivery and authorization

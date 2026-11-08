@@ -15,7 +15,7 @@ from tests.streaming.test_native_stream import Source, options, repeated_ps_pack
 from tests.streaming.test_stream_sample import packet_oracle
 from tests.tools.test_local_av_timeline import encode_three_track_ps
 
-from pyezvizapi.native_stream import NativeTrackSelection
+from pyezvizapi.streaming.native_stream import NativeTrackSelection
 
 
 def identity(physical="source", **changes):

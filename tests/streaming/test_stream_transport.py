@@ -13,7 +13,15 @@ import pytest
 import requests
 
 import pyezvizapi
-from pyezvizapi._stream import (
+from pyezvizapi.client import EzvizClient
+from pyezvizapi.exceptions import DeviceException, HTTPError, PyEzvizError
+from pyezvizapi.streaming.cloud.bootstrap import (
+    get_cloud_stream_info,
+    get_vtdu_token_v2,
+    get_vtm_info,
+    open_cloud_stream,
+)
+from pyezvizapi.streaming.cloud.protocol import (
     VtmChannel,
     VtmMessageCode,
     VtmStreamClient,
@@ -36,20 +44,12 @@ from pyezvizapi._stream import (
     parse_vtm_url,
     summarize_vtm_packet,
 )
-from pyezvizapi.client import EzvizClient
-from pyezvizapi.cloud_stream import (
-    get_cloud_stream_info,
-    get_vtdu_token_v2,
-    get_vtm_info,
-    open_cloud_stream,
-)
-from pyezvizapi.exceptions import DeviceException, HTTPError, PyEzvizError
 
 BODY = b"abc"
 
-cloud_stream_module = importlib.import_module("pyezvizapi.cloud_stream")
+cloud_stream_module = importlib.import_module("pyezvizapi.streaming.cloud.bootstrap")
 
-stream_module = importlib.import_module("pyezvizapi.stream")
+stream_module = importlib.import_module("pyezvizapi.streaming.cloud.protocol")
 
 CAMERA_SERIAL_BYTES = b"CAM123"
 
@@ -1731,7 +1731,7 @@ def test_get_cloud_stream_info_builds_bootstrap(monkeypatch) -> None:
     client = _client()
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtm_page_list",
         lambda _client: {
             "resourceInfos": [
                 {
@@ -1751,7 +1751,7 @@ def test_get_cloud_stream_info_builds_bootstrap(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtdu_token_v2",
         lambda _client: {"retcode": 0, "tokens": ["token-1"]},
     )
 
@@ -1768,7 +1768,7 @@ def test_get_cloud_stream_info_can_refresh_vtm_from_app_endpoint(monkeypatch) ->
     client = _client()
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtm_page_list",
         lambda _client: {
             "resourceInfos": [
                 {
@@ -1782,11 +1782,11 @@ def test_get_cloud_stream_info_can_refresh_vtm_from_app_endpoint(monkeypatch) ->
         },
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtdu_token_v2",
         lambda _client: {"retcode": 0, "tokens": ["token-1"]},
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtm_info",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtm_info",
         lambda _client, _serial, _channel: {"externalIp": "5.6.7.8", "port": 9554},
     )
 
@@ -1800,7 +1800,7 @@ def test_open_cloud_stream_returns_unstarted_vtm_client(monkeypatch) -> None:
     client = _client()
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_cloud_stream_info",
+        "pyezvizapi.streaming.cloud.bootstrap.get_cloud_stream_info",
         lambda *_args, **_kwargs: {
             "stream_url": "ysproto://vtm.example.test:8554/live?dev=CAM123"
         },
@@ -1817,7 +1817,7 @@ def test_get_cloud_stream_info_uses_requested_channel_resource(monkeypatch) -> N
     client = _client()
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtm_page_list",
         lambda _client: {
             "resourceInfos": [
                 {
@@ -1840,7 +1840,7 @@ def test_get_cloud_stream_info_uses_requested_channel_resource(monkeypatch) -> N
         },
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtdu_token_v2",
         lambda _client: {"retcode": 0, "tokens": ["token-1"]},
     )
 
@@ -1857,14 +1857,14 @@ def test_get_cloud_stream_info_rejects_missing_vtm_endpoint(monkeypatch) -> None
     client = _client()
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtm_page_list",
         lambda _client: {
             "resourceInfos": [{"deviceSerial": "CAM123", "resourceId": "Video"}],
             "VTM": {"Video": {"port": 8554}},
         },
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtdu_token_v2",
         lambda _client: {"retcode": 0, "tokens": ["token-1"]},
     )
 
@@ -1875,7 +1875,7 @@ def test_get_cloud_stream_info_refreshes_missing_pagelist_vtm(monkeypatch) -> No
     client = _client()
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtm_page_list",
         lambda _client: {
             "resourceInfos": [
                 {
@@ -1889,7 +1889,7 @@ def test_get_cloud_stream_info_refreshes_missing_pagelist_vtm(monkeypatch) -> No
         },
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtm_info",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtm_info",
         lambda _client, serial, channel: {
             "externalIp": "1.2.3.4",
             "port": 8554,
@@ -1898,7 +1898,7 @@ def test_get_cloud_stream_info_refreshes_missing_pagelist_vtm(monkeypatch) -> No
         },
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtdu_token_v2",
         lambda _client: {"retcode": 0, "tokens": ["token-1"]},
     )
 
@@ -1913,14 +1913,14 @@ def test_get_cloud_stream_info_rejects_missing_vtm_port(monkeypatch) -> None:
     client = _client()
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtm_page_list",
         lambda _client: {
             "resourceInfos": [{"deviceSerial": "CAM123", "resourceId": "Video"}],
             "VTM": {"Video": {"externalIp": "1.2.3.4"}},
         },
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtdu_token_v2",
         lambda _client: {"retcode": 0, "tokens": ["token-1"]},
     )
 
@@ -1931,14 +1931,14 @@ def test_get_cloud_stream_info_rejects_out_of_range_vtm_port(monkeypatch) -> Non
     client = _client()
 
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtm_page_list",
         lambda _client: {
             "resourceInfos": [{"deviceSerial": "CAM123", "resourceId": "Video"}],
             "VTM": {"Video": {"externalIp": "1.2.3.4", "port": 70000}},
         },
     )
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        "pyezvizapi.streaming.cloud.bootstrap.get_vtdu_token_v2",
         lambda _client: {"retcode": 0, "tokens": ["token-1"]},
     )
 

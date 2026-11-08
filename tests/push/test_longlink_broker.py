@@ -7,10 +7,10 @@ from unittest.mock import Mock
 import paho.mqtt.client as mqtt
 import pytest
 
-from pyezvizapi._longlink_auth import PushCredentials
-from pyezvizapi._longlink_session import Channel99Session
-from pyezvizapi._longlink_worker import PushWorker
 from pyezvizapi.exceptions import EzvizPushFatalError
+from pyezvizapi.push.longlink.auth import PushCredentials
+from pyezvizapi.push.longlink.session import Channel99Session
+from pyezvizapi.push.longlink.worker import PushWorker
 
 KEY = bytes(range(16))
 CREDENTIALS = PushCredentials(bytes(range(32)), KEY, KEY, {"Address": "broker.invalid", "Port": 8667})
@@ -132,7 +132,7 @@ def test_missing_connack_or_suback_has_bounded_retryable_setup(monkeypatch, ackn
     session = connection()
     client = broker(monkeypatch, session, 0)
     ticks = iter([0, 31])
-    monkeypatch.setattr("pyezvizapi._longlink_session.monotonic", lambda: next(ticks))
+    monkeypatch.setattr("pyezvizapi.push.longlink.session.monotonic", lambda: next(ticks))
 
     def loop(**kwargs):
         if not session._closed.is_set() and acknowledge_connect:
@@ -194,7 +194,7 @@ def test_successful_subscription_survives_setup_deadline_and_ignores_late_shutdo
     session = connection()
     client = broker(monkeypatch, session, 0)
     stopped = Event()
-    monkeypatch.setattr("pyezvizapi._longlink_session.monotonic", lambda: 0 if not session.ready.is_set() else 100)
+    monkeypatch.setattr("pyezvizapi.push.longlink.session.monotonic", lambda: 0 if not session.ready.is_set() else 100)
 
     def loop(**kwargs):
         if session._closed.is_set():

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, BinaryIO, ClassVar
 
-import pyezvizapi.__main__ as cli_module
+import pyezvizapi.cli.main as cli_module
 
 
 class FakeClient:
@@ -409,8 +409,8 @@ class FakeCamera:
     def alarm_notify(self, enable: int) -> None:
         self.calls.append(("alarm_notify", (enable,)))
 
-    def alarm_detection_sensibility(self, sensibility: int) -> None:
-        self.calls.append(("alarm_detection_sensibility", (sensibility,)))
+    def alarm_detection_sensitivity(self, sensibility: int) -> None:
+        self.calls.append(("alarm_detection_sensitivity", (sensibility,)))
 
     def do_not_disturb(self, enable: int) -> None:
         self.calls.append(("do_not_disturb", (enable,)))

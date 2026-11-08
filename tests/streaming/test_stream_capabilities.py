@@ -6,9 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from pyezvizapi import capabilities_cli, stream_capabilities as capabilities
+from pyezvizapi.cli import capabilities as capabilities_cli
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.hcnetsdk import (
+from pyezvizapi.streaming import capabilities
+from pyezvizapi.streaming.capabilities import (
+    StreamCapabilityTarget,
+    StreamSampleEvidence,
+    probe_stream_capabilities,
+)
+from pyezvizapi.streaming.local.hcnetsdk.api import (
     HcNetSdkLanEndpoint,
     HcNetSdkLoginCandidate,
     HcNetSdkStreamDetails,
@@ -16,15 +22,10 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_audio_video_compress_info,
     ezviz_lan_compression_config,
 )
-from pyezvizapi.stream_capabilities import (
-    StreamCapabilityTarget,
-    StreamSampleEvidence,
-    probe_stream_capabilities,
-)
 from tests.streaming.local.test_local_stream_details import (
     ABILITY,
     config_bytes,
-    wire as wire,  # noqa: PLC0414 -- retained pytest fixture registration
+    wire as wire,  # noqa: PLC0414 -- pytest fixture registration
 )
 
 

@@ -1,6 +1,6 @@
 # Continuous native MPEG-PS stream boundary
 
-`pyezvizapi.native_stream` is a headless source owner for an HA integration's
+`pyezvizapi.streaming.native_stream` is a headless source owner for an HA integration's
 future HTTP route. It incrementally frames/decrypts local MPEG-PS and copies one
 observed H.264/HEVC track plus optional AAC into MPEG-TS. No decoder, player,
 transcoder, listener or account session is created. Install the optional
@@ -23,8 +23,8 @@ upstream-compatible. No current HA configuration is changed by these APIs.
 Use supplied local credentials and the existing lazy offline packet source:
 
 ```python
-from pyezvizapi.clip import AutoClipSource
-from pyezvizapi.native_stream import (
+from pyezvizapi.streaming.capture import AutoClipSource
+from pyezvizapi.streaming.native_stream import (
     NativeStreamOptions,
     NativeTrackSelection,
     native_mpegts_stream_from_client,

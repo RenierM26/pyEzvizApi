@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from pyezvizapi._auth import discover_services, refresh_credentials
+from pyezvizapi.cloud.auth import discover_services, refresh_credentials
 from pyezvizapi.constants import FEATURE_CODE
 from pyezvizapi.exceptions import PyEzvizError
 

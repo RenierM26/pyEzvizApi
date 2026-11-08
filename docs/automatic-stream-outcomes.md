@@ -7,7 +7,7 @@ of accounting; reading or mutating a snapshot does not advance the stream.
 
 ```python
 from contextlib import closing
-from pyezvizapi.media import CaptureLimits
+from pyezvizapi.streaming.media.models import CaptureLimits
 
 with client.open_stream(serial, source=source_options) as stream:
     with closing(stream.iter_media_packets(limits=CaptureLimits(duration_seconds=8))) as packets:

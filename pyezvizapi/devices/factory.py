@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from pyezvizapi.devices.camera import EzvizCamera
+from pyezvizapi.devices.detector import EzvizDetector
 from pyezvizapi.devices.light_bulb import EzvizLightBulb
 from pyezvizapi.devices.smart_plug import EzvizSmartPlug
 
@@ -46,3 +47,8 @@ def smart_plug_status(
     """Build a smart plug wrapper and return its status mapping."""
 
     return EzvizSmartPlug(client, serial, device_obj).status()
+
+
+def detector_status(client: object, serial: str, device_obj: dict[str, Any]) -> dict[str, Any]:
+    """Build a read-only detector without camera status or alarm requests."""
+    return EzvizDetector(client, serial, device_obj).status()

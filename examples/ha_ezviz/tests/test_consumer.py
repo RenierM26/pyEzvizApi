@@ -2,6 +2,8 @@
 
 # ruff: noqa: SLF001 -- acceptance controls inspect explicit worker ownership
 from copy import deepcopy
+import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -220,3 +222,27 @@ async def test_channel99_requires_persistence_even_after_profile_migration(hass,
 
     with pytest.raises(PyEzvizError, match="on_token_updated"):
         await hass.async_add_executor_job(sdk.connect)
+
+
+async def test_detector_inventory_does_not_create_camera_entities(hass, client, monkeypatch):
+    """Run the real pinned coordinator/platform with a mixed sensor inventory."""
+    page = client._get_page_list()
+    fixture = Path(__file__).resolve().parents[3] / "tests/fixtures/detector_page_list.json"
+    sensors = json.loads(fixture.read_text())
+    page["deviceInfos"].extend(sensors["deviceInfos"])
+    page.setdefault("FEATURE_INFO", {}).update(sensors["FEATURE_INFO"])
+    monkeypatch.setattr(client, "_get_page_list", lambda: deepcopy(page))
+    data = await make_coordinator(hass, client)
+    assert set(data.data) == {"CAM123"}
+    detectors = await hass.async_add_executor_job(lambda: client.load_detectors(refresh=False))
+    assert set(detectors) == {"CONTACT001", "WATER00001", "SIREN00001"}
+    assert detectors["CONTACT001"]["battery_level"] == 0
+    assert detectors["WATER00001"]["water_leak_status"] == 0
+    assert detectors["SIREN00001"]["siren_tamper_detection"] is False
+    hass.data[DOMAIN] = {"entry": {DATA_COORDINATOR: data}}
+    entry = MagicMock(entry_id="entry", options={"cameras": {"CAM123": {"enc_key": "synthetic"}}})
+    monkeypatch.setattr(camera, "get_ffmpeg_manager", lambda hass: MagicMock())
+    monkeypatch.setattr(camera, "async_get_current_platform", MagicMock())
+    entities: list[camera.EzvizCamera] = []
+    await camera.async_setup_entry(hass, entry, entities.extend)
+    assert [entity.unique_id for entity in entities] == ["CAM123"]

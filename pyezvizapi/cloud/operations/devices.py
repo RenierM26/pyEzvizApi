@@ -18,10 +18,10 @@ if TYPE_CHECKING:
 def load_devices(
     self: _owner_types.EzvizClient, refresh: bool, *, _owner: _ModuleType
 ) -> _owner_types.JsonDict:
-    """Build status maps for cameras and light bulbs.
+    """Build status maps for cameras, lights, plugs and read-only detectors.
 
     refresh: if True, camera.status() may perform network fetches (e.g. alarms).
-    Returns a combined mapping of serial -> status dict for both cameras and bulbs.
+    Returns a combined mapping of serial -> status dict for supported devices.
 
     Note: We update in place and do not remove keys for devices that may
     have disappeared. Users who intentionally remove a device can restart
@@ -39,6 +39,7 @@ def load_devices(
         if rec.device_category in (
             _owner.DeviceCatagories.LIGHTING.value,
             _owner.DeviceCatagories.SOCKET.value,
+            _owner.DeviceCatagories.DETECTOR_DEVICE_CATEGORY.value,
         ):
             return False
         return not (
@@ -84,6 +85,19 @@ def load_devices(
                         "smart_plug_status",
                         type(err).__name__,
                     )
+            elif rec.device_category == _owner.DeviceCatagories.DETECTOR_DEVICE_CATEGORY.value:
+                try:
+                    self._detectors[device] = _owner.device_factory.detector_status(
+                        self, device, dict(rec.raw)
+                    )
+                except (_owner.PyEzvizError, KeyError, TypeError, ValueError) as err:
+                    _owner._LOGGER.warning(
+                        "Load_device_failed: serial=%s code=%s stage=%s error_type=%s",
+                        device,
+                        "load_error",
+                        "detector_status",
+                        type(err).__name__,
+                    )
             else:
                 try:
                     self._cameras[device] = _owner.device_factory.camera_status(
@@ -101,7 +115,7 @@ def load_devices(
                         "camera_status",
                         type(err).__name__,
                     )
-    return {**self._cameras, **self._light_bulbs, **self._smart_plugs}
+    return {**self._cameras, **self._light_bulbs, **self._smart_plugs, **self._detectors}
 
 
 def _prefetch_latest_camera_alarms(
@@ -207,6 +221,14 @@ def load_smart_plugs(
     """
     self.load_devices(refresh=refresh)
     return self._smart_plugs
+
+
+def load_detectors(
+    self: _owner_types.EzvizClient, refresh: bool, *, _owner: _ModuleType
+) -> _owner_types.JsonDict:
+    """Return detectors only; never route them through camera status/prefetch."""
+    self.load_devices(refresh=refresh)
+    return self._detectors
 
 
 def get_device_infos(

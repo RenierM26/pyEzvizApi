@@ -46,6 +46,7 @@ token precedence, source installation and authentication troubleshooting.
 | Area | Start here |
 | --- | --- |
 | Python account/device client | [Python API guide](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/python-api.md) |
+| Read-only T2C/T10C/T9C detector status | [Detector guide](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/detectors.md) |
 | CLI inventory, status and controls | [Command-line guide](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/cli.md) |
 | Push notifications | [Channel-99 migration and lifecycle](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/channel99.md) |
 | Images, finite clips and stream paths | [Media guide](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/media.md) |

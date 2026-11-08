@@ -748,6 +748,7 @@ class EzvizClient:
         DeviceCatagories.LIGHTING.value,
         DeviceCatagories.SOCKET.value,
         DeviceCatagories.W2H_BASE_STATION_DEVICE_CATEGORY.value,
+        DeviceCatagories.DETECTOR_DEVICE_CATEGORY.value,
     ]
 
     def __init__(
@@ -787,6 +788,7 @@ class EzvizClient:
         self._cameras: dict[str, Any] = {}
         self._light_bulbs: dict[str, Any] = {}
         self._smart_plugs: dict[str, Any] = {}
+        self._detectors: dict[str, Any] = {}
         self.mqtt_client: MQTTClient | None = None
         self._debug_request_counters: dict[str, int] = {}
 
@@ -2060,10 +2062,10 @@ class EzvizClient:
         )
 
     def load_devices(self, refresh: bool = True) -> JsonDict:
-        """Build status maps for cameras and light bulbs.
+        """Build status maps for cameras, lights, plugs and read-only detectors.
 
         refresh: if True, camera.status() may perform network fetches (e.g. alarms).
-        Returns a combined mapping of serial -> status dict for both cameras and bulbs.
+        Returns a combined mapping of serial -> status dict for supported devices.
 
         Note: We update in place and do not remove keys for devices that may
         have disappeared. Users who intentionally remove a device can restart
@@ -2099,6 +2101,10 @@ class EzvizClient:
         refresh: pass-through to load_devices().
         """
         return _devices.load_smart_plugs(self, refresh, _owner=_sys.modules[__name__])
+
+    def load_detectors(self, refresh: bool = True) -> JsonDict:
+        """Return read-only detector statuses; refresh follows load_devices()."""
+        return _devices.load_detectors(self, refresh, _owner=_sys.modules[__name__])
 
     def get_device_infos(self, serial: str | None = None) -> JsonDict:
         """Load all devices and build dict per device serial."""

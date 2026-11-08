@@ -1,0 +1,21 @@
+{
+  "deviceInfos": [
+    {"deviceSerial": "CONTACT001", "name": "Synthetic contact", "deviceCategory": "Detector", "deviceSubCategory": "T2C", "version": "V1.0", "status": 1},
+    {"deviceSerial": "WATER00001", "name": "Synthetic water", "deviceCategory": "Detector", "deviceSubCategory": "T10C", "status": 1},
+    {"deviceSerial": "SIREN00001", "name": "Synthetic siren", "deviceCategory": "Detector", "deviceSubCategory": "T9C", "status": 0}
+  ],
+  "FEATURE_INFO": {
+    "CONTACT001": {"0": {"global": {
+      "DoorMagnetic": {"DoorStatus": 1, "OpenRemindSwitch": false, "ClosedRemindSwitch": 0, "OpenGateWaySwitch": 1, "ClosedGateWaySwitch": 0, "OpenDetectionTime": 30},
+      "BatteryInfo": {"SurplusPower": 0},
+      "PowerMgr": {"SurplusPower": 88}
+    }}},
+    "WATER00001": {"0": {"global": {
+      "WaterOutSense": {"WaterOutStatus": 0}, "PowerMgr": {"SurplusPower": 75}
+    }}},
+    "SIREN00001": {"0": {"global": {
+      "SirenMgr": {"SirenWorkState": {"workState": 0}, "SirenAlarmVolume": {"alarmVolume": 0}, "SirenAlarmDuration": {"alarmDuration": 60}, "SirenTamperCfg": {"tamperDetection": false}, "SirenMotionDetectCfg": {"moveDetection": 1}},
+      "ZigbeeMgr": {"ZigbeeSignal": {"signal": -65}}, "PowerMgr": {"PowerMode": {"mode": 1}}
+    }}}
+  }
+}

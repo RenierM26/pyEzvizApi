@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         SupportExt,
     )
     from pyezvizapi.devices.camera import EzvizCamera
+    from pyezvizapi.devices.detector import EzvizDetector
     from pyezvizapi.devices.features import (
         day_night_mode_value,
         day_night_sensitivity_value,
@@ -1126,6 +1127,7 @@ _EXPORTS = {
     "SadpModifyDeviceNetParamV40Request": "streaming.local.hcnetsdk.api",
     "SadpSetLogToFileRequest": "streaming.local.hcnetsdk.api",
     "SadpStartRequest": "streaming.local.hcnetsdk.api",
+    "EzvizDetector": "devices.detector",
     "EzvizLightBulb": "devices.light_bulb",
     "EzvizSmartPlug": "devices.smart_plug",
     "EzvizToken": "push.mqtt",

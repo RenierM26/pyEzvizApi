@@ -25,6 +25,8 @@ also be run separately at `tests/test_push_lifecycle.py` in its checkout.
 - All 50 distinct library imports in consumer source resolve.
 - Real account setup/first refresh/unload, with synthetic login and HTTP replies.
 - Real `load_cameras` → device parsing/status → coordinator → camera setup.
+- Mixed detector/camera inventory: detector statuses remain readable through
+  `load_detectors`, without becoming coordinator camera records or camera entities.
 - Camera motion controls reach real library PUT construction (HTTP stub only).
 - RTSP source URL and image request delegation (FFmpeg stub, no playback).
 - Auth/HTTP polling error translation and subsequent recovery.

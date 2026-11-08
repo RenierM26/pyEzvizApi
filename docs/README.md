@@ -9,6 +9,7 @@ See [release availability](releases.md#source-state-is-not-a-published-release).
 | Task | Guide |
 | --- | --- |
 | Install, authenticate or fix a token/CLI problem | [Getting started](getting-started.md) |
+| Read gateway-linked contact, water and siren sensor status | [Detectors](detectors.md) |
 | Call the synchronous client from Python | [Python API](python-api.md) |
 | List devices, control a camera or inspect recordings | [CLI](cli.md) |
 | Migrate push and persist its credentials | [Channel-99](channel99.md) |

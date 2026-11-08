@@ -5,6 +5,11 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+- Add read-only gateway-linked Detector support and `load_detectors()`, based on
+  Simone Rescio (@srescio)'s [PR #99](https://github.com/RenierM26/pyEzvizApi/pull/99).
+  Parse contact, water, siren, battery and radio properties from `FEATURE_INFO`;
+  keep detectors out of camera status/alarm-prefetch paths.
+
 - Use typed LAN/cloud recording route configurations and transfer limits;
   LAN-only catalog/batch commands no longer construct an account client or
   load account tokens. Existing batch arguments and receipts remain compatible.

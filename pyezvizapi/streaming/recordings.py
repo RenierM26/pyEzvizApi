@@ -25,13 +25,13 @@ _digest = _store._digest
 # These historical helpers remain intentional compatibility exports, even
 # though their implementation owners no longer call them through this facade.
 __all__ = [
-    "_record_time",
-    "_stamp",
-    "_index_records",
-    "_batch_channel",
-    "_digest",
     "RecordingCatalog",
     "StoredRecording",
+    "_batch_channel",
+    "_digest",
+    "_index_records",
+    "_record_time",
+    "_stamp",
     "download_recordings",
     "query_recordings",
     "write_recording_json",

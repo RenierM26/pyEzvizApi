@@ -482,8 +482,10 @@ def save_cloud_playback_clip(client: Any, serial: str, output: Any, options: Any
                 staged.close()  # Required before replacement on Windows.
                 os.replace(temporary, path)
             finally:
-                staged.close()
-                temporary.unlink(missing_ok=True)
+                try:
+                    staged.close()
+                finally:
+                    temporary.unlink(missing_ok=True)
             output_name = str(path)
         else:
             _publish_playback(cast(BinaryIO, data), output)

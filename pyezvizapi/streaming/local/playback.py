@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import ExitStack, closing
 from datetime import datetime
-from ipaddress import IPv4Address
 import os
 from pathlib import Path
 import socket
@@ -19,7 +18,22 @@ import time
 from typing import Any, BinaryIO, cast
 
 from pyezvizapi.exceptions import EzvizIncompleteMediaError, PyEzvizError
-from pyezvizapi.streaming.cloud.playback_range import (
+from pyezvizapi.streaming.local.hcnetsdk.api import (
+    HcNetSdkCommandPortClient,
+    HcNetSdkLanEndpoint,
+    hcnetsdk_command_port_rsa_key,
+)
+from pyezvizapi.streaming.local.sd_session import lan_sd_session
+from pyezvizapi.streaming.local.sd_transport import (
+    LanPlaybackError,
+    read_exact as _read_exact,
+    validate_connection as _validate_connection,
+)
+from pyezvizapi.streaming.media.mpegps import (
+    mpeg_ps_video_pts_span_seconds,
+    validate_sd_playback_framing,
+)
+from pyezvizapi.streaming.ranges import (
     DEFAULT_PLAYBACK_MAX_BYTES,
     DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,
     native_playback_range,
@@ -27,20 +41,9 @@ from pyezvizapi.streaming.cloud.playback_range import (
     positive_timeout,
     selected_playback_range,
 )
-from pyezvizapi.streaming.local.hcnetsdk.api import (
-    HcNetSdkCommandPortClient,
-    HcNetSdkCommandPortControlTemplate,
-    HcNetSdkLanEndpoint,
-    hcnetsdk_command_port_rsa_key,
-)
-from pyezvizapi.streaming.media.mpegps import (
-    mpeg_ps_video_pts_span_seconds,
-    validate_sd_playback_framing,
-)
 
 _SELECT_TIME = 0x30102
 _START_DOWNLOAD = 0x30103
-_LOGOUT = 0x10100
 _METADATA = 19
 _MEDIA = 20
 _END = 21
@@ -48,16 +51,6 @@ _MAX_BLOCK_BYTES = 1024 * 1024
 _MAX_METADATA_BYTES = 4096
 _SPOOL_BYTES = 1024 * 1024
 _STREAM_SIGNATURE = b"IMKH"
-
-
-class LanPlaybackError(PyEzvizError):
-    """A LAN playback operation failed with a numeric device response."""
-
-    def __init__(self, stage: str, result_code: int) -> None:
-        self.stage = stage
-        self.result_code = result_code
-        self.source = "local-playback"
-        super().__init__(f"LAN SD playback {stage} refused (result {result_code})")
 
 
 def lan_playback_body(channel: int, begin_time: str, end_time: str, timezone: str) -> bytes:
@@ -83,23 +76,6 @@ def _write(output: BinaryIO, data: bytes) -> None:
         if isinstance(count, bool) or not isinstance(count, int) or not 0 < count <= len(view):
             raise PyEzvizError("LAN SD output write made no valid progress")
         view = view[count:]
-
-
-def _read_exact(sock: Any, size: int, deadline: float, timeout: float) -> bytes:
-    data = bytearray()
-    while len(data) < size:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise PyEzvizError("LAN SD transfer deadline expired")
-        sock.settimeout(min(timeout, remaining))
-        try:
-            chunk = sock.recv(size - len(data))
-        except TimeoutError:
-            raise PyEzvizError("LAN SD download timed out before its end marker") from None
-        if not chunk:
-            raise PyEzvizError("LAN SD download ended before its complete end marker")
-        data.extend(chunk)
-    return bytes(data)
 
 
 def _metadata(data: bytes) -> tuple[dict[str, int], int]:
@@ -188,41 +164,6 @@ def _publish(staged: BinaryIO, output: str | Path | BinaryIO) -> str | None:
     return str(path)
 
 
-def _validate_connection(
-    endpoint: HcNetSdkLanEndpoint, username: str, password: str | bytes
-) -> None:
-    if (
-        not isinstance(password, str | bytes)
-        or not 0 < len(password.encode() if isinstance(password, str) else password) <= 64
-    ):
-        raise PyEzvizError("LAN SD requires a supplied device password of 1-64 bytes")
-    if not isinstance(username, str) or not username or len(username.encode()) > 32:
-        raise PyEzvizError("LAN SD requires a username of 1-32 bytes")
-    if not isinstance(endpoint.host, str):
-        raise PyEzvizError("LAN SD requires an explicit camera IPv4 address")
-    try:
-        address = IPv4Address(endpoint.host)
-    except (ValueError, TypeError):
-        raise PyEzvizError("LAN SD requires an explicit camera IPv4 address") from None
-    if address.is_unspecified or address.is_multicast:
-        raise PyEzvizError("LAN SD camera address must be unicast")
-    if (
-        isinstance(endpoint.command_port, bool)
-        or not isinstance(endpoint.command_port, int)
-        or not 1 <= endpoint.command_port <= 65535
-    ):
-        raise PyEzvizError("LAN SD command port is invalid")
-    if (
-        not isinstance(endpoint.serial, str)
-        or len(endpoint.serial) < 9
-        or not endpoint.serial.isascii()
-        or not endpoint.serial.isalnum()
-    ):
-        raise PyEzvizError(
-            "LAN SD requires the full device serial (at least 9 ASCII alphanumeric characters)"
-        )
-
-
 def _acquire(
     endpoint: HcNetSdkLanEndpoint,
     password: str | bytes,
@@ -236,67 +177,32 @@ def _acquire(
     socket_factory: Callable[..., Any],
     rsa_key: Any,
 ) -> dict[str, Any]:
-    login_session = None
-    local_ip = ""
-
-    def client() -> HcNetSdkCommandPortClient:
-        return HcNetSdkCommandPortClient(endpoint, timeout=timeout, socket_factory=socket_factory)
-
-    def frame(command: int, tail: bytes = b"") -> bytes:
-        if login_session is None:
-            raise PyEzvizError("LAN SD has no owned login session")
-        return HcNetSdkCommandPortControlTemplate(command, tail).to_frame(
-            session_id=login_session.session_id,
-            auth_seed=login_session.auth_seed,
-            key=login_session.challenge,
-            local_ip=local_ip,
+    with (
+        lan_sd_session(
+            endpoint,
+            password,
+            username=username,
+            deadline=deadline,
+            rsa_key=rsa_key,
+            client_factory=lambda: HcNetSdkCommandPortClient(
+                endpoint, timeout=timeout, socket_factory=socket_factory
+            ),
+            purpose="playback",
+        ) as session,
+        closing(session.client()) as stream,
+    ):
+        stream.send_command_frame(session.frame(_SELECT_TIME, body), deadline=deadline)
+        selected = stream.read_tcp_frame(max_frame_bytes=_MAX_METADATA_BYTES, deadline=deadline)
+        if selected.header.field_8 != 1:
+            raise LanPlaybackError("selection", selected.header.field_8)
+        stream.send_command_frame(session.frame(_START_DOWNLOAD, bytes(4)), deadline=deadline)
+        metadata = _receive(
+            stream,
+            staged,
+            deadline=deadline,
+            timeout=timeout,
+            max_bytes=max_bytes,
         )
-
-    def logout() -> None:
-        with closing(client()) as control:
-            control.send_command_frame(frame(_LOGOUT), deadline=deadline)
-            response = control.read_tcp_frame(
-                max_frame_bytes=_MAX_METADATA_BYTES, deadline=deadline
-            )
-            if response.header.field_8 != 1:
-                raise LanPlaybackError("logout", response.header.field_8)
-
-    try:
-        # Do not enter the client context here: that would connect before
-        # login's deadline-aware connect path gets a chance to run.
-        with closing(client()) as login:
-            login_session = login.login(
-                password=password,
-                username=username,
-                rsa_key=rsa_key,
-                max_frame_bytes=_MAX_METADATA_BYTES,
-                deadline=deadline,
-            )
-            local_ip = str(login.sock.getsockname()[0])
-            if not login_session.serial.endswith(endpoint.serial):
-                raise PyEzvizError("LAN SD camera identity differs from supplied serial")
-        with closing(client()) as stream:
-            stream.send_command_frame(frame(_SELECT_TIME, body), deadline=deadline)
-            selected = stream.read_tcp_frame(max_frame_bytes=_MAX_METADATA_BYTES, deadline=deadline)
-            if selected.header.field_8 != 1:
-                raise LanPlaybackError("selection", selected.header.field_8)
-            stream.send_command_frame(frame(_START_DOWNLOAD, bytes(4)), deadline=deadline)
-            metadata = _receive(
-                stream,
-                staged,
-                deadline=deadline,
-                timeout=timeout,
-                max_bytes=max_bytes,
-            )
-    except BaseException as error:
-        if login_session is not None:
-            try:
-                logout()
-            except Exception:
-                error.add_note("LAN SD logout was not acknowledged; owned sockets were closed")
-        raise
-    else:
-        logout()
     return metadata
 
 

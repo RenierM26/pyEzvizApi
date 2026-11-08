@@ -5,6 +5,9 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+- Share native LAN SD login/logout ownership and route-neutral clock/validation
+  helpers without changing wire selectors, playback parsing or public entrypoints.
+
 - Add account-free native LAN SD recording discovery and route-tagged catalogs,
   with finite search bounds and explicit channel/timezone handling.
 

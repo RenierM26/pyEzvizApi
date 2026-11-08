@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 import hashlib
 import json
 import os
@@ -19,12 +19,14 @@ from typing import Any
 import zlib
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.streaming.cloud.playback_range import (
+from pyezvizapi.streaming.ranges import (
     native_playback_range,
     playback_integer,
     playback_range,
     playback_timezone,
     positive_timeout,
+    record_time as _record_time,
+    utc_stamp as _stamp,
 )
 
 
@@ -79,31 +81,6 @@ class RecordingCatalog:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise PyEzvizError("Invalid recording catalog") from error
-
-
-def _stamp(value: datetime) -> str:
-    return value.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
-
-
-def _record_time(value: Any, timezone: str) -> datetime:
-    if not isinstance(value, str):
-        raise PyEzvizError("SD catalog timestamp must be an ISO date/time string")
-    try:
-        instant = datetime.fromisoformat(value)
-    except ValueError as error:
-        raise PyEzvizError("Invalid SD catalog date/time") from error
-    if instant.microsecond:
-        raise PyEzvizError("SD catalog requires whole-second timestamps")
-    if instant.tzinfo is None:
-        zone = playback_timezone(timezone)
-        instant = instant.replace(tzinfo=zone)
-        if instant.replace(fold=0).utcoffset() != instant.replace(fold=1).utcoffset():
-            raise PyEzvizError("Ambiguous SD catalog local time")
-        if instant.astimezone(UTC).astimezone(zone).replace(tzinfo=None) != datetime.fromisoformat(
-            value
-        ):
-            raise PyEzvizError("Nonexistent SD catalog local time")
-    return instant.astimezone(UTC)
 
 
 def _index_records(payload: Any) -> tuple[list[Any], bool]:

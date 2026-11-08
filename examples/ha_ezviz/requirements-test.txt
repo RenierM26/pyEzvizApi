@@ -1,0 +1,4 @@
+-r ../home_assistant/requirements-test.txt
+# Actual consumer imports HA's FFmpeg component, whose integration dependency
+# is not installed by the core HA wheel. Match HA 2026.10.4's manifest.
+ha-ffmpeg==3.2.2

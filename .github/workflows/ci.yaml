@@ -198,7 +198,7 @@ jobs:
           fi
           ffmpeg -version
       - name: Install isolated HA validation dependencies
-        run: pip install -e . -r examples/home_assistant/requirements-test.txt
+        run: pip install -e . -r examples/ha_ezviz/requirements-test.txt
       - name: HA HTTP, config flow, stream and lifecycle controls
         run: python -m pytest examples/home_assistant/tests -o asyncio_mode=auto
       - name: Check out pinned ha-ezviz consumer

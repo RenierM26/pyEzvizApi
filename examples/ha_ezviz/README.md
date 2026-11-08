@@ -9,7 +9,7 @@ CI fetches that exact commit separately. Locally, in Python 3.14:
 
 ```sh
 python -m venv /tmp/ha-consumer
-/tmp/ha-consumer/bin/pip install -e . -r examples/home_assistant/requirements-test.txt
+/tmp/ha-consumer/bin/pip install -e . -r examples/ha_ezviz/requirements-test.txt
 git clone https://github.com/RenierM26/ha-ezviz /tmp/ha-ezviz-source
 git -C /tmp/ha-ezviz-source checkout aa37ffa0349d26bcc7ba262c9ad90f50d904b4af
 HA_EZVIZ_SOURCE=/tmp/ha-ezviz-source /tmp/ha-consumer/bin/python -m pytest examples/ha_ezviz/tests -o asyncio_mode=auto

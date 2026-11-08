@@ -22,8 +22,9 @@ def normalize_alarm_time(
 
     Behavior:
       - Prefer epoch fields (alarmStartTime/alarmTime). Interpret as UTC by default.
-      - If a string time exists and differs from the epoch by >120 seconds,
-        reinterpret the epoch as if reported in camera local time.
+      - Reinterpret a local-clock-encoded epoch only when the companion string
+        agrees with that wall clock (within 120 seconds), not merely because
+        the configured offset and localized string disagree (for example DST).
       - If no epoch, fall back to parsing the string time in the camera tz.
     """
     # Prefer epoch
@@ -55,13 +56,19 @@ def normalize_alarm_time(
                     ).replace(tzinfo=tzinfo)
                     diff = abs((event_utc - dt_str_local.astimezone(datetime.UTC)).total_seconds())
                     if diff > 120:
-                        # Reinterpret epoch as local clock time in camera tz
+                        # Preserve the legacy local-clock epoch format only with
+                        # corroborating wall-clock evidence. A DST-localized
+                        # string can disagree with a fixed base offset while the
+                        # UTC epoch remains correct; disagreement alone is not
+                        # evidence that the epoch needs reinterpretation.
                         naive_utc = datetime.datetime.fromtimestamp(ts, tz=datetime.UTC).replace(
                             tzinfo=None
                         )
                         event_local_reint = naive_utc.replace(tzinfo=tzinfo)
-                        alarm_dt_local = event_local_reint
-                        alarm_dt_utc = event_local_reint.astimezone(datetime.UTC)
+                        wall_clock_diff = abs((event_local_reint - dt_str_local).total_seconds())
+                        if wall_clock_diff <= 120:
+                            alarm_dt_local = event_local_reint
+                            alarm_dt_utc = event_local_reint.astimezone(datetime.UTC)
                 except ValueError:
                     # Some firmware returns malformed timestamp strings; keep the
                     # epoch-derived value and allow the normal fallback path.

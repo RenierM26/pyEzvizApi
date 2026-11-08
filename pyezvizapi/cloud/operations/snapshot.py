@@ -12,6 +12,7 @@ from pyezvizapi.cloud.deadline import remaining_request_budget, request_deadline
 from pyezvizapi.constants import DeviceCatagories
 from pyezvizapi.devices import factory
 from pyezvizapi.devices.detector import EzvizDetector
+from pyezvizapi.devices.observation import observed_fields, plug_power
 from pyezvizapi.devices.snapshot import (
     CameraState,
     DetectorState,
@@ -54,6 +55,8 @@ def _render(
     refresh: bool,
 ) -> DeviceState:
     raw = dict(record.raw)
+    info = raw.get("deviceInfos")
+    connectivity = info.get("status") if isinstance(info, Mapping) else None
     observed: frozenset[str] = frozenset()
     state_type: type[DeviceState]
     if kind == "camera":
@@ -74,6 +77,7 @@ def _render(
     elif kind == "detector":
         wrapper = EzvizDetector(client, serial, record)
         values = wrapper.status()
+        values["status"] = connectivity
         observed = wrapper.observed_fields()
         return DetectorState(serial, kind, values, DeviceCapabilities(observed))
     elif kind == "light":
@@ -82,7 +86,10 @@ def _render(
     else:
         values = factory.smart_plug_status(client, serial, raw)
         state_type = PlugState
-    observed = frozenset(k for k, value in values.items() if value is not None)
+    values["status"] = connectivity
+    if kind == "plug":
+        values["is_on"] = plug_power(raw)[1]
+    observed = observed_fields(raw, kind)
     return state_type(serial, kind, values, DeviceCapabilities(observed))
 
 

@@ -12,9 +12,9 @@ from unittest.mock import Mock
 import pytest
 
 import pyezvizapi
-from pyezvizapi import EzvizClient
 from pyezvizapi.cloud import deadline
 from pyezvizapi.cloud.operations import snapshot as operation
+from pyezvizapi.constants import DeviceSwitchType
 from pyezvizapi.devices import factory
 from pyezvizapi.devices.snapshot import (
     CameraState,
@@ -33,7 +33,7 @@ from pyezvizapi.models import EzvizDeviceRecord
 
 @pytest.fixture
 def client():
-    value = EzvizClient()
+    value = pyezvizapi.EzvizClient()
     yield value
     value.close_session()
 
@@ -57,6 +57,13 @@ def test_one_acquisition_for_mixed_inventory_and_pure_selectors(client, monkeypa
             ("plug", "Socket"),
         )
     }
+    records["plug"] = EzvizDeviceRecord.from_api(
+        "plug",
+        {
+            "deviceInfos": {"deviceCategory": "Socket"},
+            "SWITCH": [{"type": DeviceSwitchType.PLUG.value, "enable": 0}],
+        },
+    )
     fetch = Mock(return_value=records)
     alarms = Mock(return_value={"cam": {"alarm": "synthetic"}})
     monkeypatch.setattr(client, "get_device_records", fetch)
@@ -286,3 +293,76 @@ def test_camera_auth_failure_is_global_not_a_device_render_defect(client, monkey
     with pytest.raises(EzvizAuthTokenExpired):
         client.poll_devices(DevicePollOptions(include_camera_alarms=False))
     assert client.device_snapshot is None
+
+
+@pytest.mark.parametrize(
+    "code,expected", [(0, False), (1, True), (2, None), (-1, None), (None, None), ("future", None)]
+)
+def test_typed_plug_preserves_source_power_code_without_changing_legacy(
+    client, monkeypatch, code, expected
+):
+    raw = {
+        "deviceInfos": {"deviceCategory": "Socket", "supportExt": {}},
+        "WIFI": {},
+        "SWITCH": [{"type": DeviceSwitchType.PLUG.value, "enable": code}],
+    }
+    # The legacy wrapper only accepts int/bool rows. Mocking the renderer for
+    # other raw codes also proves the typed boundary cannot inherit its coercion.
+    if type(code) in (int, bool):
+        legacy = factory.smart_plug_status(client, "plug", raw)
+        assert legacy["is_on"] is bool(code)
+    else:
+        monkeypatch.setattr(factory, "smart_plug_status", lambda *a: {"is_on": True})
+    monkeypatch.setattr(
+        client, "get_device_records", lambda _: {"plug": EzvizDeviceRecord.from_api("plug", raw)}
+    )
+    state = client.poll_devices().devices["plug"]
+    assert state.is_on is expected
+    assert state.values["is_on"] == code
+    assert state.capabilities.has("is_on") is True
+
+
+def test_observed_camera_properties_do_not_inherit_compatibility_defaults(client, monkeypatch):
+    raw = {"deviceInfos": {"deviceCategory": "IPC"}}
+    monkeypatch.setattr(
+        client, "get_device_records", lambda _: {"cam": EzvizDeviceRecord.from_api("cam", raw)}
+    )
+    first = client.poll_devices(DevicePollOptions(include_camera_alarms=False)).devices["cam"]
+    assert first.values["alarm_notify"] is False
+    assert first.capabilities.has("alarm_notify") is None
+    assert first.capabilities.has("encrypted") is None
+    raw["STATUS"] = {"globalStatus": None, "isEncrypt": None}
+    second = client.poll_devices(DevicePollOptions(include_camera_alarms=False)).devices["cam"]
+    assert second.capabilities.has("alarm_notify") is True
+    assert second.capabilities.has("encrypted") is True
+
+
+def test_observed_light_property_paths_include_null_and_not_synthetic_defaults(client, monkeypatch):
+    raw = {
+        "deviceInfos": {"deviceCategory": "lighting", "supportExt": {}},
+        "WIFI": {},
+        "FEATURE": {
+            "featureJson": json.dumps(
+                {
+                    "productId": "synthetic",
+                    "featureItemDtos": [{"itemKey": "light_switch", "dataValue": None}],
+                }
+            )
+        },
+    }
+    monkeypatch.setattr(
+        client, "get_device_records", lambda _: {"light": EzvizDeviceRecord.from_api("light", raw)}
+    )
+    state = client.poll_devices().devices["light"]
+    assert state.capabilities.has("is_on") is True and state.is_on is None
+    assert state.capabilities.has("brightness") is None
+
+
+def test_alarm_defence_status_is_not_connectivity(client, monkeypatch):
+    raw = {"deviceInfos": {"deviceCategory": "IPC"}, "STATUS": {"globalStatus": 1}}
+    record = EzvizDeviceRecord.from_api("cam", raw)
+    assert record.status == 1  # Legacy record fallback remains compatible.
+    monkeypatch.setattr(client, "get_device_records", lambda _: {"cam": record})
+    state = client.poll_devices(DevicePollOptions(include_camera_alarms=False)).devices["cam"]
+    assert state.online is None and state.values["status"] is None
+    assert state.capabilities.has("status") is None

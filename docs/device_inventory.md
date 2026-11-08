@@ -41,14 +41,16 @@ client.close_session()
 ## Typed states and unknowns
 
 `CameraState`, `DetectorState`, `LightState` and `PlugState` inherit `DeviceState`.
-`online` recognizes only vendor connectivity codes 1/2, otherwise `None`.
+`online` recognizes only device connectivity codes 1/2, otherwise `None`; the
+separate alarm-defence `STATUS.globalStatus` is never a connectivity fallback.
 `battery_level` accepts integer percentages 0–100 (including numeric strings),
 not arbitrary truthiness or guessed scales. Light/plug `is_on` recognizes only
 boolean or integer/string 0/1. A missing property remains unknown.
 
 `DeviceCapabilities.has(name)` reports `True` for an observed property and `None`
 for absence. It does **not** claim absent hardware is unsupported, nor grant
-actuator permission. Present-but-null detector properties are still observed.
+actuator permission. Observation uses conservative source-property paths, not synthesized wrapper
+defaults; present-but-null known properties are still observed.
 
 Detector contact/water/siren codes remain available as raw diagnostics. No
 model-specific binary enum has been qualified here: `door_open` and `water_leak`

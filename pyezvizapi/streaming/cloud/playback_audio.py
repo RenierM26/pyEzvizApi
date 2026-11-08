@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.streaming.cloud.protocol import _mpeg_ps_video_decrypt_ranges, _pes_payload_start
-from pyezvizapi.streaming.media.rtp import _decrypt_idmx_aac_access_unit, _rtp_media_aes_key
+from pyezvizapi.streaming.media.crypto import decrypt_aac_access_unit, media_aes_key
+from pyezvizapi.streaming.media.mpegps import _mpeg_ps_video_decrypt_ranges, _pes_payload_start
 
 
 def decrypt_playback_adts_audio(data: bytes, media_key: str | bytes) -> bytes:
@@ -17,7 +17,7 @@ def decrypt_playback_adts_audio(data: bytes, media_key: str | bytes) -> bytes:
     """
     output = bytearray(data)
     frames = 0
-    aes_key = _rtp_media_aes_key(media_key)
+    aes_key = media_aes_key(media_key)
     for packet in _mpeg_ps_video_decrypt_ranges(data):
         if not 0xC0 <= packet.stream_id <= 0xDF:
             continue
@@ -27,7 +27,7 @@ def decrypt_playback_adts_audio(data: bytes, media_key: str | bytes) -> bytes:
         while start < packet.end:
             frame_end, header_length = _adts_frame_bounds(data, start, packet.end)
             access_unit_start = start + header_length
-            output[access_unit_start:frame_end] = _decrypt_idmx_aac_access_unit(
+            output[access_unit_start:frame_end] = decrypt_aac_access_unit(
                 data[access_unit_start:frame_end], aes_key
             )
             start = frame_end

@@ -275,7 +275,8 @@ async def test_real_ha_hls_workers_share_group_http_source(hass, aiohttp_client,
     try:
         await asyncio.gather(*(s.start() for s in streams))
         async with asyncio.timeout(15):
-            while any(p.last_segment is None for p in providers):
+            # Segment creation precedes part publication in the HA worker.
+            while any(p.last_segment is None or not p.last_segment.parts for p in providers):
                 await asyncio.sleep(0.02)
         assert calls == [1] and group.attempts == 1
         for provider in providers:

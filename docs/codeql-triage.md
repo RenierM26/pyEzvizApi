@@ -28,3 +28,15 @@ Reopen the corresponding alert if a supported modern wire protocol becomes
 available, these helpers become general-purpose crypto, the reservation begins
 listening, or cleanup stops propagating/recording errors. New unrelated findings
 remain actionable; do not dismiss future alerts by rule name alone.
+
+
+## SD helper extraction (PR #419)
+
+Alert [2882](https://github.com/RenierM26/pyEzvizApi/security/code-scanning/2882)
+is the relocated IDMX AAC decrypt call from accepted alert 2879, now in
+`streaming/media/crypto.py::decrypt_aac_access_unit`. The body is AST-identical
+apart from its name; no key, cipher, mode or transform changed. Apply the same
+previously accepted **won't fix — vendor protocol limitation** disposition, not
+a false-positive or security-fix claim. The new SD caller uses that same native
+block format. Known-byte AAC controls and retained recording wheel decoding
+verify interoperability; neither authenticates ciphertext nor modernizes ECB.

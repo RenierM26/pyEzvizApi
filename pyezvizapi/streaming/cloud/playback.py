@@ -7,34 +7,48 @@ capture. A socket timeout alone is not proof that the selected range arrived.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import timedelta
-import math
+from contextlib import ExitStack
+import os
+from pathlib import Path
+from tempfile import NamedTemporaryFile, SpooledTemporaryFile
 import time
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from pyezvizapi.cloud.deadline import request_deadline
-from pyezvizapi.exceptions import EzvizIncompleteMediaError, EzvizNoMediaError, PyEzvizError
+from pyezvizapi.exceptions import (
+    EzvizIncompleteMediaError,
+    EzvizNoMediaError,
+    EzvizPlaybackNegotiationError,
+    PyEzvizError,
+)
 from pyezvizapi.streaming.cloud import bootstrap
 from pyezvizapi.streaming.cloud.playback_audio import decrypt_playback_adts_audio
-from pyezvizapi.streaming.cloud.playback_range import playback_range
+from pyezvizapi.streaming.cloud.playback_range import (
+    DEFAULT_PLAYBACK_MAX_BYTES as DEFAULT_PLAYBACK_MAX_BYTES,  # noqa: PLC0414 -- preserve compatibility export
+    DEFAULT_PLAYBACK_TRANSFER_TIMEOUT as DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,  # noqa: PLC0414 -- preserve compatibility export
+    native_playback_range,
+    playback_integer,
+    positive_timeout as _positive_timeout,
+    selected_playback_range,
+)
 from pyezvizapi.streaming.cloud.protocol import (
     SocketFactory,
     VtmStreamClient,
     VtmStreamEOF,
     VtmStreamTimeout,
-    _mpeg_ps_video_decrypt_ranges,
-    _next_mpeg_ps_packet_start,
-    _pes_payload_start,
     build_vtm_url,
 )
 from pyezvizapi.streaming.media.containers import (
     decrypt_hikvision_ps_video,
     mpeg_ps_video_pts_span_seconds,
 )
+from pyezvizapi.streaming.media.mpegps import (
+    _mpeg_ps_video_decrypt_ranges,
+    _next_mpeg_ps_packet_start,
+    _pes_payload_start,
+)
 
-DEFAULT_PLAYBACK_MAX_BYTES = 128 * 1024 * 1024
-DEFAULT_PLAYBACK_TRANSFER_TIMEOUT = 60.0
 # Exact terminal bytes observed after complete PS packets in the retained H9c
 # recording. Permit only this whole marker, never arbitrary trailing bytes.
 _PLAYBACK_VENDOR_TRAILER = b"\x24kih\x04\x03\x02\x01"
@@ -50,14 +64,14 @@ def build_vtm_playback_url(  # noqa: PLR0913 -- native URL field contract
     end_time: str,
     *,
     channel: int = 1,
+    timezone: str = "UTC",
     client_type: int = 3,
     lid: str | None = None,
     timestamp_ms: int | None = None,
 ) -> str:
     """Build the native ysproto playback selector; never guess a timezone."""
-    playback_range(begin_time, end_time)
-    if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:
-        raise PyEzvizError("SD playback channel must be a nonnegative integer")
+    begin_time, end_time = native_playback_range(begin_time, end_time, timezone)
+    playback_integer(channel, "channel", minimum=0)
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise PyEzvizError("SD playback port must be a valid TCP port")
     if not serial or not vtdu_token:
@@ -92,19 +106,17 @@ def get_cloud_playback_stream_info(
     end_time: str,
     *,
     channel: int | None = None,
+    timezone: str = "UTC",
     client_type: int = 3,
     token_index: int = 0,
     refresh_vtm: bool = True,
     lid: str | None = None,
 ) -> dict[str, Any]:
     """Resolve the ordinary VTM resource/token, but request its playback mode."""
-    playback_range(begin_time, end_time)
-    if isinstance(token_index, bool) or not isinstance(token_index, int) or token_index < 0:
-        raise PyEzvizError("SD playback token_index must be a nonnegative integer")
-    if channel is not None and (
-        isinstance(channel, bool) or not isinstance(channel, int) or channel < 0
-    ):
-        raise PyEzvizError("SD playback channel must be a nonnegative integer")
+    native_playback_range(begin_time, end_time, timezone)
+    playback_integer(token_index, "token_index", minimum=0)
+    if channel is not None:
+        playback_integer(channel, "channel", minimum=0)
     info = bootstrap.get_cloud_stream_info(
         client,
         serial,
@@ -125,6 +137,7 @@ def get_cloud_playback_stream_info(
         begin_time,
         end_time,
         channel=selected_channel,
+        timezone=timezone,
         client_type=client_type,
         lid=lid,
     )
@@ -138,6 +151,7 @@ def open_cloud_playback_stream(  # noqa: PLR0913 -- source options
     end_time: str,
     *,
     channel: int | None = None,
+    timezone: str = "UTC",
     client_type: int = 3,
     token_index: int = 0,
     refresh_vtm: bool = True,
@@ -148,6 +162,7 @@ def open_cloud_playback_stream(  # noqa: PLR0913 -- source options
     monotonic: Callable[[], float] = time.monotonic,
 ) -> VtmStreamClient:
     """Return an unstarted playback transport with the native server request timeout (protobuf field 8)."""
+    timeout = _positive_timeout(timeout, "timeout")
     with request_deadline(capture_deadline, monotonic):
         info = get_cloud_playback_stream_info(
             client,
@@ -155,6 +170,7 @@ def open_cloud_playback_stream(  # noqa: PLR0913 -- source options
             begin_time,
             end_time,
             channel=channel,
+            timezone=timezone,
             client_type=client_type,
             token_index=token_index,
             refresh_vtm=refresh_vtm,
@@ -179,7 +195,35 @@ def _collect_playback(
     max_bytes: int,
     monotonic: Callable[[], float],
 ) -> tuple[bytes, str]:
-    data = bytearray()
+    with SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as staging:
+        reason = _collect_playback_into(
+            stream,
+            cast(BinaryIO, staging),
+            deadline=deadline,
+            timeout=timeout,
+            max_packets=max_packets,
+            max_bytes=max_bytes,
+            monotonic=monotonic,
+        )
+        staging.seek(0)
+        data = staging.read()
+    if not data:
+        raise EzvizNoMediaError("SD playback returned no media")
+    if not data.startswith(b"\x00\x00\x01\xba"):
+        raise PyEzvizError("SD playback did not return MPEG-PS media")
+    return data, reason
+
+
+def _collect_playback_into(
+    stream: VtmStreamClient,
+    staging: BinaryIO,
+    *,
+    deadline: float,
+    timeout: float,
+    max_packets: int | None,
+    max_bytes: int,
+    monotonic: Callable[[], float],
+) -> str:
     reason = "iteration_limit"
     try:
         remaining = deadline - monotonic()
@@ -195,9 +239,9 @@ def _collect_playback(
         ):
             if packet.encrypted:
                 raise PyEzvizError("Encrypted VTM transport packets are unsupported")
-            if len(data) + len(packet.body) > max_bytes:
+            if staging.tell() + len(packet.body) > max_bytes:
                 raise PyEzvizError("SD playback exceeded its byte budget")
-            data.extend(packet.body)
+            _write_playback_output(staging, packet.body)
     except VtmStreamEOF:
         reason = "peer_eof"
     except VtmStreamTimeout:
@@ -215,22 +259,7 @@ def _collect_playback(
         )
     if stream.has_pending_packet:
         raise PyEzvizError("SD playback ended inside a VTM packet")
-    if not data:
-        raise EzvizNoMediaError("SD playback returned no media")
-    if not data.startswith(b"\x00\x00\x01\xba"):
-        raise PyEzvizError("SD playback did not return MPEG-PS media")
-    return bytes(data), reason
-
-
-def _positive_timeout(value: object, label: str) -> float:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        or value <= 0
-    ):
-        raise PyEzvizError(f"SD playback {label} must be positive and finite")
-    return float(value)
+    return reason
 
 
 def _validate_playback_framing(data: bytes) -> None:
@@ -268,6 +297,7 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
     end_time: str,
     *,
     channel: int | None = None,
+    timezone: str = "UTC",
     client_type: int = 3,
     token_index: int = 0,
     refresh_vtm: bool = True,
@@ -291,31 +321,16 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
     require continuous video PTS span within 5% (at most 1s) of the selection;
     EOF/idle alone must never turn an arbitrary prefix into success.
     """
-    begin, end = playback_range(begin_time, end_time)
+    end_time, requested = selected_playback_range(begin_time, end_time, duration_seconds)
+    native_begin, native_end = native_playback_range(begin_time, end_time, timezone)
     timeout = _positive_timeout(timeout, "timeout")
     transfer_timeout = _positive_timeout(transfer_timeout, "transfer_timeout")
-    for label, value in (("max_bytes", max_bytes), ("max_packets", max_packets)):
-        if value is not None and (
-            isinstance(value, bool) or not isinstance(value, int) or value <= 0
-        ):
-            raise PyEzvizError(f"SD playback {label} must be a positive integer")
-    if max_bytes is None:
-        raise PyEzvizError("SD playback requires a finite byte budget")
-    if duration_seconds is not None:
-        if (
-            isinstance(duration_seconds, bool)
-            or not isinstance(duration_seconds, (int, float))
-            or not math.isfinite(duration_seconds)
-            or duration_seconds <= 0
-        ):
-            raise PyEzvizError("SD playback duration_seconds must be positive and finite")
-        if duration_seconds < (end - begin).total_seconds():
-            end = begin + timedelta(seconds=duration_seconds)
-        # The native selector is whole-second UTC, so reject sub-second ambiguity.
-        if end.microsecond:
-            raise PyEzvizError("SD playback duration must select whole UTC seconds")
-    end_time = end.strftime("%Y%m%dT%H%M%SZ")
-    requested = (end - begin).total_seconds()
+    playback_integer(max_bytes, "max_bytes")
+    playback_integer(token_index, "token_index", minimum=0)
+    if channel is not None:
+        playback_integer(channel, "channel", minimum=0)
+    if max_packets is not None:
+        playback_integer(max_packets, "max_packets")
     deadline = monotonic() + transfer_timeout
     with request_deadline(deadline, monotonic):
         if (decrypt_video or decrypt_audio) and media_key is None:
@@ -330,6 +345,7 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
             begin_time,
             end_time,
             channel=channel,
+            timezone=timezone,
             client_type=client_type,
             token_index=token_index,
             refresh_vtm=refresh_vtm,
@@ -341,7 +357,7 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
         with bootstrap._closing_unconnected_cloud_stream(stream):  # noqa: SLF001
             info = stream.start(deadline=deadline, monotonic=monotonic)
             if info.result not in (None, 0):
-                raise PyEzvizError(f"SD playback negotiation failed with result {info.result}")
+                raise EzvizPlaybackNegotiationError(info.result)
             data, reason = _collect_playback(
                 stream,
                 deadline=deadline,
@@ -372,6 +388,9 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
     output.flush()
     return {
         "begin_time": begin_time,
+        "native_begin_time": native_begin,
+        "native_end_time": native_end,
+        "playback_timezone": timezone,
         "end_time": end_time,
         "observed_pts_span_seconds": span,
         "range_complete": complete,
@@ -415,9 +434,6 @@ def _write_playback_output(output: BinaryIO, data: bytes | memoryview) -> None:
 
 def save_cloud_playback_clip(client: Any, serial: str, output: Any, options: Any) -> dict[str, Any]:
     """Publish only validated SD bytes; never truncate an existing path on failure."""
-    from io import BytesIO  # noqa: PLC0415
-    from pathlib import Path  # noqa: PLC0415
-
     from pyezvizapi.streaming.capture import _SourceDefaultDuration  # noqa: PLC0415
 
     mux = options.resolved_mux()
@@ -426,45 +442,66 @@ def save_cloud_playback_clip(client: Any, serial: str, output: Any, options: Any
     if mux != MediaMuxOptions(output_format="mpegps", ffmpeg_path=mux.ffmpeg_path):
         raise PyEzvizError("SD playback supports MPEG-PS without native clock overrides")
     source = options.source
-    data = BytesIO()
     duration = (
         None
         if isinstance(options.duration_seconds, _SourceDefaultDuration)
         else options.duration_seconds
     )
     max_bytes = min(source.max_bytes, options.capture.max_bytes or source.max_bytes)
-    result = copy_cloud_playback_to_mpegps(
-        client,
-        serial,
-        data,
-        source.begin_time,
-        source.end_time,
-        channel=options.channel,
-        client_type=source.client_type,
-        token_index=source.token_index,
-        refresh_vtm=source.refresh_vtm,
-        timeout=source.timeout,
-        lid=source.lid,
-        max_packets=options.max_packets,
-        duration_seconds=duration,
-        max_bytes=max_bytes,
-        transfer_timeout=source.transfer_timeout,
-        decrypt_video=options.decode.decrypt_video,
-        decrypt_audio=source.decrypt_audio,
-        media_key=options.decode.media_key,
-        nalu_header_size=options.decode.nalu_header_size,
-        smscode=source.smscode,
-    )
-    if isinstance(output, str | Path):
-        path = Path(output)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("wb") as dest:
-            _write_playback_output(dest, data.getbuffer())
-        output_name = str(path)
-    else:
-        _write_playback_output(output, data.getbuffer())
-        output.flush()
-        output_name = None
+    with ExitStack() as stack:
+        data = stack.enter_context(SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b"))
+        result = copy_cloud_playback_to_mpegps(
+            client,
+            serial,
+            cast(BinaryIO, data),
+            source.begin_time,
+            source.end_time,
+            channel=options.channel,
+            timezone=source.timezone,
+            client_type=source.client_type,
+            token_index=source.token_index,
+            refresh_vtm=source.refresh_vtm,
+            timeout=source.timeout,
+            lid=source.lid,
+            max_packets=options.max_packets,
+            duration_seconds=duration,
+            max_bytes=max_bytes,
+            transfer_timeout=source.transfer_timeout,
+            decrypt_video=options.decode.decrypt_video,
+            decrypt_audio=source.decrypt_audio,
+            media_key=options.decode.media_key,
+            nalu_header_size=options.decode.nalu_header_size,
+            smscode=source.smscode,
+        )
+        data.seek(0)
+        if isinstance(output, str | Path):
+            path = Path(output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Same-directory staging permits atomic replacement on one filesystem.
+            staged = stack.enter_context(
+                NamedTemporaryFile(
+                    mode="w+b",
+                    dir=path.parent,
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                )
+            )
+            temporary = Path(staged.name)
+            try:
+                _publish_playback(cast(BinaryIO, data), cast(BinaryIO, staged))
+                os.fsync(staged.fileno())
+                staged.close()  # Required before replacement on Windows.
+                os.replace(temporary, path)
+            finally:
+                try:
+                    staged.close()
+                finally:
+                    temporary.unlink(missing_ok=True)
+            output_name = str(path)
+        else:
+            _publish_playback(cast(BinaryIO, data), output)
+            output_name = None
     return {
         **result,
         "ok": True,
@@ -476,3 +513,10 @@ def save_cloud_playback_clip(client: Any, serial: str, output: Any, options: Any
         "output": output_name,
         "duration_seconds": duration,
     }
+
+
+def _publish_playback(staging: BinaryIO, output: BinaryIO) -> None:
+    """Copy staged bytes with bounded buffers and checked short-write progress."""
+    while chunk := staging.read(1024 * 1024):
+        _write_playback_output(output, chunk)
+    output.flush()

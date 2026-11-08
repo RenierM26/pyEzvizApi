@@ -99,3 +99,18 @@ class EzvizPushFatalError(PyEzvizError):
 
 class EzvizTokenPersistenceError(EzvizPushFatalError):
     """Rotating push credentials could not be saved durably."""
+
+
+class EzvizPlaybackNegotiationError(PyEzvizError):
+    """Relay refused SD playback; the numeric result does not identify its cause.
+
+    No automatic retry is implied, including for the observed result 6520.
+    No credential-bearing URL or response payload is retained.
+    """
+
+    reason = "playback_negotiation_failed"
+    source = "cloud-playback"
+
+    def __init__(self, result_code: int) -> None:
+        self.result_code = result_code
+        super().__init__(f"SD playback negotiation failed with result {result_code}")

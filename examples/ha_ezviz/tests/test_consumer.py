@@ -179,11 +179,13 @@ async def test_account_setup_and_unload_use_real_polling(hass, client, monkeypat
     entry.mock_state(hass, ConfigEntryState.SETUP_IN_PROGRESS)
     context_token = current_entry.set(entry)
     try:
-        assert await ezviz_cloud.async_setup_entry(hass, entry)
+        setup_ok = await ezviz_cloud.async_setup_entry(hass, entry)
+        assert setup_ok
     finally:
         current_entry.reset(context_token)
     assert "CAM123" in hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR].data
-    assert await ezviz_cloud.async_unload_entry(hass, entry)
+    unload_ok = await ezviz_cloud.async_unload_entry(hass, entry)
+    assert unload_ok
     assert entry.entry_id not in hass.data[DOMAIN]
 
 

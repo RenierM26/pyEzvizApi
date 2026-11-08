@@ -88,7 +88,9 @@ pyezvizapi --json sdcard_videos --serial ABC123 --source common \
   --start-time "2026-05-10T21:50:00" --stop-time "2026-05-10T21:55:00"
 ```
 
-SD-card records are descriptors for native playback/download. The public API does not currently expose a direct HTTP media URL for every record; use `stream dump` for live VTM capture or `cloud_video_download` when cloud `videoDetails` includes an HTTP(S) URL.
+SD-card records are descriptors for native playback/download. Use
+[`save clip --source cloud-playback`](cloud-sd-playback.md) to download an explicit
+SD recording range through VTM. The public API does not currently expose a direct HTTP media URL for every record; use `stream dump` for live VTM capture or `cloud_video_download` when cloud `videoDetails` includes an HTTP(S) URL.
 
 ### camera
 

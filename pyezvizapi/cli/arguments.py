@@ -6,6 +6,7 @@ import argparse
 from typing import Any
 
 from pyezvizapi.constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, BatteryCameraWorkMode
+from pyezvizapi.streaming.capture import _SOURCE_DEFAULT_DURATION, _SourceDefaultClientType
 from pyezvizapi.streaming.local.transport import HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
 
 
@@ -525,13 +526,42 @@ def add_save_clip_arguments(subparsers_save: Any) -> None:
     parser_save_clip.add_argument("--serial", required=True, help="camera SERIAL")
     parser_save_clip.add_argument(
         "--source",
-        choices=("auto", "local-sdk", "local-sdk-ecdh", "cloud", "hcnetsdk-command-port"),
+        choices=(
+            "auto",
+            "local-sdk",
+            "local-sdk-ecdh",
+            "cloud",
+            "hcnetsdk-command-port",
+            "cloud-playback",
+        ),
         default="local-sdk",
         help=(
             "Source to use: automatic metadata-first selection, direct 9010/9020 SDK, encrypted local SDK ECDH, "
             "VTM cloud live stream, or full HCNetSDK command-port media on "
             "port 8000 (default: local-sdk)"
         ),
+    )
+    parser_save_clip.add_argument(
+        "--decrypt-audio",
+        action="store_true",
+        help="Explicitly decrypt encrypted SD ADTS AAC (cloud-playback only)",
+    )
+    parser_save_clip.add_argument("--begin-time", help="SD playback UTC begin: YYYYMMDDTHHMMSSZ")
+    parser_save_clip.add_argument("--end-time", help="SD playback UTC end: YYYYMMDDTHHMMSSZ")
+    parser_save_clip.add_argument(
+        "--lid", help="Optional native SD playback label/session selector"
+    )
+    parser_save_clip.add_argument(
+        "--playback-max-bytes",
+        type=int,
+        default=128 * 1024 * 1024,
+        help="SD playback byte budget (default: 128 MiB)",
+    )
+    parser_save_clip.add_argument(
+        "--playback-transfer-timeout",
+        type=float,
+        default=60.0,
+        help="SD playback total transfer budget, including bootstrap (seconds)",
     )
     parser_save_clip.add_argument(
         "--channel",
@@ -547,8 +577,8 @@ def add_save_clip_arguments(subparsers_save: Any) -> None:
     parser_save_clip.add_argument(
         "--duration",
         type=_parse_duration_seconds,
-        default=10.0,
-        help="Capture duration; accepts seconds or units like 10s/1m (default: 10s)",
+        default=_SOURCE_DEFAULT_DURATION,
+        help="Capture duration; accepts seconds or units like 10s/1m (default: full range for cloud-playback, 10s otherwise)",
     )
     parser_save_clip.add_argument(
         "--max-packets",
@@ -826,7 +856,7 @@ def add_save_clip_arguments(subparsers_save: Any) -> None:
     parser_save_clip.add_argument(
         "--client-type",
         type=int,
-        default=9,
+        default=_SourceDefaultClientType(9),
         help="VTM client type for --source cloud (default: 9)",
     )
     parser_save_clip.add_argument(

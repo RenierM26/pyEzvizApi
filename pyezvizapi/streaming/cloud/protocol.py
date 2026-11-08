@@ -78,6 +78,7 @@ class VtmChannel(IntEnum):
 
     MESSAGE = 0x00
     STREAM = 0x01
+    PLAYBACK_STREAM = 0x02
     ENCRYPTED_MESSAGE = 0x0A
     ENCRYPTED_STREAM = 0x0B
 
@@ -225,6 +226,21 @@ class _VtmReadDeadlineExpired(TimeoutError):
     """Internal signal that a bounded VTM read reached its caller deadline."""
 
 
+class VtmStreamEOF(PyEzvizError):
+    """Peer closed at a complete packet boundary, not midway through a packet."""
+
+
+class VtmStreamTimeout(DeviceException):
+    """VTM socket inactivity, distinct from framing/authentication failures."""
+
+
+def _validate_stream_info_timeout(value: int | None) -> None:
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 0x7FFFFFFF
+    ):
+        raise PyEzvizError("VTM request timeout must be a positive signed 32-bit integer")
+
+
 class VtmStreamClient:
     """Experimental synchronous client for the APK-discovered VTM TCP stream.
 
@@ -240,11 +256,15 @@ class VtmStreamClient:
         *,
         timeout: float | None = 10.0,
         client_version: str = "v3.6.3.20221124",
+        stream_info_timeout: int | None = None,
         socket_factory: SocketFactory = socket.create_connection,
     ) -> None:
+        _validate_stream_info_timeout(stream_info_timeout)
         self.stream_url = stream_url
+        self._playback_mode = stream_url.partition("?")[0].endswith("/playback")
         self.timeout = timeout
         self.client_version = client_version
+        self.stream_info_timeout = stream_info_timeout
         self._socket_factory = socket_factory
         self._socket: Any | None = None
         self._sequence = 0
@@ -406,6 +426,7 @@ class VtmStreamClient:
                     self.stream_url,
                     vtm_stream_key=vtm_stream_key,
                     client_version=self.client_version,
+                    stream_info_timeout=self.stream_info_timeout,
                 )
                 self.send_packet(
                     request,
@@ -583,7 +604,9 @@ class VtmStreamClient:
                     yield packet
                 continue
 
-            if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
+            if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM) or (
+                self._playback_mode and packet.channel == VtmChannel.PLAYBACK_STREAM
+            ):
                 if stream_packet_timeout_seconds is not None:
                     next_stream_packet_deadline = monotonic() + stream_packet_timeout_seconds
                 if capture_deadline is None and duration_seconds is not None:
@@ -640,6 +663,7 @@ class VtmStreamClient:
                 self.stream_url,
                 vtm_stream_key=vtm_stream_key,
                 client_version=self.client_version,
+                stream_info_timeout=self.stream_info_timeout,
             )
             self.send_packet(request)
 
@@ -681,6 +705,16 @@ class VtmStreamClient:
             raise PyEzvizError("VTM socket is not connected")
         return sock
 
+    @property
+    def has_pending_packet(self) -> bool:
+        """Whether an incomplete packet prevents treating inactivity as EOF."""
+        return self._pending_header is not None or bool(self._recv_buffer)
+
+    def _closed_socket_error(self, length: int) -> PyEzvizError:
+        if length == VTM_HEADER_SIZE and not self.has_pending_packet:
+            return VtmStreamEOF("VTM socket closed at packet boundary")
+        return PyEzvizError("VTM socket closed while reading packet")
+
     def _recv_exact(
         self,
         length: int,
@@ -703,7 +737,7 @@ class VtmStreamClient:
                 else self._read_inactivity_deadline - now
             )
             if inactivity_remaining is not None and inactivity_remaining <= 0:
-                raise DeviceException(
+                raise VtmStreamTimeout(
                     "Device offline or unreachable: timed out waiting for VTM stream data"
                 )
 
@@ -735,14 +769,14 @@ class VtmStreamClient:
             except TimeoutError as err:
                 if caller_limited:
                     raise _VtmReadDeadlineExpired from err
-                raise DeviceException(
+                raise VtmStreamTimeout(
                     "Device offline or unreachable: timed out waiting for VTM stream data"
                 ) from err
             finally:
                 if timeout_changed:
                     sock.settimeout(configured_timeout)
             if not chunk:
-                raise PyEzvizError("VTM socket closed while reading packet")
+                raise self._closed_socket_error(length)
             self._recv_buffer.extend(chunk)
             if configured_timeout is not None:
                 self._read_inactivity_deadline = monotonic() + configured_timeout
@@ -890,6 +924,7 @@ def build_stream_info_request(
     *,
     vtm_stream_key: str | None = None,
     client_version: str = "v3.6.3.20221124",
+    stream_info_timeout: int | None = None,
 ) -> bytes:
     """Encode the limited StreamInfoReq protobuf used by VTM/VTDU."""
 
@@ -903,6 +938,9 @@ def build_stream_info_request(
             _proto_string(6, client_version),
         )
     )
+    _validate_stream_info_timeout(stream_info_timeout)
+    if stream_info_timeout is not None:
+        parts.append(_proto_varint(8, stream_info_timeout))
     return b"".join(parts)
 
 

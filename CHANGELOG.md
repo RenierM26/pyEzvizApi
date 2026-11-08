@@ -55,6 +55,11 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Added
 
+- Cloud-mediated SD-card playback download via `save clip --source cloud-playback`
+  and `CloudPlaybackClipSource`, adapted from Alejandro Dirgan (@adirgan)'s PR #266,
+  with explicit UTC ranges, bounded transfers, media-span verification and
+  output preservation on capture failure.
+
 - Optional PyAV 19 continuous local MPEG-PS source owner with incremental video decryption, current-session PES-ID H.264/HEVC plus AAC stream copy, bounded output credits and joined sync/async cancellation. No implicit session duration cap, player or listener; an HA-hosted route and frontend validation remain separate work.
 
 - Read-only explicit fleet capability inventory with redacted reports, separate saved-sample codec/decode evidence, and finite headless H.264/HEVC plus AAC track-copy output for Home Assistant adapter development. Continuous native SDK-to-HA delivery and frontend compatibility remain unverified.

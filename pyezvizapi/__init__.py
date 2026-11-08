@@ -100,6 +100,7 @@ if TYPE_CHECKING:
         ClipSource,
         ClipSourceOptions,
         CloudClipSource,
+        CloudPlaybackClipSource,
         HcNetSdkCommandPortClipSource,
         LocalSdkClipSource,
         LocalSdkEcdhClipSource,
@@ -113,6 +114,12 @@ if TYPE_CHECKING:
         get_vtm_info,
         get_vtm_page_list,
         open_cloud_stream,
+    )
+    from pyezvizapi.streaming.cloud.playback import (
+        build_vtm_playback_url,
+        copy_cloud_playback_to_mpegps,
+        get_cloud_playback_stream_info,
+        open_cloud_playback_stream,
     )
     from pyezvizapi.streaming.cloud.transport import (
         StopStreamResponse,
@@ -819,6 +826,11 @@ _EXPORTS = {
     "ClipSource": "streaming.capture",
     "ClipSourceOptions": "streaming.capture",
     "CloudClipSource": "streaming.capture",
+    "CloudPlaybackClipSource": "streaming.capture",
+    "build_vtm_playback_url": "streaming.cloud.playback",
+    "get_cloud_playback_stream_info": "streaming.cloud.playback",
+    "open_cloud_playback_stream": "streaming.cloud.playback",
+    "copy_cloud_playback_to_mpegps": "streaming.cloud.playback",
     "DeadlineLegacyPacketSource": "streaming.media.models",
     "RtpCodec": "streaming.media.rtp",
     "RtpContinuityStats": "streaming.media.rtp",

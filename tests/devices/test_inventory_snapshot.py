@@ -377,3 +377,19 @@ def test_alarm_defence_status_is_not_connectivity(client, monkeypatch):
     state = client.poll_devices(DevicePollOptions(include_camera_alarms=False)).devices["cam"]
     assert state.online is None and state.values["status"] is None
     assert state.capabilities.has("status") is None
+
+
+def test_actual_camera_attribute_error_isolated_from_healthy_sibling(client, monkeypatch):
+    records = {s: record(s) for s in ("good", "bad")}
+    monkeypatch.setattr(client, "get_device_records", lambda _: records)
+    options = DevicePollOptions(include_camera_alarms=False)
+    first = client.poll_devices(options)
+    records["bad"] = EzvizDeviceRecord.from_api("bad", {**records["bad"].raw, "CONNECTION": [1]})
+    records["good"] = EzvizDeviceRecord.from_api(
+        "good", {"deviceInfos": {"deviceCategory": "IPC", "status": 1, "version": "new-version"}}
+    )
+    second = client.poll_devices(options)
+    assert second.devices["good"].values["version"] == "new-version"
+    assert second.health["good"].current
+    assert second.devices["bad"] is first.devices["bad"]
+    assert second.health["bad"] == DeviceHealth(True, False, first.received_at, "AttributeError")

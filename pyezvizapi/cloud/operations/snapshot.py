@@ -164,7 +164,7 @@ def poll_devices(client: Any, options: DevicePollOptions) -> DeviceSnapshot:
                     )
                 except (EzvizAuthTokenExpired, EzvizAuthVerificationCode):
                     raise  # Account authentication failure is not a device defect.
-                except (PyEzvizError, KeyError, TypeError, ValueError) as error:
+                except (PyEzvizError, KeyError, TypeError, ValueError, AttributeError) as error:
                     health[serial] = DeviceHealth(
                         True,
                         False,

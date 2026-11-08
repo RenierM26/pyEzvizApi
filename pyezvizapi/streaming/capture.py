@@ -45,6 +45,7 @@ class CloudPlaybackClipSource:
     begin_time: str
     end_time: str
     kind: Literal["cloud-playback"] = field(default="cloud-playback", init=False)
+    decrypt_audio: bool = False
     client_type: int = 3
     token_index: int = 0
     refresh_vtm: bool = True
@@ -56,6 +57,8 @@ class CloudPlaybackClipSource:
 
     def __post_init__(self) -> None:
         playback_range(self.begin_time, self.end_time)
+        if not isinstance(self.decrypt_audio, bool):
+            raise PyEzvizError("SD playback decrypt_audio must be a boolean")
         for value in (self.timeout, self.transfer_timeout):
             if (
                 isinstance(value, bool)

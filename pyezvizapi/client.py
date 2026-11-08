@@ -2286,6 +2286,7 @@ class EzvizClient:
         cloud_playback_begin_time: str | None = None,
         cloud_playback_end_time: str | None = None,
         cloud_playback_lid: str | None = None,
+        cloud_playback_decrypt_audio: bool = False,
         cloud_playback_max_bytes: int = 128 * 1024 * 1024,
         cloud_playback_transfer_timeout: float = 60.0,
     ) -> SaveMediaResult:
@@ -2326,6 +2327,7 @@ class EzvizClient:
                         client_type=3
                         if isinstance(cloud_client_type, _compat_module_6._SourceDefaultClientType)
                         else cloud_client_type,
+                        decrypt_audio=cloud_playback_decrypt_audio,
                         token_index=cloud_token_index,
                         refresh_vtm=cloud_refresh_vtm,
                         timeout=timeout,

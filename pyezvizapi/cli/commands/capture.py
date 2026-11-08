@@ -44,7 +44,12 @@ def _validate_shared_clip_args(
         CaptureLimits(duration_seconds=args.duration, max_packets=args.max_packets)
         if args.format not in (None, "mpegps"):
             raise _owner.PyEzvizError("SD playback requires --format mpegps")
-    elif args.begin_time is not None or args.end_time is not None or args.lid is not None:
+    elif (
+        args.begin_time is not None
+        or args.end_time is not None
+        or args.lid is not None
+        or args.decrypt_audio
+    ):
         raise _owner.PyEzvizError("Playback time/lid selectors require --source cloud-playback")
     if not args.native_shared_clock:
         return
@@ -154,6 +159,7 @@ def _handle_save_clip(
     if args.source == "cloud-playback":
         save_kwargs.update(
             cloud_playback_begin_time=args.begin_time,
+            cloud_playback_decrypt_audio=args.decrypt_audio,
             cloud_playback_end_time=args.end_time,
             cloud_playback_lid=args.lid,
             cloud_playback_max_bytes=args.playback_max_bytes,
@@ -183,7 +189,7 @@ def _handle_save_clip(
                 "cloud_refresh_vtm": not args.no_refresh_vtm,
             }
         )
-    if args.decrypt_video and (
+    if (args.decrypt_video or args.decrypt_audio) and (
         args.source == "hcnetsdk-command-port" or _owner._local_sdk_has_static_media_key(args)
     ):
         save_kwargs["media_key"] = _owner._local_sdk_media_key(args, client)

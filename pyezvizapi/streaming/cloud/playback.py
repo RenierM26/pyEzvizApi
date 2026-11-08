@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from pyezvizapi.cloud.deadline import request_deadline
 from pyezvizapi.exceptions import EzvizIncompleteMediaError, EzvizNoMediaError, PyEzvizError
 from pyezvizapi.streaming.cloud import bootstrap
+from pyezvizapi.streaming.cloud.playback_audio import decrypt_playback_adts_audio
 from pyezvizapi.streaming.cloud.playback_range import playback_range
 from pyezvizapi.streaming.cloud.protocol import (
     SocketFactory,
@@ -242,6 +243,7 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
     max_packets: int | None = None,
     duration_seconds: float | None = None,
     decrypt_video: bool = False,
+    decrypt_audio: bool = False,
     media_key: str | bytes | None = None,
     nalu_header_size: int | None = None,
     smscode: str | int | None = None,
@@ -282,11 +284,11 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
     requested = (end - begin).total_seconds()
     deadline = monotonic() + transfer_timeout
     with request_deadline(deadline, monotonic):
-        if decrypt_video and media_key is None:
+        if (decrypt_video or decrypt_audio) and media_key is None:
             media_key = client.get_cam_key(
                 serial, **({"smscode": smscode} if smscode is not None else {})
             )
-        if decrypt_video and media_key is None:
+        if (decrypt_video or decrypt_audio) and media_key is None:
             raise PyEzvizError("SD playback decrypt requires a camera media key")
         stream = open_cloud_playback_stream(
             client,
@@ -322,10 +324,13 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
             requested_duration_seconds=requested,
             observed_pts_span_seconds=span or 0.0,
         )
-    if decrypt_video:
-        if media_key is None:
-            raise PyEzvizError("SD playback decrypt requires a camera media key")
-        data = decrypt_hikvision_ps_video(data, media_key, nalu_header_size=nalu_header_size)
+    data = _decode_playback_media(
+        data,
+        media_key,
+        decrypt_video=decrypt_video,
+        decrypt_audio=decrypt_audio,
+        nalu_header_size=nalu_header_size,
+    )
     output.write(data)
     output.flush()
     return {
@@ -338,6 +343,25 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
     }
 
 
+def _decode_playback_media(
+    data: bytes,
+    key: str | bytes | None,
+    *,
+    decrypt_video: bool,
+    decrypt_audio: bool,
+    nalu_header_size: int | None,
+) -> bytes:
+    if not (decrypt_video or decrypt_audio):
+        return data
+    if key is None:
+        raise PyEzvizError("SD media decrypt requires a camera media key")
+    if decrypt_video:
+        data = decrypt_hikvision_ps_video(data, key, nalu_header_size=nalu_header_size)
+    if decrypt_audio:
+        data = decrypt_playback_adts_audio(data, key)
+    return data
+
+
 def save_cloud_playback_clip(client: Any, serial: str, output: Any, options: Any) -> dict[str, Any]:
     """Publish only validated SD bytes; never truncate an existing path on failure."""
     from io import BytesIO  # noqa: PLC0415
@@ -346,7 +370,9 @@ def save_cloud_playback_clip(client: Any, serial: str, output: Any, options: Any
     from pyezvizapi.streaming.capture import _SourceDefaultDuration  # noqa: PLC0415
 
     mux = options.resolved_mux()
-    if mux.output_format != "mpegps" or mux.native_shared_clock or mux.app_relative_clock:
+    from pyezvizapi.streaming.media.models import MediaMuxOptions  # noqa: PLC0415
+
+    if mux != MediaMuxOptions(output_format="mpegps", ffmpeg_path=mux.ffmpeg_path):
         raise PyEzvizError("SD playback supports MPEG-PS without native clock overrides")
     source = options.source
     data = BytesIO()
@@ -373,6 +399,7 @@ def save_cloud_playback_clip(client: Any, serial: str, output: Any, options: Any
         max_bytes=max_bytes,
         transfer_timeout=source.transfer_timeout,
         decrypt_video=options.decode.decrypt_video,
+        decrypt_audio=source.decrypt_audio,
         media_key=options.decode.media_key,
         nalu_header_size=options.decode.nalu_header_size,
         smscode=source.smscode,

@@ -541,6 +541,11 @@ def add_save_clip_arguments(subparsers_save: Any) -> None:
             "port 8000 (default: local-sdk)"
         ),
     )
+    parser_save_clip.add_argument(
+        "--decrypt-audio",
+        action="store_true",
+        help="Explicitly decrypt encrypted SD ADTS AAC (cloud-playback only)",
+    )
     parser_save_clip.add_argument("--begin-time", help="SD playback UTC begin: YYYYMMDDTHHMMSSZ")
     parser_save_clip.add_argument("--end-time", help="SD playback UTC end: YYYYMMDDTHHMMSSZ")
     parser_save_clip.add_argument(

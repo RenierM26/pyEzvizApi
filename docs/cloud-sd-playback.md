@@ -47,6 +47,21 @@ and fail rather than publishing only the clear prefix.
 - A begin/end range must be ordered, valid UTC and no longer than 24 hours. This
   is a selector bound, not a promise that a 24-hour file fits the default budgets.
 
+## Encrypted AAC audio
+
+Some SD recordings (including the validated H9c sample) encrypt AAC access units
+independently from video. Add `--decrypt-audio` **only when SD audio is encrypted**;
+it is an explicit `cloud-playback` option and is off by default so clear audio is
+not corrupted. It preserves clear ADTS headers/CRC, PES timestamps and incomplete
+final AES-block tails. Complete ADTS frames within audio PES are supported;
+fragmented or other audio formats fail explicitly. Supply the actual recording's
+key, which may differ from an old inventory entry or the device verification code.
+
+The ordinary camera-key lookup may require account MFA. Use the existing
+`--sms-code` flow or a private, application-managed `EZVIZ_LOCAL_MEDIA_KEY` /
+`EZVIZ_LOCAL_MEDIA_KEY_HEX` environment value when a known key is already stored;
+do not publish the key in shell examples or logs. Retrieving a key does not rotate it.
+
 ## Python
 
 Create/authenticate an `EzvizClient` using the [Python guide](python-api.md).
@@ -57,7 +72,7 @@ result = client.save_clip(
     "CAMERA_SERIAL", "sd-clip.ps", source="cloud-playback",
     cloud_playback_begin_time="20261108T120000Z",
     cloud_playback_end_time="20261108T120020Z",
-    channel=1, decrypt_video=True,
+    channel=1, decrypt_video=True, cloud_playback_decrypt_audio=True,
 )
 ```
 
@@ -71,7 +86,7 @@ result = client.save_clip_with_options(
     ClipOptions(
         source=CloudPlaybackClipSource(
             "20261108T120000Z", "20261108T120020Z",
-            max_bytes=128 * 1024 * 1024, transfer_timeout=60,
+            max_bytes=128 * 1024 * 1024, transfer_timeout=60, decrypt_audio=True,
         ),
         decode=MediaDecodeOptions(decrypt_video=True, nalu_header_size=None),
         channel=1,
@@ -79,7 +94,8 @@ result = client.save_clip_with_options(
 )
 ```
 
-Existing live/local capture defaults are unchanged. For SD playback an omitted
+The Python examples above opt into encrypted SD audio; leave that flag off for
+clear AAC. Existing live/local capture defaults are unchanged. For SD playback an omitted
 capture duration selects the whole range, whereas an explicit ten seconds really
 selects ten seconds. `CaptureLimits.max_packets` intentionally permits a partial
 sample; inspect `range_complete` instead of calling a packet-capped sample a

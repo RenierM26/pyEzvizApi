@@ -304,3 +304,9 @@ def test_bootstrap_preserves_resource_channel_zero(monkeypatch):
     )
     result = playback.get_cloud_playback_stream_info(object(), "CAM123", BEGIN, END)
     assert parse_qs(urlparse(result["stream_url"]).query)["chn"] == ["0"]
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1 << 31, "10"])
+def test_invalid_native_timeout_field_never_reaches_varint_encoder(value):
+    with pytest.raises(PyEzvizError, match="32-bit"):
+        build_stream_info_request("ysproto://example.test/playback", stream_info_timeout=value)

@@ -40,6 +40,8 @@ import requests
 
 from pyezvizapi.cloud import responses as _api_response
 from pyezvizapi.devices import factory as device_factory
+from pyezvizapi.devices.snapshot import DevicePollOptions, DeviceSnapshot
+from pyezvizapi.cloud.operations import snapshot as _snapshot_ops
 from pyezvizapi.cloud.auth import refresh_credentials
 from pyezvizapi.cloud.budget import budgeted_http_call
 from pyezvizapi.push.longlink.profile import (
@@ -789,6 +791,8 @@ class EzvizClient:
         self._light_bulbs: dict[str, Any] = {}
         self._smart_plugs: dict[str, Any] = {}
         self._detectors: dict[str, Any] = {}
+        self._inventory_lock = RLock()
+        self._device_snapshot: DeviceSnapshot | None = None
         self.mqtt_client: MQTTClient | None = None
         self._debug_request_counters: dict[str, int] = {}
 
@@ -2060,6 +2064,15 @@ class EzvizClient:
         return _controls.cancel_alarm_device(
             self, serial, max_retries, _owner=_sys.modules[__name__]
         )
+
+    def poll_devices(self, options: DevicePollOptions | None = None) -> DeviceSnapshot:
+        """Acquire one deadline-bound inventory snapshot for all device families."""
+        return _snapshot_ops.poll_devices(self, DevicePollOptions() if options is None else options)
+
+    @property
+    def device_snapshot(self) -> DeviceSnapshot | None:
+        """Last published snapshot without any implicit network access."""
+        return self._device_snapshot
 
     def load_devices(self, refresh: bool = True) -> JsonDict:
         """Build status maps for cameras, lights, plugs and read-only detectors.

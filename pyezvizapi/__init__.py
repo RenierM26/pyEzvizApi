@@ -65,6 +65,17 @@ if TYPE_CHECKING:
     from pyezvizapi.devices.smart_plug import (
         EzvizSmartPlug,
     )
+    from pyezvizapi.devices.snapshot import (
+        CameraState,
+        DetectorState,
+        DeviceCapabilities,
+        DeviceHealth,
+        DevicePollOptions,
+        DeviceSnapshot,
+        DeviceState,
+        LightState,
+        PlugState,
+    )
     from pyezvizapi.exceptions import (
         AuthTestResultFailed,
         DeviceException,
@@ -810,6 +821,15 @@ if TYPE_CHECKING:
     from .streaming.local.recordings import query_lan_recordings
 
 _EXPORTS = {
+    "CameraState": "devices.snapshot",
+    "DetectorState": "devices.snapshot",
+    "DeviceCapabilities": "devices.snapshot",
+    "DeviceHealth": "devices.snapshot",
+    "DevicePollOptions": "devices.snapshot",
+    "DeviceSnapshot": "devices.snapshot",
+    "DeviceState": "devices.snapshot",
+    "LightState": "devices.snapshot",
+    "PlugState": "devices.snapshot",
     "HcNetSdkStreamDetails": "streaming.local.hcnetsdk.api",
     "discover_hcnetsdk_stream_details_for_login": "streaming.local.hcnetsdk.api",
     "HcNetSdkConfiguredMedia": "streaming.local.hcnetsdk.parameters",

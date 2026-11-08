@@ -10,6 +10,7 @@ from typing import Any
 
 from pyezvizapi._shared.utils import fetch_nested_value
 from pyezvizapi.constants import DeviceSwitchType
+from pyezvizapi.devices.firmware import firmware_status
 from pyezvizapi.devices.payload import local_ip_address, switch_values
 from pyezvizapi.models import EzvizDeviceRecord
 
@@ -43,7 +44,7 @@ class EzvizSmartPlug:
             self._device = dict(device_obj.raw)
         else:
             self._device = device_obj
-        self._switch = switch_values(self._device.get("SWITCH"))
+        self._switch = switch_values(self._device.get("SWITCH"), channel_no=0)
 
     def fetch_key(self, keys: list[Any], default_value: Any = None) -> Any:
         """Fetch a nested key from the device payload.
@@ -62,12 +63,11 @@ class EzvizSmartPlug:
             "serial": self._serial,
             "name": self.fetch_key(["deviceInfos", "name"]),
             "version": self.fetch_key(["deviceInfos", "version"]),
-            "upgrade_available": bool(self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3),
+            **firmware_status(self.fetch_key(["UPGRADE"]), self.fetch_key(["STATUS"])),
             "status": self.fetch_key(["deviceInfos", "status"]),
             "device_category": self.fetch_key(["deviceInfos", "deviceCategory"]),
             "device_sub_category": self.fetch_key(["deviceInfos", "deviceSubCategory"]),
             "upgrade_percent": self.fetch_key(["STATUS", "upgradeProcess"]),
-            "upgrade_in_progress": bool(self.fetch_key(["STATUS", "upgradeStatus"]) == 0),
             "latest_firmware_info": self.fetch_key(["UPGRADE", "upgradePackageInfo"]),
             "local_ip": self._local_ip(),
             "wan_ip": self.fetch_key(["CONNECTION", "netIp"]),
@@ -78,7 +78,7 @@ class EzvizSmartPlug:
             "optionals": self.fetch_key(["STATUS", "optionals"]),
             "supportExt": self._device["deviceInfos"]["supportExt"],
             "ezDeviceCapability": self.fetch_key(["deviceInfos", "ezDeviceCapability"]),
-            "is_on": self._switch[DeviceSwitchType.PLUG.value],
+            "is_on": self._switch.get(DeviceSwitchType.PLUG.value),
         }
 
     def _write_state(self, state: int) -> bool:

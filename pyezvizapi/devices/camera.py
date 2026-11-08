@@ -13,6 +13,7 @@ from pyezvizapi._shared.utils import (
     string_to_list,
 )
 from pyezvizapi.constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
+from pyezvizapi.devices.firmware import firmware_status
 from pyezvizapi.devices.payload import local_ip_address, switch_values
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.models import EzvizChimeMusic, EzvizDeviceChimeInfo, EzvizDeviceRecord
@@ -37,6 +38,8 @@ class CameraStatus(TypedDict, total=False):
     device_sub_category: str | None
     upgrade_percent: Any
     upgrade_in_progress: bool
+    upgrade_status: int | None
+    upgrade_phase: str | None
     latest_firmware_info: Any
     alarm_notify: bool
     alarm_schedules_enabled: bool
@@ -367,12 +370,11 @@ class EzvizCamera:
             "serial": self._serial,
             "name": name,
             "version": version,
-            "upgrade_available": bool(self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3),
+            **firmware_status(self.fetch_key(["UPGRADE"]), self.fetch_key(["STATUS"])),
             "status": dev_status,
             "device_category": device_category,
             "device_sub_category": device_sub_category,
             "upgrade_percent": self.fetch_key(["STATUS", "upgradeProcess"]),
-            "upgrade_in_progress": bool(self.fetch_key(["STATUS", "upgradeStatus"]) == 0),
             "latest_firmware_info": self.fetch_key(["UPGRADE", "upgradePackageInfo"]),
             "alarm_notify": bool(self.fetch_key(["STATUS", "globalStatus"])),
             "alarm_schedules_enabled": self._is_alarm_schedules_enabled(),

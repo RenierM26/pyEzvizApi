@@ -8,6 +8,7 @@ module must still affect dependent operations. No copied hook snapshots.
 
 from __future__ import annotations
 
+from collections.abc import Mapping as _StaticMapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
@@ -277,7 +278,11 @@ def get_device_infos(
         except (TypeError, ValueError):
             # Malformed optional supportExt must not discard otherwise usable device data.
             pass
-        _owner.convert_to_dict(result[_serial]["STATUS"].get("optionals"))
+        status_section = result[_serial]["STATUS"]
+        # Preserve invalid per-device data for the isolated renderer boundary;
+        # it must not prevent acquisition of healthy siblings.
+        if isinstance(status_section, _StaticMapping):
+            _owner.convert_to_dict(status_section.get("optionals"))
     if not serial:
         return result
     return _owner.cast("dict[_owner_types.Any, _owner_types.Any]", result.get(serial, {}))

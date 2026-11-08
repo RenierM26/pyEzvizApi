@@ -153,3 +153,5 @@ not established by that check. See [contributing](../CONTRIBUTING.md) for the
 separate offline test and HA acceptance environments.
 
 - [Stored SD catalog and batch download](recording-catalog.md) — query intervals, download over LAN/cloud, and resume.
+
+- [Shared typed inventory and freshness](device_inventory.md) — one bounded poll for async consumers.

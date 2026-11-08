@@ -22,7 +22,14 @@ _index_records = _cloud._index_records
 _batch_channel = _batch._batch_channel
 _digest = _store._digest
 
+# These historical helpers remain intentional compatibility exports, even
+# though their implementation owners no longer call them through this facade.
 __all__ = [
+    "_record_time",
+    "_stamp",
+    "_index_records",
+    "_batch_channel",
+    "_digest",
     "RecordingCatalog",
     "StoredRecording",
     "download_recordings",

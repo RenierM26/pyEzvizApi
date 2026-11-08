@@ -30,7 +30,7 @@ from pyezvizapi.streaming.ranges import (
     record_time as _record_time,
     utc_stamp as _stamp,
 )
-from pyezvizapi.streaming.recordings import RecordingCatalog, StoredRecording
+from pyezvizapi.streaming.recording_models import RecordingCatalog, StoredRecording
 
 _SEARCH = 0x111040
 _RECORD_BYTES = 80

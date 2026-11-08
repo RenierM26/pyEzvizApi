@@ -5,6 +5,9 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+- Separate recording catalog values, cloud discovery, batch orchestration and
+  manifest persistence while retaining existing imports and receipt formats.
+
 - Share native LAN SD login/logout ownership and route-neutral clock/validation
   helpers without changing wire selectors, playback parsing or public entrypoints.
 

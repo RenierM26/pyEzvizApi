@@ -3,6 +3,8 @@
 Current development-branch API. These commands query **camera SD recordings**,
 not subscription cloud storage. Discovery supports the cloud v2 index or native
 LAN-only HCNetSDK file search. LAN discovery and downloads require no account.
+LAN-only `recordings list` and `recordings download` commands do not construct an
+account client or load a token file, even if `--token-file` is supplied.
 
 ## 1. Query an explicit interval
 
@@ -140,3 +142,19 @@ values live in `streaming.recording_models`, cloud index queries in
 `streaming.recording_store` owns deterministic filenames, atomic manifests and
 hash-verified resume. Catalog version 1, manifest contents and receipt identities
 are unchanged by this separation. Clock helpers live in `streaming.ranges`.
+
+Batch route selection is represented internally by immutable `LanRecordingRoute`
+and `CloudRecordingRoute` values, plus `RecordingBatchLimits`. Existing
+`download_recordings` arguments remain supported; supplied clients retain the
+legacy `save_clip` adapter. Pass `None` as the client for standalone LAN batches:
+
+```python
+report = download_recordings(
+    None, catalog, "archive", source="local-playback",
+    host="192.0.2.10", password="DEVICE_PASSWORD",
+)
+```
+
+Cloud batches still require an account client for acquisition. Route credentials
+are not part of catalog/manifest serialization or receipt identity. No automatic
+route fallback, concurrency, or retry is introduced by the typed configuration.

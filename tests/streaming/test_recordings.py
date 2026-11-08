@@ -9,6 +9,7 @@ import pytest
 
 from pyezvizapi.cli import main as cli
 from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.streaming import recording_routes
 from pyezvizapi.streaming.recordings import (
     RecordingCatalog,
     StoredRecording,
@@ -188,8 +189,16 @@ def test_invalid_batch_does_not_acquire(tmp_path, kwargs):
 
 
 def test_cli_local_saved_catalog_never_logs_in(tmp_path, monkeypatch, capsys):
-    client = Saver()
-    monkeypatch.setattr(cli, "EzvizClient", lambda *a, **k: client)
+    calls = []
+    def forbidden(*args, **kwargs):
+        pytest.fail("LAN-only command accessed account/token state")
+    def native(endpoint, password, output, begin, end, **kwargs):
+        calls.append((endpoint, begin, end, kwargs))
+        Path(output).write_bytes(b"validated-media")
+        return {"ok": True}
+    monkeypatch.setattr(cli, "EzvizClient", forbidden)
+    monkeypatch.setattr(cli, "_load_token_file", forbidden)
+    monkeypatch.setattr(recording_routes, "download_lan_sd_recording", native)
     selected = tmp_path / "catalog.json"
     selected.write_text(json.dumps(catalog().to_dict()))
     password = tmp_path / "password"
@@ -197,7 +206,8 @@ def test_cli_local_saved_catalog_never_logs_in(tmp_path, monkeypatch, capsys):
     result = cli.main(["--token-file", str(tmp_path / "missing"), "recordings", "download",
         "--catalog", str(selected), "--output", str(tmp_path / "out"),
         "--source", "local-playback", "--host", "192.0.2.1", "--lan-password-file", str(password)])
-    assert result == 0 and len(client.calls) == 1
+    assert result == 0 and len(calls) == 1
+    assert calls[0][1:3] == (BEGIN, END)
     assert json.loads(capsys.readouterr().out)["local-playback"]["downloaded"] == 1
 
 

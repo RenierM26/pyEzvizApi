@@ -5,6 +5,10 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+- Use typed LAN/cloud recording route configurations and transfer limits;
+  LAN-only catalog/batch commands no longer construct an account client or
+  load account tokens. Existing batch arguments and receipts remain compatible.
+
 - Separate recording catalog values, cloud discovery, batch orchestration and
   manifest persistence while retaining existing imports and receipt formats.
 

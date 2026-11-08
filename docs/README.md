@@ -150,3 +150,5 @@ examples without logging in or running any command. It also checks that the
 changelog has one exact Unreleased section. External URLs and live behavior are
 not established by that check. See [contributing](../CONTRIBUTING.md) for the
 separate offline test and HA acceptance environments.
+
+- [Stored SD catalog and batch download](recording-catalog.md) — query intervals, download over LAN/cloud, and resume.

@@ -5,6 +5,8 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+- Add cloud SD catalog snapshots and resumable sequential batch downloads over LAN, cloud relay, or both, with explicit timezone, bounded catalog queries and hash-verified receipts.
+
 ### LAN SD downloads
 
 - Add account-free LAN SD recording downloads (`save clip --source local-playback`,

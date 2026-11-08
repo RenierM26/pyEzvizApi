@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
+from pyezvizapi.cli.commands.recording_batch import add_recordings_arguments
 from pyezvizapi.constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, BatteryCameraWorkMode
 from pyezvizapi.streaming.capture import _SOURCE_DEFAULT_DURATION, _SourceDefaultClientType
 from pyezvizapi.streaming.cloud.playback_range import (
@@ -1603,6 +1604,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_pagelist_arguments(subparsers)
     add_device_infos_arguments(subparsers)
     add_unifiedmsg_arguments(subparsers)
+    add_recordings_arguments(subparsers)
     add_sdcard_videos_arguments(subparsers)
     add_cloud_videos_arguments(subparsers)
     add_cloud_video_download_arguments(subparsers)

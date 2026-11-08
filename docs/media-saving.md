@@ -121,3 +121,6 @@ For shared/app-relative clocks, explicit command-port bootstrap templates,
 capability inspection and native reference tooling, see
 [advanced media recipes](media-advanced.md). These require source-specific
 metadata; they are not defaults for an ordinary clip save.
+
+For catalog discovery and resumable downloads of every listed interval, see
+[stored SD catalog and batch download](recording-catalog.md).

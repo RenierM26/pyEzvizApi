@@ -26,6 +26,7 @@ from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
 
 from pyezvizapi.cli import arguments as _cli_arguments
+from pyezvizapi.cli.commands.recording_batch import handle_recordings
 from pyezvizapi.cloud.token_store import save_private_token
 from pyezvizapi.devices.camera import EzvizCamera
 from pyezvizapi.cloud.cas import CasDeviceSession, EzvizCAS
@@ -1550,10 +1551,15 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     client: EzvizClient | None = None
-    if _save_clip_can_run_without_cloud_credentials(args):
+    local_batch = (
+        args.action == "recordings"
+        and args.recordings_action == "download"
+        and args.source == "local-playback"
+    )
+    if _save_clip_can_run_without_cloud_credentials(args) or local_batch:
         try:
             client = EzvizClient(args.username, args.password, args.region, token=token)
-            return _handle_save(args, client)
+            return handle_recordings(args, client) if local_batch else _handle_save(args, client)
         except PyEzvizError as exp:
             _LOGGER.error("%s", exp)
             return 1
@@ -1602,6 +1608,8 @@ def main(argv: list[str] | None = None) -> int:
             return _handle_home_defence_mode(args, client)
         if args.action == "stream":
             return _handle_stream(args, client)
+        if args.action == "recordings":
+            return handle_recordings(args, client)
         if args.action == "save":
             return _handle_save(args, client)
         if args.action == "camera":

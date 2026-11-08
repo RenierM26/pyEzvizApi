@@ -9,7 +9,14 @@ from typing import Any, Literal
 
 from pyezvizapi.constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, MAX_RETRIES
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.streaming.cloud.playback_range import (
+from pyezvizapi.streaming.discovery import LocalStreamDiscoveryCache
+from pyezvizapi.streaming.local.transport import (
+    EzvizLocalSdkCredentials,
+    HcNetSdkCommandPortGeneratedMultiSocketPlan,
+    HcNetSdkCommandPortMultiSocketPlan,
+)
+from pyezvizapi.streaming.media.models import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
+from pyezvizapi.streaming.ranges import (
     DEFAULT_PLAYBACK_MAX_BYTES,
     DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,
     native_playback_range,
@@ -19,13 +26,6 @@ from pyezvizapi.streaming.cloud.playback_range import (
     positive_timeout,
     selected_playback_range,
 )
-from pyezvizapi.streaming.discovery import LocalStreamDiscoveryCache
-from pyezvizapi.streaming.local.transport import (
-    EzvizLocalSdkCredentials,
-    HcNetSdkCommandPortGeneratedMultiSocketPlan,
-    HcNetSdkCommandPortMultiSocketPlan,
-)
-from pyezvizapi.streaming.media.models import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
 
 ClipSource = Literal[
     "auto",

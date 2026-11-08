@@ -24,14 +24,6 @@ from pyezvizapi.exceptions import (
 )
 from pyezvizapi.streaming.cloud import bootstrap
 from pyezvizapi.streaming.cloud.playback_audio import decrypt_playback_adts_audio
-from pyezvizapi.streaming.cloud.playback_range import (
-    DEFAULT_PLAYBACK_MAX_BYTES as DEFAULT_PLAYBACK_MAX_BYTES,  # noqa: PLC0414 -- preserve compatibility export
-    DEFAULT_PLAYBACK_TRANSFER_TIMEOUT as DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,  # noqa: PLC0414 -- preserve compatibility export
-    native_playback_range,
-    playback_integer,
-    positive_timeout as _positive_timeout,
-    selected_playback_range,
-)
 from pyezvizapi.streaming.cloud.protocol import (
     SocketFactory,
     VtmStreamClient,
@@ -48,6 +40,14 @@ from pyezvizapi.streaming.media.mpegps import (
     _next_mpeg_ps_packet_start,
     _pes_payload_start,
     validate_sd_playback_framing,
+)
+from pyezvizapi.streaming.ranges import (
+    DEFAULT_PLAYBACK_MAX_BYTES as DEFAULT_PLAYBACK_MAX_BYTES,  # noqa: PLC0414 -- preserve compatibility export
+    DEFAULT_PLAYBACK_TRANSFER_TIMEOUT as DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,  # noqa: PLC0414 -- preserve compatibility export
+    native_playback_range,
+    playback_integer,
+    positive_timeout as _positive_timeout,
+    selected_playback_range,
 )
 
 # Exact terminal bytes observed after complete PS packets in the retained H9c

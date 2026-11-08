@@ -109,8 +109,8 @@ lazy root exports: `build_vtm_playback_url`, `get_cloud_playback_stream_info`,
 
 Capture/validation failures do not truncate an existing path or append a prefix
 to a caller buffer. Output is published only after validation/decryption; a final
-filesystem/write failure is not an atomic rollback. Downloads are bounded in
-memory by the configured byte limit; choose smaller limits for constrained hosts.
+filesystem/write failure is not an atomic rollback. Input accumulation is capped by the configured byte limit; decryption and
+publication may hold additional copies. Choose smaller limits for constrained hosts.
 
 A clean peer EOF or idle timeout **alone is not completion**. Full-range saves
 require a continuous clear PES video-PTS span covering the selected duration
@@ -141,3 +141,20 @@ ranges, incomplete/empty/truncated input, encrypted packets after clear media,
 limits, output preservation and separation from live playback. Actual-device
 qualification must additionally decode both video and audio and record the
 selected model/source/commit; synthetic PTS coverage is not live playback proof.
+
+## Recorded qualification
+
+On a supplied H9c SD recording, bounded cloud transfers returned a selected
+20-second range (1,155,884 MPEG-PS bytes; video PTS span 19.933 seconds). The
+installed wheel was then exercised offline against those retained bytes with the
+known stored recording key and explicit SD-audio decryption. Both 1920×1080 HEVC
+tracks decoded 300 frames each; 16 kHz mono AAC decoded 313 frames, with no
+FFprobe or FFmpeg decode errors. This confirms decoding, not audible/screen
+playback or exact wall-clock identity.
+
+Subsequent relay negotiation returned code `6520`; the cause is not established.
+The API now surfaces a numeric negotiation failure immediately and publishes no
+clip, rather than waiting and reporting an empty download. No retry or fallback
+is automatic. A working retained sample is not a long-soak or universal-camera
+claim. Camera-key retrieval on this account requested MFA; it was not bypassed.
+No camera/HA settings or production credentials were changed by qualification.

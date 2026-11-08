@@ -8,8 +8,9 @@
 published version. A merged PR, green CI, a local wheel or a validation ZIP does
 not publish PyPI artifacts or update a Home Assistant dependency pin.
 
-The project currently uses PEP 440-compatible four-component versions such as
-`1.0.5.0`; this is not the three-component SemVer format. Treat import removals,
+Historical releases use PEP 440-compatible four-component versions such as
+`1.0.5.0`. The prepared **2.0.0** release begins three-component major/minor/patch
+numbering; see [its upgrade notes](release-2.0.0.md). Treat import removals,
 auth/push migrations and status-contract changes as breaking changes regardless
 of the numeric spelling. Document them before selecting the next release version.
 
@@ -24,7 +25,11 @@ These steps publish externally only when a maintainer deliberately runs them.
    Keep one exact `## Unreleased` heading until release preparation.
 3. Run **Prepare Release** with the bare matching version (no leading `v`).
    It moves that section into a dated `## v<version> - YYYY-MM-DD` entry and
-   opens a changelog PR. Review and merge that PR; no PyPI upload occurs here.
+   opens a changelog PR. A manually prepared version/changelog/migration PR
+   (such as #298 for 2.0.0) replaces this step; do not create a duplicate.
+   Review and merge the preparation PR; no PyPI upload occurs here.
+   Run **Release Check** on merged main with the proposed `release-tag`
+   (for example `v2.0.0`) and inspect its checked distributions before publication.
 4. Run **Upload Python Package** manually with the same bare version. It rejects
    reused tags/releases, validates metadata, builds and smoke-tests distributions,
    publishes through trusted publishing, and creates the matching GitHub tag/release.

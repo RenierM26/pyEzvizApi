@@ -44,6 +44,7 @@ See [release availability](releases.md#source-state-is-not-a-published-release).
 - [HPD7 gate/door unlock routing (issue #268)](hpd7-unlock-routing.md)
 - [Regression controls from Home Assistant logs](ha-observed-error-regressions.md)
 - [CodeQL triage — 2026-11-08](codeql-triage.md)
+- [2.0.0 upgrade and release notes](release-2.0.0.md)
 - [Releases and versioning](releases.md)
 - [Repository Watch Agent](repo-watch-agent.md)
 

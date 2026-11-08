@@ -12,6 +12,14 @@ may not contain every API described here. Match documentation to your installed
 release tag, or use a source checkout for current development. See the
 [changelog](https://github.com/RenierM26/pyEzvizApi/blob/main/CHANGELOG.md), especially the removed import paths and push migration.
 
+## Upgrading to 2.0
+
+Version 2.0 removes obsolete flat imports and legacy push registration. Review
+the [release and migration notes](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/release-2.0.0.md)
+before upgrading. Push consumers need explicit channel-99 migration and durable
+complete-token storage; polling remains independent of push. Updating this library
+does not migrate Home Assistant integrations or change their dependency pins.
+
 ## Install
 
 Python **3.12 or newer** is required for the library.

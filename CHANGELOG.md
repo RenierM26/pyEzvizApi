@@ -5,6 +5,17 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.0.0 - 2026-11-08
+
+Release preparation; publication is pending. See [upgrade and release notes](docs/release-2.0.0.md).
+
+### Push migration (breaking)
+
+- Replace obsolete push registration with channel-99, durable complete-token
+  persistence through `on_token_updated`, and worker health monitoring through
+  `raise_if_failed()`. Polling remains independent of push.
+- Reauthenticate when the host MAC-derived push identity changes.
+
 - Expose the existing LAN-only RTSP service control as `lan rtsp status|enable|disable`
   with private-file credentials, preservation of unrelated services, strict switch
   validation and configuration read-back. No cloud fallback or automatic write
@@ -82,6 +93,13 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
   private callback exception text from native-library error printing.
 
 ### Fixed
+
+- Bound stream reads, startup, keepalives, and shutdown to capture deadlines; make rapid local receiver-port reopen safe without reusable Windows bindings.
+- Share RTP/IDMX processing and FFmpeg cleanup across stream paths and expose grouped typed clip options; use the canonical imports documented in the module map.
+- Auto-select cloud resources for multi-lens cameras, refresh stale local/ECDH routes, and use automatic local NAL-header detection and clean-window recovery.
+- Preserve MFA codes across region redirects.
+- Reject empty, incomplete, discontinuous, or ambiguous bounded cloud RTP video with typed errors instead of publishing partial output. Retain explicit `no_media`/proxy HTTP 502 when upstream delivery is unavailable.
+- Reject materially truncated timed decrypted cloud MPEG-PS clips with `EzvizIncompleteMediaError`; privately stage bounded cloud saves to preserve existing destinations on capture/remux failure.
 
 - Preserve valid UTC alarm epochs when DST-localized or stale companion strings
   disagree with a camera's configured offset. Retain local-clock-encoded epochs

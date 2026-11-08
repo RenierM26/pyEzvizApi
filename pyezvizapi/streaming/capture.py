@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pyezvizapi.constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, MAX_RETRIES
 from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.streaming.cloud.playback_range import playback_range
 from pyezvizapi.streaming.discovery import LocalStreamDiscoveryCache
 from pyezvizapi.streaming.local.transport import (
     EzvizLocalSdkCredentials,
@@ -17,8 +18,64 @@ from pyezvizapi.streaming.local.transport import (
 )
 from pyezvizapi.streaming.media.models import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
 
-ClipSource = Literal["auto", "local-sdk", "local-sdk-ecdh", "hcnetsdk-command-port", "cloud"]
+ClipSource = Literal[
+    "auto", "local-sdk", "local-sdk-ecdh", "hcnetsdk-command-port", "cloud", "cloud-playback"
+]
 ClipOutputFormat = Literal["mpegps", "mpegts"]
+
+
+class _SourceDefaultDuration(float):
+    """Distinguish omitted duration from an explicit ten-second media range."""
+
+
+_SOURCE_DEFAULT_DURATION: float = _SourceDefaultDuration(10.0)
+
+
+class _SourceDefaultClientType(int):
+    """Preserve live type 9 while selecting playback type 3 only on omission."""
+
+
+_SOURCE_DEFAULT_CLIENT_TYPE: int = _SourceDefaultClientType(9)
+
+
+@dataclass(frozen=True)
+class CloudPlaybackClipSource:
+    """Cloud-mediated SD-card recording range, with explicit transfer budgets."""
+
+    begin_time: str
+    end_time: str
+    kind: Literal["cloud-playback"] = field(default="cloud-playback", init=False)
+    client_type: int = 3
+    token_index: int = 0
+    refresh_vtm: bool = True
+    timeout: float = 10.0
+    lid: str | None = None
+    max_bytes: int = 128 * 1024 * 1024
+    transfer_timeout: float = 60.0
+    smscode: str | int | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        playback_range(self.begin_time, self.end_time)
+        for value in (self.timeout, self.transfer_timeout):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise PyEzvizError("SD playback timeouts must be positive and finite")
+        if (
+            isinstance(self.max_bytes, bool)
+            or not isinstance(self.max_bytes, int)
+            or self.max_bytes <= 0
+        ):
+            raise PyEzvizError("SD playback max_bytes must be a positive integer")
+        if (
+            isinstance(self.token_index, bool)
+            or not isinstance(self.token_index, int)
+            or self.token_index < 0
+        ):
+            raise PyEzvizError("SD playback token_index must be a nonnegative integer")
 
 
 @dataclass(frozen=True)
@@ -121,6 +178,7 @@ type ClipSourceOptions = (
     | LocalSdkEcdhClipSource
     | HcNetSdkCommandPortClipSource
     | CloudClipSource
+    | CloudPlaybackClipSource
 )
 
 
@@ -129,7 +187,9 @@ class ClipOptions:
     """Complete typed configuration for :meth:`EzvizClient.save_clip_with_options`."""
 
     source: ClipSourceOptions = field(default_factory=LocalSdkClipSource)
-    capture: CaptureLimits = field(default_factory=lambda: CaptureLimits(duration_seconds=10.0))
+    capture: CaptureLimits = field(
+        default_factory=lambda: CaptureLimits(duration_seconds=_SOURCE_DEFAULT_DURATION)
+    )
     decode: MediaDecodeOptions = field(
         default_factory=lambda: MediaDecodeOptions(nalu_header_size=0)
     )
@@ -141,6 +201,8 @@ class ClipOptions:
 
         if self.mux is not None:
             return self.mux
+        if isinstance(self.source, CloudPlaybackClipSource):
+            return MediaMuxOptions(output_format="mpegps")
         if isinstance(self.source, LocalSdkEcdhClipSource):
             return MediaMuxOptions(
                 output_format="mpegts" if self.decode.decrypt_video else "mpegps"

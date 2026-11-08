@@ -29,6 +29,23 @@ def _validate_shared_clip_args(
     args: _owner_types.argparse.Namespace, *, _owner: _ModuleType
 ) -> None:
     """Reject unsupported clock assertions before account or camera access."""
+    if args.source == "cloud-playback":
+        from pyezvizapi.streaming.capture import CloudPlaybackClipSource  # noqa: PLC0415
+        from pyezvizapi.streaming.media.models import CaptureLimits  # noqa: PLC0415
+
+        CloudPlaybackClipSource(
+            args.begin_time or "",
+            args.end_time or "",
+            timeout=args.timeout,
+            token_index=args.token_index,
+            max_bytes=args.playback_max_bytes,
+            transfer_timeout=args.playback_transfer_timeout,
+        )
+        CaptureLimits(duration_seconds=args.duration, max_packets=args.max_packets)
+        if args.format not in (None, "mpegps"):
+            raise _owner.PyEzvizError("SD playback requires --format mpegps")
+    elif args.begin_time is not None or args.end_time is not None or args.lid is not None:
+        raise _owner.PyEzvizError("Playback time/lid selectors require --source cloud-playback")
     if not args.native_shared_clock:
         return
     if args.source not in {"local-sdk", "hcnetsdk-command-port"} or args.format not in {
@@ -52,11 +69,12 @@ def _handle_save_clip(
 ) -> int:
     """Save a short direct-local camera clip to disk."""
     _owner._validate_shared_clip_args(args)
-    if args.channel is None and args.source not in {"cloud", "auto"}:
+    if args.channel is None and args.source not in {"cloud", "cloud-playback", "auto"}:
         args.channel = 1
     decrypt_codec = args.decrypt_codec or (
         "auto"
-        if args.decrypt_video and args.source in {"auto", "cloud", "local-sdk", "local-sdk-ecdh"}
+        if args.decrypt_video
+        and args.source in {"auto", "cloud", "cloud-playback", "local-sdk", "local-sdk-ecdh"}
         else "encrypted-header"
     )
     command_generated_plan = (
@@ -96,7 +114,10 @@ def _handle_save_clip(
     output_format = args.format
     if output_format is None:
         output_format = (
-            "mpegps" if args.source == "local-sdk-ecdh" and (not args.decrypt_video) else "mpegts"
+            "mpegps"
+            if args.source == "cloud-playback"
+            or (args.source == "local-sdk-ecdh" and (not args.decrypt_video))
+            else "mpegts"
         )
     save_kwargs: dict[str, _owner_types.Any] = {
         "source": args.source,
@@ -130,6 +151,17 @@ def _handle_save_clip(
         save_kwargs["native_shared_clock"] = True
     if args.source in {"local-sdk", "local-sdk-ecdh"}:
         save_kwargs["register_p2p_session"] = not args.no_p2p_register
+    if args.source == "cloud-playback":
+        save_kwargs.update(
+            cloud_playback_begin_time=args.begin_time,
+            cloud_playback_end_time=args.end_time,
+            cloud_playback_lid=args.lid,
+            cloud_playback_max_bytes=args.playback_max_bytes,
+            cloud_playback_transfer_timeout=args.playback_transfer_timeout,
+            cloud_client_type=args.client_type,
+            cloud_token_index=args.token_index,
+            cloud_refresh_vtm=not args.no_refresh_vtm,
+        )
     if args.source == "auto":
         save_kwargs["local_sdk_ecdh_receiver_port"] = args.local_sdk_ecdh_receiver_port
     if args.source == "local-sdk-ecdh":

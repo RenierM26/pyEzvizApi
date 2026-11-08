@@ -177,6 +177,7 @@ ClipOptions = _compat_module_6.ClipOptions
 ClipOutputFormat = _compat_module_6.ClipOutputFormat
 ClipSource = _compat_module_6.ClipSource
 ClipSourceOptions = _compat_module_6.ClipSourceOptions
+CloudPlaybackClipSource = _compat_module_6.CloudPlaybackClipSource
 CloudClipSource = _compat_module_6.CloudClipSource
 HcNetSdkCommandPortClipSource = _compat_module_6.HcNetSdkCommandPortClipSource
 LocalSdkClipSource = _compat_module_6.LocalSdkClipSource
@@ -273,6 +274,8 @@ class _SourceDefaultNaluHeaderSize(int):
 
 
 _SOURCE_DEFAULT_NALU_HEADER_SIZE: int = _SourceDefaultNaluHeaderSize(0)
+_SOURCE_DEFAULT_DURATION = _compat_module_6._SOURCE_DEFAULT_DURATION
+_SOURCE_DEFAULT_CLIENT_TYPE = _compat_module_6._SOURCE_DEFAULT_CLIENT_TYPE
 
 UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
@@ -324,6 +327,11 @@ class SaveMediaResult(TypedDict, total=False):
     cloud_refresh_vtm: bool
     image_url: str
     triggered_capture: bool
+    begin_time: str
+    end_time: str
+    range_complete: bool
+    observed_pts_span_seconds: float | None
+    completion_reason: str
 
 
 class MetaDict(TypedDict, total=False):
@@ -2234,7 +2242,7 @@ class EzvizClient:
         allow_cloud_fallback: bool = True,
         local_credentials: EzvizLocalSdkCredentials | None = None,
         output_format: ClipOutputFormat | None = None,
-        duration_seconds: float | None = 10.0,
+        duration_seconds: float | None = _SOURCE_DEFAULT_DURATION,
         max_packets: int | None = None,
         channel: int | None = None,
         ffmpeg_path: str = "ffmpeg",
@@ -2266,7 +2274,7 @@ class EzvizClient:
         hcnetsdk_video_clean_window_max_windows: int | None = None,
         hcnetsdk_video_wait_for_clean_window: bool | None = None,
         hcnetsdk_video_clean_window_wait_seconds: float | None = None,
-        cloud_client_type: int = 9,
+        cloud_client_type: int = _SOURCE_DEFAULT_CLIENT_TYPE,
         cloud_token_index: int = 0,
         cloud_refresh_vtm: bool = True,
         local_sdk_ecdh_receiver_port: int | None = None,
@@ -2275,6 +2283,11 @@ class EzvizClient:
         local_sdk_ecdh_max_frames: int | None = None,
         native_shared_clock: bool = False,
         app_relative_clock: bool = False,
+        cloud_playback_begin_time: str | None = None,
+        cloud_playback_end_time: str | None = None,
+        cloud_playback_lid: str | None = None,
+        cloud_playback_max_bytes: int = 128 * 1024 * 1024,
+        cloud_playback_transfer_timeout: float = 60.0,
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
 
@@ -2298,6 +2311,45 @@ class EzvizClient:
         ``0`` default.
         Passing ``0`` or ``None`` explicitly preserves that exact choice.
         """
+        if source == "cloud-playback":
+            if timeout is None:
+                raise PyEzvizError("SD playback requires a finite socket timeout")
+            if native_shared_clock or app_relative_clock:
+                raise PyEzvizError("SD playback does not support native clock overrides")
+            return self.save_clip_with_options(
+                serial,
+                output,
+                ClipOptions(
+                    source=CloudPlaybackClipSource(
+                        cloud_playback_begin_time or "",
+                        cloud_playback_end_time or "",
+                        client_type=3
+                        if isinstance(cloud_client_type, _compat_module_6._SourceDefaultClientType)
+                        else cloud_client_type,
+                        token_index=cloud_token_index,
+                        refresh_vtm=cloud_refresh_vtm,
+                        timeout=timeout,
+                        lid=cloud_playback_lid,
+                        max_bytes=cloud_playback_max_bytes,
+                        transfer_timeout=cloud_playback_transfer_timeout,
+                        smscode=smscode,
+                    ),
+                    capture=CaptureLimits(
+                        duration_seconds=duration_seconds, max_packets=max_packets
+                    ),
+                    decode=MediaDecodeOptions(
+                        decrypt_video=decrypt_video,
+                        media_key=media_key,
+                        nalu_header_size=None
+                        if nalu_header_size is _SOURCE_DEFAULT_NALU_HEADER_SIZE
+                        else nalu_header_size,
+                    ),
+                    mux=MediaMuxOptions(
+                        output_format=output_format or "mpegps", ffmpeg_path=ffmpeg_path
+                    ),
+                    channel=channel,
+                ),
+            )
         return _capture.save_clip(
             self,
             serial,
@@ -4148,6 +4200,7 @@ __all__ = [
     "ClipSource",
     "ClipSourceOptions",
     "CloudClipSource",
+    "CloudPlaybackClipSource",
     "DefenseModeType",
     "DeviceCatagories",
     "DeviceException",

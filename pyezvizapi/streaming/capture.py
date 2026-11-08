@@ -9,7 +9,14 @@ from typing import Any, Literal
 
 from pyezvizapi.constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, MAX_RETRIES
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.streaming.cloud.playback_range import playback_range
+from pyezvizapi.streaming.cloud.playback_range import (
+    DEFAULT_PLAYBACK_MAX_BYTES,
+    DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,
+    playback_integer,
+    playback_range,
+    positive_timeout,
+    selected_playback_range,
+)
 from pyezvizapi.streaming.discovery import LocalStreamDiscoveryCache
 from pyezvizapi.streaming.local.transport import (
     EzvizLocalSdkCredentials,
@@ -48,34 +55,18 @@ class CloudPlaybackClipSource:
     refresh_vtm: bool = True
     timeout: float = 10.0
     lid: str | None = None
-    max_bytes: int = 128 * 1024 * 1024
-    transfer_timeout: float = 60.0
+    max_bytes: int = DEFAULT_PLAYBACK_MAX_BYTES
+    transfer_timeout: float = DEFAULT_PLAYBACK_TRANSFER_TIMEOUT
     smscode: str | int | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         playback_range(self.begin_time, self.end_time)
         if not isinstance(self.decrypt_audio, bool):
             raise PyEzvizError("SD playback decrypt_audio must be a boolean")
-        for value in (self.timeout, self.transfer_timeout):
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                or value <= 0
-            ):
-                raise PyEzvizError("SD playback timeouts must be positive and finite")
-        if (
-            isinstance(self.max_bytes, bool)
-            or not isinstance(self.max_bytes, int)
-            or self.max_bytes <= 0
-        ):
-            raise PyEzvizError("SD playback max_bytes must be a positive integer")
-        if (
-            isinstance(self.token_index, bool)
-            or not isinstance(self.token_index, int)
-            or self.token_index < 0
-        ):
-            raise PyEzvizError("SD playback token_index must be a nonnegative integer")
+        positive_timeout(self.timeout, "timeout")
+        positive_timeout(self.transfer_timeout, "transfer_timeout")
+        playback_integer(self.max_bytes, "max_bytes")
+        playback_integer(self.token_index, "token_index", minimum=0)
 
 
 @dataclass(frozen=True)
@@ -195,6 +186,18 @@ class ClipOptions:
     )
     mux: MediaMuxOptions | None = None
     channel: int | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.source, CloudPlaybackClipSource):
+            selected_playback_range(
+                self.source.begin_time,
+                self.source.end_time,
+                None
+                if isinstance(self.duration_seconds, _SourceDefaultDuration)
+                else self.duration_seconds,
+            )
+            if self.channel is not None:
+                playback_integer(self.channel, "channel", minimum=0)
 
     def resolved_mux(self) -> MediaMuxOptions:
         """Return explicit mux settings or the source-compatible default."""

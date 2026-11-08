@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from pyezvizapi.streaming.cloud.playback_range import (
+    DEFAULT_PLAYBACK_MAX_BYTES,
+    DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,
+)
+
 import sys as _sys
 
 import base64
@@ -2287,8 +2292,8 @@ class EzvizClient:
         cloud_playback_end_time: str | None = None,
         cloud_playback_lid: str | None = None,
         cloud_playback_decrypt_audio: bool = False,
-        cloud_playback_max_bytes: int = 128 * 1024 * 1024,
-        cloud_playback_transfer_timeout: float = 60.0,
+        cloud_playback_max_bytes: int = DEFAULT_PLAYBACK_MAX_BYTES,
+        cloud_playback_transfer_timeout: float = DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
 

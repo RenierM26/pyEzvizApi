@@ -36,6 +36,13 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Fixed
 
+- Preserve existing SD download paths on write/flush/replace failures with
+  same-directory atomic publication; spool transport and output staging to disk.
+- Expose SD relay refusals as `EzvizPlaybackNegotiationError.result_code`
+  without automatic retries or assumptions about code 6520.
+- Share MPEG-PS/AAC helpers and playback budgets/range validation while retaining
+  compatibility imports and the whole-range omitted-duration default.
+
 - Extract pure SDK/client/packet responsibilities and command-specific CLI builders; share device helpers and make resolver ownership explicit.
 
 - Bound scoped bootstrap HTTP caller waits and response sizes; collect pagelists iteratively with progress guards.

@@ -162,3 +162,28 @@ clip, rather than waiting and reporting an empty download. No retry or fallback
 is automatic. A working retained sample is not a long-soak or universal-camera
 claim. Camera-key retrieval on this account requested MFA; it was not bypassed.
 No camera/HA settings or production credentials were changed by qualification.
+
+
+## Failure handling and storage
+
+Catch `pyezvizapi.exceptions.EzvizPlaybackNegotiationError` to inspect the stable
+integer `result_code`, `reason="playback_negotiation_failed"`, and
+`source="cloud-playback"`. This remains a `PyEzvizError`; no URL, token or native
+response is attached. Code `6520` is an observed refusal, not a diagnosed busy
+session. Closing the TCP socket is verified; server-side release is not proved.
+Do not infer a required StopStream command from the unrelated VTDU protobuf
+builder or add blind retries without matching native session evidence.
+
+Transport and validated-output staging each spill to temporary storage above
+1 MiB. The existing framing and decrypt passes still need a complete byte-bounded
+snapshot; this is not a constant-memory decoder. Budget disk space for transport,
+validated output and the publication copy. Temporary files close on failure.
+Path saves write/flush/fsync a same-directory temporary file, close it, and replace
+the destination atomically. A pre-replacement error leaves existing bytes intact
+and removes the temporary file. Binary file-like outputs cannot offer rollback
+if their own final write/flush fails; they receive only validated media.
+
+CLI, typed sources and copier share finite-budget and effective UTC-range rules.
+An omitted duration retains the entire selection; explicit ten seconds selects
+ten seconds, and a duration beyond the range is clamped to its end. The effective
+end must be a whole UTC second. Live-capture defaults are unchanged.

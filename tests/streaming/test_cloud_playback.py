@@ -8,17 +8,24 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.exceptions import EzvizIncompleteMediaError, PyEzvizError
+from pyezvizapi.exceptions import (
+    EzvizIncompleteMediaError,
+    EzvizPlaybackNegotiationError,
+    PyEzvizError,
+)
 from pyezvizapi.streaming.capture import ClipOptions, CloudPlaybackClipSource
-from pyezvizapi.streaming.cloud import playback
+from pyezvizapi.streaming.cloud import playback, protocol
 from pyezvizapi.streaming.cloud.protocol import (
     VtmChannel,
     VtmMessageCode,
     VtmStreamClient,
     VtmStreamEOF,
+    _proto_varint,
     build_stream_info_request,
     encode_vtm_packet,
 )
+from pyezvizapi.streaming.media import crypto, mpegps, rtp
+from pyezvizapi.streaming.media.models import CaptureLimits
 from tests.streaming.media.test_stream_media import _timed_video_pes
 from tests.streaming.test_stream_transport import FakeVtmSocket
 
@@ -163,14 +170,15 @@ def test_truncated_ps_tail_with_complete_vtm_and_pts_preserves_destination(
     assert output.read_bytes() == KEEP and sock.closed
 
 
-@pytest.mark.parametrize(
-    "program_end", [b"", b"\x00\x00\x01\xb9", b"\x24kih\x04\x03\x02\x01"]
-)
+@pytest.mark.parametrize("program_end", [b"", b"\x00\x00\x01\xb9", b"\x24kih\x04\x03\x02\x01"])
 def test_unbounded_video_pes_and_optional_program_end_remain_supported(monkeypatch, program_end):
-    unbounded = b"".join(
-        PACK + pes[:4] + b"\x00\x00" + pes[6:]
-        for pes in (_timed_video_pes(i * 90_000) for i in range(21))
-    ) + program_end
+    unbounded = (
+        b"".join(
+            PACK + pes[:4] + b"\x00\x00" + pes[6:]
+            for pes in (_timed_video_pes(i * 90_000) for i in range(21))
+        )
+        + program_end
+    )
     sock, _, _ = transport(monkeypatch, body=unbounded)
     output = BytesIO()
     result = playback.copy_cloud_playback_to_mpegps(object(), "CAM123", output, BEGIN, END)
@@ -414,3 +422,129 @@ def test_zero_progress_output_write_fails(monkeypatch):
     with pytest.raises(PyEzvizError, match="write"):
         playback.copy_cloud_playback_to_mpegps(object(), "CAM123", StalledWriter(), BEGIN, END)
     assert sock.closed
+
+
+@pytest.mark.parametrize("result_code", [6520, 401, 9999])
+def test_typed_negotiation_refusal_closes_socket_without_retry(monkeypatch, result_code):
+
+    sock = FakeVtmSocket(
+        [
+            encode_vtm_packet(
+                _proto_varint(1, result_code), message_code=VtmMessageCode.STREAMINFO_RSP
+            )
+        ]
+    )
+    calls = []
+
+    def opened(*args, **kwargs):
+        calls.append(1)
+        return VtmStreamClient(
+            "ysproto://example.test:8554/playback", socket_factory=lambda *_: sock
+        )
+
+    monkeypatch.setattr(playback, "open_cloud_playback_stream", opened)
+    output = BytesIO(KEEP)
+    with pytest.raises(EzvizPlaybackNegotiationError) as caught:
+        playback.copy_cloud_playback_to_mpegps(object(), "CAM123", output, BEGIN, END)
+    assert caught.value.result_code == result_code
+    assert caught.value.source == "cloud-playback"
+    assert caught.value.reason == "playback_negotiation_failed"
+    assert sock.closed and output.getvalue() == KEEP and calls == [1]
+
+
+@pytest.mark.parametrize("failure", ["write", "flush", "fsync", "replace"])
+def test_atomic_publication_failure_preserves_path_and_cleans_temp(monkeypatch, tmp_path, failure):
+    transport(monkeypatch)
+    path = tmp_path / "recording.ps"
+    path.write_bytes(EXISTING)
+
+    def fail(*args, **kwargs):
+        raise OSError("simulated publication failure")
+
+    if failure in ("write", "flush"):
+        original = playback._publish_playback  # noqa: SLF001 -- injected publication failure
+
+        def publish(staging, output):
+            if failure == "write":
+                output.write(b"partial")
+                fail()
+            original(staging, output)
+            fail()
+
+        monkeypatch.setattr(playback, "_publish_playback", publish)
+    else:
+        monkeypatch.setattr(playback.os, failure, fail)
+    with pytest.raises(OSError, match="simulated"):
+        playback.save_cloud_playback_clip(
+            object(), "CAM123", path, ClipOptions(source=CloudPlaybackClipSource(BEGIN, END))
+        )
+    assert path.read_bytes() == EXISTING
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_atomic_publication_success_and_spool_rollover(monkeypatch, tmp_path):
+    # Both collection and publication staging must spill rather than growing BytesIO.
+    body = media() * 2000
+    # Limit to a packet for this storage-focused case (PTS epochs repeat).
+    wire = START + b"".join(
+        encode_vtm_packet(body[i : i + 60000], channel=2) for i in range(0, len(body), 60000)
+    )
+    sock = FakeVtmSocket([wire])
+    monkeypatch.setattr(
+        playback,
+        "open_cloud_playback_stream",
+        lambda *a, **kw: VtmStreamClient(
+            "ysproto://example.test:8554/playback", socket_factory=lambda *_: sock
+        ),
+    )
+    rolled = []
+    original = playback.SpooledTemporaryFile
+
+    def spool(*args, **kwargs):
+        staging = original(*args, **kwargs)
+        original_rollover = staging.rollover
+
+        def rollover():
+            rolled.append(True)
+            return original_rollover()
+
+        monkeypatch.setattr(staging, "rollover", rollover)
+        return staging
+
+    monkeypatch.setattr(playback, "SpooledTemporaryFile", spool)
+
+    path = tmp_path / "recording.ps"
+    path.write_bytes(EXISTING)
+    result = playback.save_cloud_playback_clip(
+        object(),
+        "CAM123",
+        path,
+        ClipOptions(
+            source=CloudPlaybackClipSource(BEGIN, END),
+            capture=CaptureLimits(max_packets=1000, duration_seconds=None),
+        ),
+    )
+    assert result["bytes"] == len(body) and path.read_bytes() == body
+    assert len(rolled) == 2 and list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("duration", [0.5, True, float("nan"), -1])
+def test_typed_and_direct_duration_validation_agree(duration):
+
+    with pytest.raises(PyEzvizError):
+        ClipOptions(
+            source=CloudPlaybackClipSource(BEGIN, END),
+            capture=CaptureLimits(duration_seconds=duration),
+        )
+    with pytest.raises(PyEzvizError):
+        playback.copy_cloud_playback_to_mpegps(
+            object(), "CAM123", BytesIO(), BEGIN, END, duration_seconds=duration
+        )
+
+
+def test_shared_helper_compatibility_identities():
+
+    assert protocol._mpeg_ps_video_decrypt_ranges is mpegps._mpeg_ps_video_decrypt_ranges  # noqa: SLF001 -- compatibility identity
+    assert protocol.mpeg_ps_video_pts_span_seconds is mpegps.mpeg_ps_video_pts_span_seconds
+    assert rtp._rtp_media_aes_key is crypto.media_aes_key  # noqa: SLF001 -- compatibility identity
+    assert rtp._decrypt_idmx_aac_access_unit is crypto.decrypt_aac_access_unit  # noqa: SLF001 -- compatibility identity

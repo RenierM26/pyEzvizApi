@@ -201,5 +201,16 @@ jobs:
         run: pip install -e . -r examples/home_assistant/requirements-test.txt
       - name: HA HTTP, config flow, stream and lifecycle controls
         run: python -m pytest examples/home_assistant/tests -o asyncio_mode=auto
+      - name: Check out pinned ha-ezviz consumer
+        uses: actions/checkout@v7
+        with:
+          repository: RenierM26/ha-ezviz
+          ref: aa37ffa0349d26bcc7ba262c9ad90f50d904b4af
+          path: .qualification/ha-ezviz
+          persist-credentials: false
+      - name: Actual ha-ezviz setup, polling, controls, RTSP and push boundary
+        env:
+          HA_EZVIZ_SOURCE: ${{ github.workspace }}/.qualification/ha-ezviz
+        run: python -m pytest examples/ha_ezviz/tests -o asyncio_mode=auto
       - name: Typecheck integration with actual HA types
         run: python -m mypy --config-file examples/home_assistant/mypy.ini examples/home_assistant/custom_components/ezviz_native

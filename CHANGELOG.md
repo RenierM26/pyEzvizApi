@@ -5,6 +5,12 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+- Add bounded `poll_devices()` with immutable typed snapshots, detached dictionary
+  adapters, per-device health and pure family selectors; keep legacy loaders intact.
+- Preserve unknown detector semantics and isolate malformed device renders without
+  losing current siblings or silently declaring retained data fresh.
+
+
 - Add read-only gateway-linked Detector support and `load_detectors()`, based on
   Simone Rescio (@srescio)'s [PR #99](https://github.com/RenierM26/pyEzvizApi/pull/99).
   Parse contact, water, siren, battery and radio properties from `FEATURE_INFO`;

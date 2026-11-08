@@ -84,6 +84,25 @@ class EzvizDetector:
         result = channel.get("global")
         return result if isinstance(result, Mapping) else {}
 
+    def observed_fields(self) -> frozenset[str]:
+        """Report actual property paths, including present-but-unknown values."""
+        feat = self._feature_global()
+        result = set()
+        for name, path in _FEATURE_FIELDS.items():
+            value = feat
+            for key in path:
+                if not isinstance(value, Mapping) or key not in value:
+                    break
+                value = value[key]
+            else:
+                result.add(name)
+        if any(
+            isinstance(feat.get(group), Mapping) and "SurplusPower" in feat[group]
+            for group in ("BatteryInfo", "PowerMgr")
+        ):
+            result.add("battery_level")
+        return frozenset(result)
+
     def status(self) -> dict[str, Any]:
         """Return a status dictionary for this detector.
 

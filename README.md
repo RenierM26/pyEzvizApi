@@ -80,3 +80,9 @@ for tested boundaries and remaining live acceptance work.
 Apache-2.0; see [LICENSE](https://github.com/RenierM26/pyEzvizApi/blob/main/LICENSE).
 
 [Support the maintainer](https://www.buymeacoffee.com/renierm).
+
+### Shared device inventory
+
+For one bounded refresh shared across HA platforms, immutable typed states and
+per-device freshness, see [Device inventory](docs/device_inventory.md). Existing
+family loaders remain compatible.

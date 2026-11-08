@@ -22,12 +22,72 @@ Use `pyezvizapi --help`, `pyezvizapi camera --help`, and
 | `save clip`, `save image` | [Finite clips and images](media-saving.md) |
 | `stream` | [Specialist stream transport/debug commands](stream-cli.md) |
 | `mqtt` | [Channel-99 push and token migration](channel99.md) |
+| `lan rtsp` | Read/enable/disable the LAN RTSP service; no account login |
 | `pyezvizapi-capabilities` | Explicit offline capability inventory; see [media paths](media.md) |
 
 The sections below use synthetic serials/paths. Control examples perform real
 operations if run with your own credentials; they are not validation commands.
 Default output is human-readable where supported; `--json` requests structured
 output, but command results and error handling remain command-specific.
+
+### lan rtsp
+
+Use the camera's current **local device password**, not an EZVIZ account password.
+The command uses the existing pure-Python HCNetSDK command-port implementation;
+it does not read account token files, contact the cloud, load native libraries,
+probe other ports, or change SDK/web/UPnP switches. The local SDK command port
+(normally 8000) must already be reachable. No automatic port-opening fallback is
+attempted if it is closed.
+
+```bash
+pyezvizapi lan rtsp status --host 192.0.2.10 --serial CAMERA_SERIAL \
+  --lan-password-file /private/device-password
+pyezvizapi lan rtsp enable --host 192.0.2.10 --serial CAMERA_SERIAL \
+  --lan-password-file /private/device-password
+# Use disable instead of enable to turn RTSP off.
+```
+
+Keep the password file private. Optional `--command-port`, `--lan-username`,
+`--local-ip` and a finite positive per-socket `--timeout` configure the local SDK
+connection. Each SDK request can use multiple socket operations; this is not a
+whole-command deadline. These commands always emit JSON and exit nonzero on
+failure. `status` is read-only; enable/disable are idempotent. An absent or unknown
+RTSP switch is rejected before writing. A change preserves the fetched payload,
+updates only `rtsp`, requires an application-level success response, then reads
+the switch back. Avoid concurrent configuration changes from another client.
+
+Success (`verified: "configuration"`) confirms the switch value, **not** an RTSP
+listener, authenticated stream, or Home Assistant playback. Firmware without
+RTSP support cannot gain it through this switch. A camera may restart network
+services during a change; if the acknowledgment or read-back fails, the result
+is `outcome: "unknown"`, not proof of rollback. The command does not retry writes.
+Wait for services to recover and use `status` to determine the effective state.
+Issue [#345](https://github.com/RenierM26/pyEzvizApi/issues/345) contains
+@cgaspard3333's C3X firmware-specific hardware observations; other models require
+their own qualification.
+
+Library callers can use the existing canonical public SDK entry point directly:
+
+```python
+from pyezvizapi.streaming.local.hcnetsdk.api import (
+    HcNetSdkLanEndpoint,
+    HcNetSdkPurePythonClient,
+)
+
+sdk = HcNetSdkPurePythonClient(
+    HcNetSdkLanEndpoint(serial="CAMERA_SERIAL", host="192.0.2.10"),
+    device_password,  # application-owned local credential
+    timeout=10.0,
+)
+state = sdk.services_switch_state()  # read-only
+# Explicit mutation (only when requested by your user):
+# response = sdk.services_switch_set(state.raw, rtsp=1)
+# Check response.succeeded AND response.json()["statusCode"] == 1, then read back.
+```
+
+The low-level API remains unchanged; consumers own validation, errors and
+read-back. Run these blocking SDK operations off an async event loop. Old flat
+`pyezvizapi.hcnetsdk` imports have been removed; see [compatibility changes](ha-compatibility.md).
 
 ### devices
 

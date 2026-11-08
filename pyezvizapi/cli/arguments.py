@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
+from pyezvizapi.cli.commands.lan import add_lan_arguments
 from pyezvizapi.cli.commands.recording_batch import add_recordings_arguments
 from pyezvizapi.constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, BatteryCameraWorkMode
 from pyezvizapi.streaming.capture import _SOURCE_DEFAULT_DURATION, _SourceDefaultClientType
@@ -1595,6 +1596,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="action")
+    add_lan_arguments(subparsers)
     add_devices_arguments(subparsers)
     add_devices_light_arguments(subparsers)
     add_light_arguments(subparsers)

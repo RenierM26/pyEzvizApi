@@ -26,6 +26,7 @@ from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
 
 from pyezvizapi.cli import arguments as _cli_arguments
+from pyezvizapi.cli.commands.lan import handle_lan
 from pyezvizapi.cli.commands.recording_batch import handle_recordings
 from pyezvizapi.cloud.token_store import save_private_token
 from pyezvizapi.devices.camera import EzvizCamera
@@ -1503,6 +1504,8 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     args = _parse_args(argv)
     _setup_logging(args.debug)
+    if args.action == "lan":
+        return handle_lan(args)
     if args.action == "save" and args.save_action == "clip":
         try:
             _validate_shared_clip_args(args)

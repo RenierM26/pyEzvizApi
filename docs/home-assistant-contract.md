@@ -99,6 +99,23 @@ Common light/smart-plug keys include:
 New keys are safe to add. Prefer adding keys over changing the meaning of
 existing keys.
 
+## Alarm timestamps and DST
+
+Motion calculations prefer a valid numeric UTC epoch (`alarmStartTime` or
+`alarmTime`, in seconds or milliseconds). A companion localized string that
+disagrees with the configured timezone must not alone cause that instant to be
+reinterpreted. The legacy local-clock-encoded epoch format is retained only when
+the companion string corroborates the encoded wall clock within 120 seconds.
+Stale strings or a DST/base-offset mismatch therefore do not shift a correct
+epoch. Display strings still use the supplied timezone.
+
+When no valid epoch is available, string-only timestamps use the camera timezone.
+An IANA timezone such as `Europe/Rome` supplies DST rules; a fixed `UTC+01:00`
+offset does not identify a region or its DST policy. The SDK does not guess a
+region from the HA host or adjust event times based on their apparent age. This
+remains a limitation for string-only payloads such as those reported in
+[#314](https://github.com/RenierM26/pyEzvizApi/issues/314).
+
 ## Auth and token behavior
 
 Integrations should be able to persist and reuse `EzvizClient.export_token()`.

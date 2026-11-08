@@ -83,6 +83,12 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Fixed
 
+- Preserve valid UTC alarm epochs when DST-localized or stale companion strings
+  disagree with a camera's configured offset. Retain local-clock-encoded epochs
+  only when corroborated by the companion wall clock. This addresses mixed
+  epoch/string cases related to #314; string-only fixed offsets cannot identify
+  a DST timezone and are not guessed from the host.
+
 - Correct the native SD selector clock contract: keep public UTC inputs and add
   an explicit playback timezone (CLI, typed source and copier), reject ambiguous
   DST ranges, and expose effective native selectors. Native `Z` is literal, not

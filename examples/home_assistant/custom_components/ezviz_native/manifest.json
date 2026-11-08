@@ -1,0 +1,12 @@
+{
+  "domain": "ezviz_native",
+  "name": "EZVIZ Native (validation)",
+  "codeowners": ["@RenierM26"],
+  "config_flow": true,
+  "dependencies": ["camera", "http", "stream"],
+  "documentation": "https://github.com/RenierM26/pyEzvizApi/blob/main/docs/ha-native-integration.md",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "requirements": [],
+  "version": "0.1.0"
+}

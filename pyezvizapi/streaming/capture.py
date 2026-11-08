@@ -1,0 +1,301 @@
+"""Typed configuration for camera clip capture."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+import math
+from typing import Any, Literal
+
+from pyezvizapi.constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, MAX_RETRIES
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.streaming.discovery import LocalStreamDiscoveryCache
+from pyezvizapi.streaming.local.transport import (
+    EzvizLocalSdkCredentials,
+    HcNetSdkCommandPortGeneratedMultiSocketPlan,
+    HcNetSdkCommandPortMultiSocketPlan,
+)
+from pyezvizapi.streaming.media.models import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
+from pyezvizapi.streaming.ranges import (
+    DEFAULT_PLAYBACK_MAX_BYTES,
+    DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,
+    native_playback_range,
+    playback_integer,
+    playback_range,
+    playback_timezone,
+    positive_timeout,
+    selected_playback_range,
+)
+
+ClipSource = Literal[
+    "auto",
+    "local-sdk",
+    "local-sdk-ecdh",
+    "hcnetsdk-command-port",
+    "cloud",
+    "cloud-playback",
+    "local-playback",
+]
+ClipOutputFormat = Literal["mpegps", "mpegts"]
+
+
+class _SourceDefaultDuration(float):
+    """Distinguish omitted duration from an explicit ten-second media range."""
+
+
+_SOURCE_DEFAULT_DURATION: float = _SourceDefaultDuration(10.0)
+
+
+class _SourceDefaultClientType(int):
+    """Preserve live type 9 while selecting playback type 3 only on omission."""
+
+
+@dataclass(frozen=True)
+class CloudPlaybackClipSource:
+    """Cloud-mediated SD-card recording range, with explicit transfer budgets."""
+
+    begin_time: str
+    end_time: str
+    timezone: str = field(default="UTC", kw_only=True)
+    kind: Literal["cloud-playback"] = field(default="cloud-playback", init=False)
+    decrypt_audio: bool = False
+    client_type: int = 3
+    token_index: int = 0
+    refresh_vtm: bool = True
+    timeout: float = 10.0
+    lid: str | None = None
+    max_bytes: int = DEFAULT_PLAYBACK_MAX_BYTES
+    transfer_timeout: float = DEFAULT_PLAYBACK_TRANSFER_TIMEOUT
+    smscode: str | int | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        playback_range(self.begin_time, self.end_time)
+        playback_timezone(self.timezone)
+        if not isinstance(self.decrypt_audio, bool):
+            raise PyEzvizError("SD playback decrypt_audio must be a boolean")
+        positive_timeout(self.timeout, "timeout")
+        positive_timeout(self.transfer_timeout, "transfer_timeout")
+        playback_integer(self.max_bytes, "max_bytes")
+        playback_integer(self.token_index, "token_index", minimum=0)
+
+
+@dataclass(frozen=True)
+class LocalPlaybackClipSource:
+    """Account-free LAN SD range with explicit camera/device credentials."""
+
+    begin_time: str
+    end_time: str
+    host: str
+    password: str | bytes = field(repr=False)
+    timezone: str = "UTC"
+    kind: Literal["local-playback"] = field(default="local-playback", init=False)
+    username: str = "admin"
+    command_port: int = 8000
+    timeout: float = 10.0
+    max_bytes: int = DEFAULT_PLAYBACK_MAX_BYTES
+    transfer_timeout: float = DEFAULT_PLAYBACK_TRANSFER_TIMEOUT
+
+    def __post_init__(self) -> None:
+        playback_range(self.begin_time, self.end_time)
+        playback_timezone(self.timezone)
+        positive_timeout(self.timeout, "timeout")
+        positive_timeout(self.transfer_timeout, "transfer_timeout")
+        playback_integer(self.max_bytes, "max_bytes")
+
+
+@dataclass(frozen=True)
+class LocalSdkClipSource:
+    """Connection options for the direct local SDK stream."""
+
+    kind: Literal["local-sdk"] = field(default="local-sdk", init=False)
+    credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False, kw_only=True)
+    skip_empty_packets: bool = field(default=False, kw_only=True)
+    cas_serial: str | None = None
+    register_p2p_session: bool = True
+    p2p_register_max_retries: int = MAX_RETRIES
+    receiver_port: int = field(default=10101, kw_only=True)
+    timeout: float | None = 10.0
+    smscode: str | int | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class LocalSdkEcdhClipSource:
+    """Connection options for the local SDK ECDH stream."""
+
+    kind: Literal["local-sdk-ecdh"] = field(default="local-sdk-ecdh", init=False)
+    credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False, kw_only=True)
+    cas_serial: str | None = None
+    register_p2p_session: bool = True
+    p2p_register_max_retries: int = MAX_RETRIES
+    timeout: float | None = 10.0
+    smscode: str | int | None = field(default=None, repr=False)
+    receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
+    fresh_retry_port: bool = field(default=False, kw_only=True)
+    send_init: bool = False
+    max_prefix_bytes: int = 4096
+    max_frames: int | None = None
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortClipSource:
+    """Connection and bootstrap options for an HCNetSDK command stream."""
+
+    kind: Literal["hcnetsdk-command-port"] = field(default="hcnetsdk-command-port", init=False)
+    host: str | None = None
+    command_port: int | None = None
+    command_frames: Iterable[bytes] | None = field(default=None, repr=False)
+    command_plan: HcNetSdkCommandPortMultiSocketPlan | None = field(default=None, repr=False)
+    generated_plan: HcNetSdkCommandPortGeneratedMultiSocketPlan | None = field(
+        default=None, repr=False
+    )
+    command_password: str | bytes | None = field(default=None, repr=False)
+    local_ip: str | None = None
+    read_response_after_each: bool | Iterable[bool] = field(default=True, repr=False)
+    metadata_callback: Callable[[Any], None] | None = field(default=None, repr=False, compare=False)
+    timeout: float | None = 10.0
+
+
+@dataclass(frozen=True)
+class CloudClipSource:
+    """Connection options for an EZVIZ VTM cloud stream."""
+
+    kind: Literal["cloud"] = field(default="cloud", init=False)
+    client_type: int = 9
+    token_index: int = 0
+    refresh_vtm: bool = True
+    timeout: float | None = 10.0
+    smscode: str | int | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class AutoClipSource:
+    """Metadata-first playback; offline mode never calls EZVIZ services.
+
+    ``device`` is a cached per-device ``get_device_infos`` result. Offline
+    callers must supply credentials; missing metadata is verified in-stream.
+    """
+
+    kind: Literal["auto"] = field(default="auto", init=False)
+    mode: Literal["auto", "offline"] = "auto"
+    device: dict[str, Any] | None = field(default=None, repr=False)
+    credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False)
+    allow_cloud_fallback: bool = True
+    discovery_cache: LocalStreamDiscoveryCache | None = field(default=None, repr=False)
+    discovery_generation: str = ""
+    timeout: float = 10.0
+    receiver_port: int | None = None
+    smscode: str | int | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("auto", "offline"):
+            raise PyEzvizError("Automatic stream mode must be auto or offline")
+        if not math.isfinite(self.timeout) or self.timeout <= 0:
+            raise PyEzvizError("Automatic stream timeout must be positive and finite")
+        if self.receiver_port is not None and not 1 <= self.receiver_port <= 65535:
+            raise PyEzvizError("Automatic stream receiver_port must be a valid TCP port")
+        if self.mode == "offline" and self.credentials is None:
+            raise PyEzvizError("Offline playback requires caller-supplied local credentials")
+
+
+type ClipSourceOptions = (
+    AutoClipSource
+    | LocalSdkClipSource
+    | LocalSdkEcdhClipSource
+    | HcNetSdkCommandPortClipSource
+    | CloudClipSource
+    | CloudPlaybackClipSource
+    | LocalPlaybackClipSource
+)
+
+
+@dataclass(frozen=True)
+class ClipOptions:
+    """Complete typed configuration for :meth:`EzvizClient.save_clip_with_options`."""
+
+    source: ClipSourceOptions = field(default_factory=LocalSdkClipSource)
+    capture: CaptureLimits = field(
+        default_factory=lambda: CaptureLimits(duration_seconds=_SOURCE_DEFAULT_DURATION)
+    )
+    decode: MediaDecodeOptions = field(
+        default_factory=lambda: MediaDecodeOptions(nalu_header_size=0)
+    )
+    mux: MediaMuxOptions | None = None
+    channel: int | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.source, CloudPlaybackClipSource | LocalPlaybackClipSource):
+            selected_end, _ = selected_playback_range(
+                self.source.begin_time,
+                self.source.end_time,
+                None
+                if isinstance(self.duration_seconds, _SourceDefaultDuration)
+                else self.duration_seconds,
+            )
+            native_playback_range(self.source.begin_time, selected_end, self.source.timezone)
+            if self.channel is not None:
+                playback_integer(
+                    self.channel,
+                    "channel",
+                    minimum=1 if isinstance(self.source, LocalPlaybackClipSource) else 0,
+                )
+
+    def resolved_mux(self) -> MediaMuxOptions:
+        """Return explicit mux settings or the source-compatible default."""
+
+        if self.mux is not None:
+            return self.mux
+        if isinstance(self.source, CloudPlaybackClipSource | LocalPlaybackClipSource):
+            return MediaMuxOptions(output_format="mpegps")
+        if isinstance(self.source, LocalSdkEcdhClipSource):
+            return MediaMuxOptions(
+                output_format="mpegts" if self.decode.decrypt_video else "mpegps"
+            )
+        return MediaMuxOptions()
+
+    @property
+    def max_packets(self) -> int | None:
+        """Return the configured packet bound."""
+
+        return self.capture.max_packets
+
+    @property
+    def duration_seconds(self) -> float | None:
+        """Return the configured duration bound."""
+
+        return self.capture.duration_seconds
+
+
+@dataclass(frozen=True)
+class _LegacyClipOptions(ClipOptions):
+    """Compatibility carrier for historically accepted nonpositive limits."""
+
+    legacy_max_packets: int | None = None
+    legacy_duration_seconds: float | None = None
+
+    @classmethod
+    def from_options(
+        cls,
+        options: ClipOptions,
+        *,
+        max_packets: int | None,
+        duration_seconds: float | None,
+    ) -> _LegacyClipOptions:
+        """Copy public options while retaining raw legacy capture bounds."""
+
+        return cls(
+            source=options.source,
+            capture=options.capture,
+            decode=options.decode,
+            mux=options.mux,
+            channel=options.channel,
+            legacy_max_packets=max_packets,
+            legacy_duration_seconds=duration_seconds,
+        )
+
+    @property
+    def max_packets(self) -> int | None:
+        return self.legacy_max_packets
+
+    @property
+    def duration_seconds(self) -> float | None:
+        return self.legacy_duration_seconds

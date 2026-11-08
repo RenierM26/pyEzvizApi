@@ -103,9 +103,7 @@ class HttpProfile:
     headers: Mapping[str, str]
     registration: Mapping[str, str]
 
-    PROFILE_HEADER_NAMES: ClassVar = tuple(
-        dict.fromkeys((*REQUEST_HEADER, *_ANDROID_OVERRIDES))
-    )
+    PROFILE_HEADER_NAMES: ClassVar = tuple(dict.fromkeys((*REQUEST_HEADER, *_ANDROID_OVERRIDES)))
     IDENTITY_HEADER_NAMES: ClassVar = (
         "sessionId",
         "featureCode",
@@ -231,6 +229,7 @@ class SupportExt(Enum):
     SupportAutoAdjust = 45
     SupportAutoOffline = 8
     SupportAutoSleep = 144
+    SupportAutoSmoothPlay = 915
     SupportBackLight = 303
     SupportBackendLinkIpcStream = 596
     SupportBatteryDeviceP2p = 336
@@ -586,3 +585,4 @@ class DeviceCatagories(Enum):
     LIGHTING = "lighting"
     SOCKET = "Socket"
     W2H_BASE_STATION_DEVICE_CATEGORY = "IGateWay"
+    DETECTOR_DEVICE_CATEGORY = "Detector"

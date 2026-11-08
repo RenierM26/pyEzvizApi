@@ -1,19 +1,189 @@
 # Changelog
 
-All notable changes to this project should be documented in this file.
-
-This project follows [Semantic Versioning](https://semver.org/) for published releases.
+Release history is below; current `main` may contain unpublished changes.
+See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
-## v2.0.0 - 2026-10-09
+## v2.0.0 - 2026-11-08
 
-See [upgrade requirements, known limitations, and release notes](docs/release-2.0.0.md).
+Release preparation; publication is pending. See [upgrade and release notes](docs/release-2.0.0.md).
 
-### Breaking changes
+### Push migration (breaking)
 
-- Removed the obsolete push registration transport. Existing push integrations must migrate to channel-99, persist complete rotated tokens durably through `on_token_updated`, and monitor `raise_if_failed()`. Polling/API operations remain available independently of push.
-- Channel-99 credentials are tied to the host MAC-derived feature code; moving saved push tokens to a different host identity requires reauthentication.
+- Replace obsolete push registration with channel-99, durable complete-token
+  persistence through `on_token_updated`, and worker health monitoring through
+  `raise_if_failed()`. Polling remains independent of push.
+- Reauthenticate when the host MAC-derived push identity changes.
+
+- Expose the existing LAN-only RTSP service control as `lan rtsp status|enable|disable`
+  with private-file credentials, preservation of unrelated services, strict switch
+  validation and configuration read-back. No cloud fallback or automatic write
+  retries; configuration success does not establish streaming support. Document
+  canonical SDK imports and credit @cgaspard3333's C3X observations in issue #345.
+
+- Align plug channel selection and firmware status with the native app: explicit
+  device channel0 cannot be overwritten by other channels; positive update codes
+  report availability; reboot/wait/download remain in progress. Expose normalized
+  firmware status/phase consistently across device families, leaving unknown and
+  model-specific phase meanings unguessed.
+
+- Add bounded `poll_devices()` with immutable typed snapshots, detached dictionary
+  adapters, per-device health and pure family selectors; keep legacy loaders intact.
+- Preserve unknown detector semantics and isolate malformed device renders without
+  losing current siblings or silently declaring retained data fresh.
+
+
+- Add read-only gateway-linked Detector support and `load_detectors()`, based on
+  Simone Rescio (@srescio)'s [PR #99](https://github.com/RenierM26/pyEzvizApi/pull/99).
+  Parse contact, water, siren, battery and radio properties from `FEATURE_INFO`;
+  keep detectors out of camera status/alarm-prefetch paths.
+
+- Use typed LAN/cloud recording route configurations and transfer limits;
+  LAN-only catalog/batch commands no longer construct an account client or
+  load account tokens. Existing batch arguments and receipts remain compatible.
+
+- Separate recording catalog values, cloud discovery, batch orchestration and
+  manifest persistence while retaining existing imports and receipt formats.
+
+- Share native LAN SD login/logout ownership and route-neutral clock/validation
+  helpers without changing wire selectors, playback parsing or public entrypoints.
+
+- Add account-free native LAN SD recording discovery and route-tagged catalogs,
+  with finite search bounds and explicit channel/timezone handling.
+
+- Add cloud SD catalog snapshots and resumable sequential batch downloads over LAN, cloud relay, or both, with explicit timezone, bounded catalog queries and hash-verified receipts.
+
+### LAN SD downloads
+
+- Add account-free LAN SD recording downloads (`save clip --source local-playback`,
+  `LocalPlaybackClipSource`, `download_lan_sd_recording`) using explicit camera
+  IP/device credentials and UTC-to-camera-timezone selectors. Bounded native
+  completion, complete MPEG-PS/PTS validation and atomic path publication;
+  existing live/cloud routes remain unchanged.
+
+
+### Documentation
+
+- Reorganize the README and task-based guides, index all documentation, and
+  separate current guidance from pinned research/qualification evidence.
+- Correct CLI syntax, canonical import ownership and HA push prerequisites;
+  add offline documentation link/anchor/CLI checks to CI.
+- Keep one Unreleased section for release preparation and move the misplaced
+  alias-removal note into that section.
+
+### Breaking compatibility changes
+
+- Remove 66 unused flat module aliases; canonical replacements are listed in
+  `docs/module-map.json`. Old imports and pickles through removed paths break.
+- Remove the two redundant streaming legacy facades and the unused
+  `EzvizCamera.alarm_detection_sensibility()` alias; use
+  `alarm_detection_sensitivity()` instead.
+- Keep only HA-required exports in `feature`, `mqtt`, `utils` and `test_cam_rtsp`.
+  Client methods, status keys, root public exports and CLI commands are unchanged.
+- Move repository tests, tools and examples to canonical imports; see
+  `docs/ha-compatibility.md` for the pinned consumer contract.
+
+### HA native validation
+
+- Add an opt-in temporary HA integration with a loopback-capability HTTP source,
+  explicit track config flow, bounded admission and joined unload/disconnect cleanup.
+- Verify real HA H.264/AAC and HEVC/AAC HLS ingestion in an isolated pinned runtime.
+- Keep original native callback failures sticky across backend retries and hide
+  private callback exception text from native-library error printing.
+
+### Fixed
+
+- Bound stream reads, startup, keepalives, and shutdown to capture deadlines; make rapid local receiver-port reopen safe without reusable Windows bindings.
+- Share RTP/IDMX processing and FFmpeg cleanup across stream paths and expose grouped typed clip options; use the canonical imports documented in the module map.
+- Auto-select cloud resources for multi-lens cameras, refresh stale local/ECDH routes, and use automatic local NAL-header detection and clean-window recovery.
+- Preserve MFA codes across region redirects.
+- Reject empty, incomplete, discontinuous, or ambiguous bounded cloud RTP video with typed errors instead of publishing partial output. Retain explicit `no_media`/proxy HTTP 502 when upstream delivery is unavailable.
+- Reject materially truncated timed decrypted cloud MPEG-PS clips with `EzvizIncompleteMediaError`; privately stage bounded cloud saves to preserve existing destinations on capture/remux failure.
+
+- Preserve valid UTC alarm epochs when DST-localized or stale companion strings
+  disagree with a camera's configured offset. Retain local-clock-encoded epochs
+  only when corroborated by the companion wall clock. This addresses mixed
+  epoch/string cases related to #314; string-only fixed offsets cannot identify
+  a DST timezone and are not guessed from the host.
+
+- Correct the native SD selector clock contract: keep public UTC inputs and add
+  an explicit playback timezone (CLI, typed source and copier), reject ambiguous
+  DST ranges, and expose effective native selectors. Native `Z` is literal, not
+  proof of UTC; default UTC behavior is retained without host-local guessing.
+
+- Preserve existing SD download paths on write/flush/replace failures with
+  same-directory atomic publication; spool transport and output staging to disk.
+- Expose SD relay refusals as `EzvizPlaybackNegotiationError.result_code`
+  without automatic retries or assumptions about code 6520.
+- Share MPEG-PS/AAC helpers and playback budgets/range validation while retaining
+  compatibility imports and the whole-range omitted-duration default.
+
+- Extract pure SDK/client/packet responsibilities and command-specific CLI builders; share device helpers and make resolver ownership explicit.
+
+- Bound scoped bootstrap HTTP caller waits and response sizes; collect pagelists iteratively with progress guards.
+
+- Bound RTSP authentication framing and I/O, close sockets deterministically, and retain the legacy import path.
+
+- Handle non-finite number/time values and invalid offsets, validate image padding, and honor empty diagnostic tails.
+- Extract coherent utility implementations while preserving legacy helper imports.
+
+- Preserve offline status and tolerate malformed device records; validate API objects and omit raw response values from client errors.
+
+- Require positive integer packet/byte counts and finite numeric durations in typed capture limits.
+
+- Reject application-level lock, unlock and PTZ command failures instead of reporting API acceptance.
+
+- Preserve exact source PTS during development-only AAC sample-format conversion, including 90-kHz timestamps not representable on the 16-kHz sample clock.
+
+### Added
+
+- Cloud-mediated SD-card playback download via `save clip --source cloud-playback`
+  and `CloudPlaybackClipSource`, adapted from Alejandro Dirgan (@adirgan)'s PR #266,
+  with explicit UTC ranges, bounded transfers, media-span verification and
+  output preservation on capture failure.
+
+- Optional PyAV 19 continuous local MPEG-PS source owner with incremental video decryption, current-session PES-ID H.264/HEVC plus AAC stream copy, bounded output credits and joined sync/async cancellation. No implicit session duration cap, player or listener; an HA-hosted route and frontend validation remain separate work.
+
+- Read-only explicit fleet capability inventory with redacted reports, separate saved-sample codec/decode evidence, and finite headless H.264/HEVC plus AAC track-copy output for Home Assistant adapter development. Continuous native SDK-to-HA delivery and frontend compatibility remain unverified.
+
+- Explicit attended `two-minute-gaps` LAN profile with fixed single/cumulative padding bounds, shared A/V credits, distinct evidence binding and isolated full source/padding verification; existing default and strict two-minute profiles are unchanged.
+
+- Explicit development pending-capture API audio-gap integration with earlier padding targets, unchanged original media targets, shared bounded lookahead credits and separate verified padding receipts; attended launcher defaults remain strict.
+
+- Development-only scheduled audio-gap output adapter with separate padding/source targets, byte acknowledgements and retained cancellation ownership; not enabled by default in live A/V playback.
+
+- Development-only constant-state whole-block audio-gap planner with explicit single/cumulative padding budgets, exact source/PCM verification and transactional decisions; no padding is written and playback defaults remain unchanged.
+
+- Opt-in standalone local A/V host-submission scheduler with one shared source-derived host anchor, bounded independent video/PCM jobs and explicit output/cleanup receipts; not physical synchronization or a camera connector.
+
+- Development-only standalone local HEVC/AAC timeline planner with exact-rational lens pairing, one shared source origin, explicit unmatched pictures and preserved audio gaps/overlaps.
+
+- Developer-only bounded per-attempt decoder backend summaries and an offline raw-event audit, with explicit pending-attempt and completeness diagnostics.
+
+- Explicit parsed-frame app-compatible HEVC/AAC playback timing and stream-copy remux helpers, with per-session track origins, configured discontinuity repair and paired-picture reuse. Includes an explicit `app_relative_clock` opt-in for bounded single-source native HEVC/16 kHz AAC live capture, with strict provenance checks and staged high-level output. The typed native app-relative profile accepts explicit HEVC parameter-set decryption for encrypted SDK streams. Default timestamp policies are unchanged.
+
+- Camera-negotiated PlayM4 stream-header descriptors, field-specific SDK codec/FPS/bitrate normalization, and bounded caller-owned discovery reuse for automatic live playback.
+- Explicit native LAN discovery login profiles, including verified TLS command-port transport, without credential enumeration or cloud dependencies.
+
+- Read-only, cloud-free `discover_hcnetsdk_stream_details()` and `HcNetSdkPurePythonClient.stream_details()` queries for camera-reported main/sub configuration and supported profiles, retaining each resolution's dimensions and associated frame-rate/bitrate limits.
+- Metadata-first automatic streaming (`source="auto"`, `AutoClipSource`, and context-managed `open_stream`), with capability-guided local protocol selection and pre-output connection fallback to cloud.
+- A strict offline playback policy using caller-supplied local credentials; no account discovery, registration, key renewal, or cloud fallback. Explicit legacy/ECDH sources also accept supplied credentials.
+
+### Fixed
+
+- Keep compressed-reference codec prerequisites across long native selection gaps without copying explicitly unselected outputs; preserve delayed-output identity and strict selection/checkpoint guards. Collapse identical native header observations while rejecting conflicts.
+
+- Release unused reference-capture snapshot copies after the final permitted pair is fully emitted, preserving pending and partially emitted selections. This does not claim to fix the intermittent native decoder failure.
+
+- Isolate MPEG-PS clear-header H.264/HEVC decryption state by video stream, preserve timestamped AES continuations across interleaved audio, and recognize new-picture parameter sets without weakening legacy tail-lookalike safeguards.
+
+- Detect repeated legacy RTP/PS on ECDH-requested sessions and report an actionable protocol mismatch instead of generic no-media; add a bounded, sanitized `probe_local_stream` API with explicit source recommendations.
+
+- Remove the native one-byte prefix from unfragmented local MPEG-PS records, restoring Gate video continuity and AAC without trimming received media.
+- Keep IDMX video, audio, and metadata sequence counters independent when native transport provenance and the fixed RTP source marker are present; preserve shared-counter continuity checks for ordinary RTP.
+- Use encoded HEVC timing for native media-wrapper records instead of assuming a 90 kHz clock or forcing 25 fps.
+- Parse X80 one-byte-prefixed RTP records and remove declared padding before HEVC decryption, preventing fragment-tail corruption and retaining supported AAC.
 
 ### Changed
 
@@ -75,13 +245,6 @@ See [upgrade requirements, known limitations, and release notes](docs/release-2.
 - Exposed local SDK ECDH stream helpers through the generic `local_stream` namespace while keeping the focused ECDH implementation module available.
 
 ### Fixed
-
-- Bound stream reads, startup, keepalives, and shutdown to capture deadlines; make rapid local receiver-port reopen safe without reusable Windows bindings.
-- Share RTP/IDMX processing and FFmpeg cleanup across stream paths, preserve legacy stream imports, and expose grouped typed clip options.
-- Auto-select cloud resources for multi-lens cameras, refresh stale local/ECDH routes, and use automatic local NAL-header detection and clean-window recovery.
-- Preserve MFA codes across region redirects.
-- Reject empty, incomplete, discontinuous, or ambiguous bounded cloud RTP video with typed errors instead of publishing partial output. Retain explicit `no_media`/proxy HTTP 502 when upstream delivery is unavailable.
-- Reject materially truncated timed decrypted cloud MPEG-PS clips with `EzvizIncompleteMediaError`; privately stage bounded cloud saves to preserve existing destinations on capture/remux failure.
 
 - Route local and cloud RTP/IDMX media by descriptor-owned payload types instead
   of assuming video payload type 96. Live cloud remuxing now accepts delayed and
@@ -268,12 +431,7 @@ See [upgrade requirements, known limitations, and release notes](docs/release-2.
 
 - Removed pandas from the runtime dependency set.
 
-## Release checklist
+## Release procedure
 
-Before publishing a release:
-
-1. Bump `project.version` in `pyproject.toml`.
-2. Move relevant entries from `Unreleased` to a dated version section by running **Prepare Release** with the bare version and merging the generated changelog PR.
-3. Ensure CI is green on `main`.
-4. Run **Upload Python Package** manually with the same bare version.
-5. Confirm the workflow publishes to PyPI and creates the matching GitHub release/tag.
+See [the release procedure](docs/releases.md) for version selection, changelog
+preparation, publication and separate downstream integration updates.

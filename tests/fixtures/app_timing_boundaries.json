@@ -1,0 +1,282 @@
+[
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 1000,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1000
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 1064,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1064
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 1128,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1128
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 18000,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 18000
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 18001,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1064
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 999,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1064
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 0,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1064
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 999,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1064
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 18000,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 18000
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 18001,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1064
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 1000,
+    "threshold_ms": 17000,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1000
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 1066,
+    "threshold_ms": 17000,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1066
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 1133,
+    "threshold_ms": 17000,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1133
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 18000,
+    "threshold_ms": 17000,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 18000
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 18001,
+    "threshold_ms": 17000,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1066
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 999,
+    "threshold_ms": 17000,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1066
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 0,
+    "threshold_ms": 17000,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1066
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 18001,
+    "threshold_ms": 17000,
+    "kind": 5,
+    "same_picture": true,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1000
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 999,
+    "threshold_ms": 1500,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1064
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 1064,
+    "threshold_ms": 1500,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1064
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 2500,
+    "threshold_ms": 1500,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 2500
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 2501,
+    "threshold_ms": 1500,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1064
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 999,
+    "threshold_ms": 1500,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1066
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 1064,
+    "threshold_ms": 1500,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1064
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 2500,
+    "threshold_ms": 1500,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 2500
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 2501,
+    "threshold_ms": 1500,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1066
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 999,
+    "threshold_ms": 17000,
+    "kind": 5,
+    "same_picture": false,
+    "frame_rate": 30.0,
+    "audio_frame_ms": 64,
+    "outgoing_ms": 1033
+  },
+  {
+    "previous_ms": 1000,
+    "incoming_ms": 999,
+    "threshold_ms": 17000,
+    "kind": 8193,
+    "same_picture": false,
+    "frame_rate": 15.0,
+    "audio_frame_ms": 128,
+    "outgoing_ms": 1128
+  }
+]

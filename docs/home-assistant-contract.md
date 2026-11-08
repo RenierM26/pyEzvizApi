@@ -8,6 +8,10 @@ The EZVIZ cloud API is reverse-engineered and response shapes can drift. The
 intent of this contract is not to freeze every raw field forever, but to keep
 common integration-facing behavior stable and make breaking changes deliberate.
 
+See [current HA consumer status](home-assistant.md) for tested versions, the
+custom integration's push migration gap and the separate native validation example.
+This contract is not a claim that every released HA pin supports current main.
+
 ## Stability levels
 
 ### Stable public API
@@ -40,7 +44,7 @@ Integrations may inspect this for feature discovery, but raw nested EZVIZ fields
 can appear, disappear, or change shape when EZVIZ changes its backend.
 
 When adding new integration features, prefer wrapping raw-field interpretation in
-small helpers under `pyezvizapi.feature` or typed records under
+small helpers under `pyezvizapi.devices.features` or typed records under
 `pyezvizapi.models` instead of duplicating fragile parsing in Home Assistant
 entity platforms.
 
@@ -95,6 +99,23 @@ Common light/smart-plug keys include:
 New keys are safe to add. Prefer adding keys over changing the meaning of
 existing keys.
 
+## Alarm timestamps and DST
+
+Motion calculations prefer a valid numeric UTC epoch (`alarmStartTime` or
+`alarmTime`, in seconds or milliseconds). A companion localized string that
+disagrees with the configured timezone must not alone cause that instant to be
+reinterpreted. The legacy local-clock-encoded epoch format is retained only when
+the companion string corroborates the encoded wall clock within 120 seconds.
+Stale strings or a DST/base-offset mismatch therefore do not shift a correct
+epoch. Display strings still use the supplied timezone.
+
+When no valid epoch is available, string-only timestamps use the camera timezone.
+An IANA timezone such as `Europe/Rome` supplies DST rules; a fixed `UTC+01:00`
+offset does not identify a region or its DST policy. The SDK does not guess a
+region from the HA host or adjust event times based on their apparent age. This
+remains a limitation for string-only payloads such as those reported in
+[#314](https://github.com/RenierM26/pyEzvizApi/issues/314).
+
 ## Auth and token behavior
 
 Integrations should be able to persist and reuse `EzvizClient.export_token()`.
@@ -118,18 +139,23 @@ Expected auth exceptions:
 - `HTTPError` wraps HTTP status failures from `requests`.
 - `InvalidURL` indicates connection/proxy/endpoint URL failures.
 
-## MQTT push behavior
+## Push transport, persistence and decoded events
 
-`MQTTClient.decode_mqtt_message()` should continue to:
+Channel-99 replaces the obsolete push-registration transport. Existing consumers
+must migrate explicitly with `enable_channel99()` and persist the complete token.
+Pass a synchronous durable `on_token_updated` callback to `EzvizClient`; the
+factory forwards it to the push client. A worker-side save must complete before
+returning. Monitor `raise_if_failed()`/diagnostics and stop the worker separately
+on unload. `connect()` returning does not mean the broker is ready.
 
-- accept UTF-8 JSON bytes;
-- parse comma-separated `ext` strings into named fields;
-- coerce known numeric `ext` fields to integers when possible;
-- preserve unknown/top-level message fields;
-- raise `PyEzvizError` for malformed JSON.
+The pinned custom consumer does not yet meet these prerequisites; polling
+remains independent. See [migration and lifecycle](channel99.md), not only the
+message-decoder contract, before bumping an integration dependency.
 
-`messages_by_device` stores the most recent decoded payload per device serial
-using bounded LRU-like behavior.
+`MQTTClient.decode_mqtt_message()` accepts UTF-8 JSON bytes, parses known `ext`
+fields, coerces known numeric values where possible, preserves unknown fields,
+and raises `PyEzvizError` for malformed JSON. `messages_by_device` retains a
+bounded latest-payload cache. Decoder compatibility does not establish delivery.
 
 ## Deprecation guidance
 
@@ -145,17 +171,16 @@ For behavior used by Home Assistant integrations:
 
 ## Release coordination checklist
 
-When publishing a `pyezvizapi` release intended for Home Assistant consumption:
+For the native streaming roadmap and the evidence-separated camera capability
+inventory, see [Camera capabilities and HA delivery](ha-streaming-plan.md).
+The finite encoded-sample utilities are not a replacement for the current HA
+RTSP source URL contract or a claim of continuous native SDK support.
 
-1. Confirm CI is green on `main`, including Ruff, codespell, dependency audit,
-   mypy, Pyright, tests, package build, metadata checks, and wheel smoke tests.
-2. Confirm `CHANGELOG.md` summarizes integration-facing changes.
-3. Run **Prepare Release** with the bare version and merge the generated
-   changelog PR.
-4. Run **Upload Python Package** manually with the same bare version so the
-   trusted publish workflow validates, builds, smoke-tests, uploads to PyPI, and
-   creates the matching GitHub release/tag.
-5. Smoke-test installation in a clean environment.
-6. Update `requirements` pins in the custom integration first when appropriate.
-7. For Home Assistant core, open/update the dependency bump PR with a concise
-   list of integration-facing changes and relevant test coverage.
+The optional [continuous native PS boundary](native-ha-stream.md) now owns
+incremental selected-track copy and source cancellation. Its HA HTTP route and
+actual frontend acceptance remain separate integration work.
+
+For publication, follow [the release procedure](releases.md), then validate the
+actual published artifact and coordinate downstream dependency pins separately.
+Include breaking aliases and push migration in the release notes. Do not equate
+a merged library PR with an installed HA upgrade.

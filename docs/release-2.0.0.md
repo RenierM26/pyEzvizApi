@@ -1,94 +1,101 @@
 # pyEzvizApi 2.0.0 release notes
 
-These notes describe the changes selected for 2.0.0. Check the
-[GitHub releases](https://github.com/RenierM26/pyEzvizApi/releases) and
-[PyPI](https://pypi.org/project/pyezvizapi/) for publication status. The changelog
-date records preparation; update it before publishing on a later date.
+Prepared from merged main through PR #429 on 2026-11-08. This is release
+preparation, not publication or deployment. Check [GitHub releases](https://github.com/RenierM26/pyEzvizApi/releases)
+and [PyPI](https://pypi.org/project/pyezvizapi/) for actual availability.
+Update the preparation date before publication on a later date.
 
 ## Why a major version
 
-The previous published package is 1.0.5.0. The legacy push-registration path has
-been removed, and existing push integrations need an explicit storage/authentication
-migration. A major version makes this incompatible change visible to dependency
-consumers. It also returns new release numbering to the standard three-part
-major/minor/patch form; historical four-part tags remain unchanged.
+The previous published package is 1.0.5.0. Version 2.0 intentionally breaks
+obsolete imports and push-registration behavior. New numbering uses three-part
+major/minor/patch versions; historical four-part versions remain valid history.
 
 ## Upgrade requirements
 
-- Python 3.12 or newer; CI covers 3.12, 3.13, and 3.14.
-- Push reception needs Paho MQTT 2.0 or newer, included in package dependencies.
-- Follow the [channel-99 migration guide](channel99.md): use
-  `EzvizClient.enable_channel99()` for migration and provide a synchronous,
-  durable `on_token_updated` callback before authentication. Persist the whole
-  token privately, not just the push fields. Handle MFA when requested.
-- Saved push credentials belong to the host MAC-derived feature code. A changed
-  host/container MAC requires a fresh login; do not reuse the old push identity.
-- Monitor `MQTTClient.raise_if_failed()` and surface fatal persistence or
-  authentication errors. Keep polling independent of the push worker.
-- Streaming remux operations require FFmpeg on PATH. Ambiguous timed decrypted
-  cloud MPEG-PS captures additionally require ffprobe for completeness validation.
-  Neither binary is installed by this Python package.
-
-Home Assistant integrations must coordinate worker-thread storage with the event
-loop without blocking that loop. This package release does not itself migrate
-Home Assistant integration storage or update its dependency pin.
+- Python 3.12 or newer; CI covers 3.12, 3.13 and 3.14.
+- Replace removed flat imports using [the compatibility guide](ha-compatibility.md)
+  and [module map](module-map.json). The reorganized domain packages are canonical.
+  Removed module paths and pickles through those paths intentionally break.
+- Replace `EzvizCamera.alarm_detection_sensibility()` with
+  `alarm_detection_sensitivity()`. The two redundant streaming legacy facades
+  are removed; see the compatibility guide before reusing old stream imports.
+- Push uses Paho MQTT 2.0 or newer (a runtime dependency). Follow
+  [channel-99 migration](channel99.md): explicitly migrate with
+  `EzvizClient.enable_channel99()` and provide a synchronous, durable
+  `on_token_updated` callback before authentication. Persist the complete token
+  privately, handle MFA, and reauthenticate if the host MAC-derived identity changes.
+- Monitor `MQTTClient.raise_if_failed()`; surface fatal persistence/authentication
+  errors and keep polling independent of the push worker.
+- Optional PyAV-backed media APIs use `pyezvizapi[streaming]`. FFmpeg/ffprobe
+  are separate system tools required by specific routes; they are not pip-installed.
+  See [media requirements](media.md) and [getting started](getting-started.md).
 
 ## Highlights since 1.0.5.0
 
-- Android channel-99 LBS/MQTT negotiation, durable credential rotation,
-  reconnection, isolated HTTPS refresh, and credential-free health diagnostics.
-- Cloud MPEG-PS, MPEG-TS, and RTP/IDMX exports through dump, clip-save, and proxy
-  paths; metadata-owned codec/payload routing and descriptor-backed AAC-LC.
-- Authenticated local ECDH preview and HCNetSDK command-port streaming, automatic
-  header detection, clean-window recovery, and shared bounded FFmpeg cleanup.
-- Typed clip configuration with compatibility aliases for earlier stream imports.
-- Typed no-media/incomplete-media failures and explicit ambiguity handling for
-  bounded captures. Capture/remux failures preserve existing bounded cloud file
-  destinations. Final filesystem writes are not atomic rollback operations.
-- Trace-backed HCNetSDK control/configuration/ability helpers and HP7 chime APIs.
-- CAS framing/bootstrap compatibility, retained MFA codes on region redirects,
-  and non-UTF-8 RTSP authentication response handling.
+- Channel-99 LBS/MQTT negotiation, durable credential rotation, reconnection,
+  isolated HTTPS refresh and credential-free health diagnostics.
+- Bounded typed `poll_devices()` snapshots, detached dictionary adapters,
+  per-device health, malformed-device isolation and gateway-linked detectors.
+- App-aligned plug channel/firmware semantics and alarm timestamp correction:
+  valid UTC epochs survive inconsistent DST-localized companion strings.
+- LAN-only `lan rtsp status|enable|disable`, preserving unrelated services and
+  verifying configuration read-back. A successful switch does not establish
+  that the model/firmware supports an RTSP stream.
+- Account-free LAN SD catalogs/downloads and bounded cloud SD catalogs with
+  resumable sequential batch downloads and hash-verified receipts. Explicit
+  playback timezones handle native selectors without host-local guessing.
+- Cloud and authenticated local native media processing, bounded capture and
+  cleanup, typed failures, disk-backed staging and atomic SD output publication.
+- Domain-oriented package/CLI layout, documented canonical imports, expanded
+  offline controls, installed-wheel checks and pinned Home Assistant acceptance.
 
-See [CHANGELOG.md](../CHANGELOG.md) for the detailed change list and
-[streaming.md](streaming.md) for supported formats and capture semantics.
+See [CHANGELOG.md](../CHANGELOG.md) for detailed changes and
+[the documentation index](README.md) for task-specific guides.
 
-## Known limitations, not release claims
+## Home Assistant coordination
 
-- Fresh X80 wheel smoke is mixed: a 30-second cached-key cloud capture decoded
-  only one 3840×2160 HEVC frame beside 466 AAC frames, while the direct-local
-  capture decoded 451 video frames with 33 HEVC decoder diagnostics. Initial inventory-key
-  attempts failed; fresh account media-key retrieval required MFA. These are
-  not a clean sustained-video sign-off. Repeat with freshly verified media keys
-  and investigate the sparse cloud video/local diagnostics before publication.
-- Intermittent C8W cloud upstream delivery remains unresolved. Increasing a bound
-  does not guarantee media; unavailable captures return `no_media` (proxy 502).
-- Residual Gate HEVC reference/PPS warnings need full-clip follow-up. A short clean
-  decode is not proof of full-duration integrity.
-- C6CN and Husky Air ECDH behavior and the C1C direct-local HEVC path remain
-  device-specific investigation items; other transports may work on those models.
-- Long-duration stream/audio soak and extended push-outage/phone-coexistence
-  validation remain outstanding. Offline gates and bounded live smoke are not a
-  continuous-stability sign-off.
-- Export supports H.264/HEVC video and metadata-backed AAC-LC. Recognizing another
-  advertised codec does not mean it can be exported; unsupported audio remains
-  video-only. Channel-level encrypted VTM payloads are not supported.
+Installing this library does not upgrade any integration or dependency pin.
+The pinned custom cloud consumer passes the documented offline acceptance
+boundary, but its legacy push startup still lacks migration and durable token
+storage. Official HA core, the custom cloud integration and the experimental
+native integration are separate consumers. Consult [current HA status](home-assistant.md)
+before recommending deployment. Import compatibility and synthetic ingestion do
+not establish live RTSP, broker delivery or production player support.
+
+## Known limitations and validation boundaries
+
+- Historical X80 wheel validation on 2026-10-09 was mixed (sparse cloud video
+  and local decoder diagnostics); it is not a current-head readiness result.
+  Later development evidence is pinned to its own source/device/bounds. This
+  preparation does not repeat live captures or claim all models are qualified.
+- Long-duration stream/audio soak, outage/phone coexistence and model-specific
+  media behavior require separate qualification. Offline checks do not establish
+  continuous live stability; native HA/player examples remain development tools.
+- String-only alarm timestamps with fixed offsets cannot identify a DST timezone.
+  SD playback requires the correct explicit camera timezone; ambiguous DST ranges
+  are rejected rather than guessed from the host.
+- Protocol crypto and intentional native cleanup findings have a separate
+  [CodeQL triage](codeql-triage.md). Inspect the exact release head's security
+  and quality results; do not infer approval from historical green checks.
 
 ## Review and publication workflow
 
-1. Review/merge the release-preparation PR and verify CI and CodeQL on merged main.
-2. Run **Release Check** on main with `release-tag=v2.0.0`; inspect its wheel/sdist
-   artifacts and wheel-install smoke results. This checks a proposed tag string
-   without creating that tag or publishing anything.
-3. Obtain explicit owner approval to publish/tag. This preparation does not grant
-   that approval. Reassess the known limitations before calling the release ready.
-4. After approval, run **Upload Python Package** on the intended merged main commit
-   with bare `version=2.0.0`. The existing workflow builds/checks the distributions,
-   smoke-tests the wheel, publishes through PyPI trusted publishing, and only then
-   creates GitHub release/tag `v2.0.0`. Do not create a separate tag/release first.
-5. Verify the PyPI version, artifact contents, GitHub tag/release commit, and
-   downstream integration migration. Use these notes for the GitHub release body
-   after publishing; the current workflow otherwise emits a generic body.
+1. Verify this PR's exact-head CI, documentation, CodeQL and non-publishing
+   **Release Check**, including built-wheel smoke and version `2.0.0` metadata.
+2. Review/merge this preparation PR and verify merged-main checks. Run
+   **Release Check** on main with proposed `release-tag=v2.0.0`; it creates no tag.
+3. Reassess live/soak limitations and obtain explicit owner approval for
+   publication. Updating this preparation PR does not grant that approval.
+4. Run **Upload Python Package** on intended merged main with bare
+   `version=2.0.0`. It validates/builds, publishes through PyPI trusted publishing,
+   then creates GitHub tag/release `v2.0.0`. Do not separately pre-create the tag
+   or run duplicate publication paths. See [release procedure](releases.md).
+5. Verify PyPI artifacts, tag/release commit and downstream migration. The upload
+   workflow generates a generic body plus GitHub notes; curate these release
+   notes into the release description when publication is authorized.
 
-The **Prepare Release** workflow is not needed for this PR: the version bump and
-dated changelog section are already prepared. Running it again for 2.0.0 would
-correctly reject the duplicate release section.
+Do not rerun **Prepare Release** for this PR. It only moves Unreleased entries
+and requires the requested version to already match `pyproject.toml`; it does
+not perform this migration/documentation work. The dated 2.0.0 section is already
+prepared, so a rerun on this branch rejects a duplicate section.

@@ -1,0 +1,224 @@
+# Cloud-mediated SD-card playback
+
+[Documentation index](README.md) · [Media paths](media.md)
+
+Download a recording time range from a camera's **SD card through EZVIZ's VTM
+relay**. This is not cloud-subscription storage (`cloud_video_download`), a live
+preview, a local RTSP recording URL or a new HA playback interface. The camera
+must be online and have SD footage for the selected range.
+
+This feature builds on **Alejandro Dirgan (@adirgan)**'s
+[original PR #266](https://github.com/RenierM26/pyEzvizApi/pull/266), including
+his playback selector and observed channel-2 media behavior. It has been adapted
+to the current capture API, deadlines and publication contracts. It is unreleased
+until included in a published version; use the matching source checkout/docs.
+
+## CLI
+
+First list known SD recording descriptors using [the recording commands](cli.md#sdcard_videos),
+then select a known continuous recorded range. Public begin/end inputs are
+**UTC instants**, written `YYYYMMDDTHHMMSSZ`. The native app protocol, however,
+formats its selector in a local wall clock with a **literal `Z`**, not a UTC
+indicator. Use `--playback-timezone` to declare that native selector clock.
+It defaults to `UTC` for compatibility; non-UTC installations must configure it
+explicitly (for example `Africa/Johannesburg`). Never use the agent/host timezone
+implicitly or blindly attach `Z` to unzoned recording-search descriptors.
+
+```bash
+pyezvizapi --token-file ezviz_token.json --json save clip \
+  --source cloud-playback --serial CAMERA_SERIAL --channel 1 \
+  --begin-time 20261108T120000Z --end-time 20261108T120020Z \
+  --playback-timezone Africa/Johannesburg \
+  --decrypt-video --format mpegps --output sd-clip.ps
+```
+
+Omit `--decrypt-video` for clear media. When decrypting, the default automatically
+selects the clear NAL-header convention; an explicit `--decrypt-codec` remains an
+override. VTM transport-level encrypted packets are a separate unsupported mode
+and fail rather than publishing only the clear prefix.
+
+- The default is the **whole begin/end range**, not the live save's ten-second
+  default. `--duration 10s` explicitly shortens the media-time selection; it is
+  not a ten-second wall-clock download timer.
+- MPEG-PS is the default and currently supported output. Optional remuxing after
+  validation is separate, e.g. `ffmpeg -i sd-clip.ps -c copy sd-clip.mp4`.
+- `--lid` supplies the optional native playback label/session selector when
+  known. Do not fabricate one or publish credential-bearing native URLs.
+- Channel zero is preserved when explicitly selected or reported by VTM resource
+  metadata. A packet's VTM channel `0x02` is not camera/lens channel 2.
+- `--playback-max-bytes` defaults to 128 MiB and
+  `--playback-transfer-timeout` to 60 seconds including key/bootstrap work.
+  `--timeout` controls socket inactivity. Bounds must be positive and finite.
+- A begin/end range must be ordered, valid UTC and no longer than 24 hours. This
+  is a selector bound, not a promise that a 24-hour file fits the default budgets.
+
+## Encrypted AAC audio
+
+Some SD recordings (including the validated H9c sample) encrypt AAC access units
+independently from video. Add `--decrypt-audio` **only when SD audio is encrypted**;
+it is an explicit `cloud-playback` option and is off by default so clear audio is
+not corrupted. It preserves clear ADTS headers/CRC, PES timestamps and incomplete
+final AES-block tails. Complete ADTS frames within audio PES are supported;
+fragmented or other audio formats fail explicitly. Supply the actual recording's
+key, which may differ from an old inventory entry or the device verification code.
+
+The ordinary camera-key lookup may require account MFA. Use the existing
+`--sms-code` flow or a private, application-managed `EZVIZ_LOCAL_MEDIA_KEY` /
+`EZVIZ_LOCAL_MEDIA_KEY_HEX` environment value when a known key is already stored;
+do not publish the key in shell examples or logs. Retrieving a key does not rotate it.
+
+## Python
+
+Create/authenticate an `EzvizClient` using the [Python guide](python-api.md).
+Then use the convenience API:
+
+```python
+result = client.save_clip(
+    "CAMERA_SERIAL", "sd-clip.ps", source="cloud-playback",
+    cloud_playback_begin_time="20261108T120000Z",
+    cloud_playback_end_time="20261108T120020Z",
+    cloud_playback_timezone="Africa/Johannesburg",
+    channel=1, decrypt_video=True, cloud_playback_decrypt_audio=True,
+)
+```
+
+Or group source/transfer settings explicitly:
+
+```python
+from pyezvizapi import CloudPlaybackClipSource, ClipOptions, MediaDecodeOptions
+
+result = client.save_clip_with_options(
+    "CAMERA_SERIAL", "sd-clip.ps",
+    ClipOptions(
+        source=CloudPlaybackClipSource(
+            "20261108T120000Z", "20261108T120020Z",
+            timezone="Africa/Johannesburg",
+            max_bytes=128 * 1024 * 1024, transfer_timeout=60, decrypt_audio=True,
+        ),
+        decode=MediaDecodeOptions(decrypt_video=True, nalu_header_size=None),
+        channel=1,
+    ),
+)
+```
+
+The Python examples above opt into encrypted SD audio; leave that flag off for
+clear AAC. Existing live/local capture defaults are unchanged. For SD playback an omitted
+capture duration selects the whole range, whereas an explicit ten seconds really
+selects ten seconds. `CaptureLimits.max_packets` intentionally permits a partial
+sample; inspect `range_complete` instead of calling a packet-capped sample a
+whole-range download. `CaptureLimits.max_bytes` can lower the source byte budget.
+
+Lower-level helpers live in `pyezvizapi.streaming.cloud.playback` and are also
+lazy root exports: `build_vtm_playback_url`, `get_cloud_playback_stream_info`,
+`open_cloud_playback_stream` and `copy_cloud_playback_to_mpegps`.
+
+## Completion and failure semantics
+
+Capture/validation failures do not truncate an existing path or append a prefix
+to a caller buffer. Output is published only after validation/decryption; a final
+path publication uses atomic replacement; caller-owned file-like outputs cannot roll back their final write failures. Input accumulation is capped by the configured byte limit; decryption and
+publication may hold additional copies. Choose smaller limits for constrained hosts.
+
+A clean peer EOF or idle timeout **alone is not completion**. Full-range saves
+require a continuous clear PES video-PTS span covering the selected duration
+within 5%, capped at one second of frame/startup tolerance. PTS resets or gaps over
+one second are ambiguous and fail verification. This is media-span verification,
+not proof of exact absolute recording time, every picture being decodable,
+frame-exact trim, or physical A/V synchronization. Sparse/event-only recordings
+may require selecting an actual continuous record or taking an explicitly partial
+packet sample instead of claiming a complete broad time window.
+
+The result includes `begin_time`, effective `end_time`, `bytes`,
+`observed_pts_span_seconds`, `range_complete` and `completion_reason`. Empty,
+short, malformed, over-budget or unsupported encrypted transport output fails.
+A truncated VTM header/body is not treated as clean EOF. No automatic source
+fallback, unlimited retries, timestamp repair, preview or camera control occurs.
+Staged MPEG-PS packets must also be complete and contiguous, including the tail;
+the known vendor video-continuation convention, unbounded video PES, optional
+program-end code and exact eight-byte terminal marker observed in the H9c sample
+are supported. Arbitrary trailing bytes or truncated audio/video packets fail.
+
+## Protocol evidence
+
+The SDK's `libezstreamclient.so` contains `/playback?` and the native `begin`,
+`end`, `serial`, `lid`, `rnd` and `etp` selector strings. Its exported
+`StreamInfoReq::kTimeoutFieldNumber` is **8**: the contributed value `10` is a
+server request timeout, not a playback stream-type identifier. Playback uses its
+URL mode and known packet channel independently; default live request bytes and
+live channel filtering remain unchanged.
+
+Synthetic transport tests cover channel zero, full versus explicitly shortened
+ranges, incomplete/empty/truncated input, encrypted packets after clear media,
+limits, output preservation and separation from live playback. Actual-device
+qualification must additionally decode both video and audio and record the
+selected model/source/commit; synthetic PTS coverage is not live playback proof.
+
+## Recorded qualification
+
+On a supplied H9c SD recording, bounded cloud transfers returned a selected
+20-second range (1,155,884 MPEG-PS bytes; video PTS span 19.933 seconds). The
+installed wheel was then exercised offline against those retained bytes with the
+known stored recording key and explicit SD-audio decryption. Both 1920×1080 HEVC
+tracks decoded 300 frames each; 16 kHz mono AAC decoded 313 frames, with no
+FFprobe or FFmpeg decode errors. This confirms decoding, not audible/screen
+playback or exact wall-clock identity.
+
+Subsequent relay negotiation returned code `6520`; the cause is not established.
+The API now surfaces a numeric negotiation failure immediately and publishes no
+clip, rather than waiting and reporting an empty download. No retry or fallback
+is automatic. A working retained sample is not a long-soak or universal-camera
+claim. Camera-key retrieval on this account requested MFA; it was not bypassed.
+No camera/HA settings or production credentials were changed by qualification.
+
+
+## Failure handling and storage
+
+Catch `pyezvizapi.exceptions.EzvizPlaybackNegotiationError` to inspect the stable
+integer `result_code`, `reason="playback_negotiation_failed"`, and
+`source="cloud-playback"`. This remains a `PyEzvizError`; no URL, token or native
+response is attached. Code `6520` is an observed refusal, not a diagnosed busy
+session. Closing the TCP socket is verified; server-side release is not proved.
+Do not infer a required StopStream command from the unrelated VTDU protobuf
+builder or add blind retries without matching native session evidence.
+
+Transport and validated-output staging each spill to temporary storage above
+1 MiB. The existing framing and decrypt passes still need a complete byte-bounded
+snapshot; this is not a constant-memory decoder. Budget disk space for transport,
+validated output and the publication copy. Temporary files close on failure.
+Path saves write/flush/fsync a same-directory temporary file, close it, and replace
+the destination atomically. A pre-replacement error leaves existing bytes intact
+and removes the temporary file. Binary file-like outputs cannot offer rollback
+if their own final write/flush fails; they receive only validated media.
+
+CLI, typed sources and copier share finite-budget and effective UTC-range rules.
+An omitted duration retains the entire selection; explicit ten seconds selects
+ten seconds, and a duration beyond the range is clamped to its end. The effective
+end must be a whole UTC second. Live-capture defaults are unchanged.
+
+
+## Native clock qualification and relay refusals
+
+A bounded trace of the official EZVIZ 7.4.1 app on the same H9c captured its
+`createPlaybackHandleEx` selectors and plaintext StreamInfoReq before control
+packet encryption. A temporary session-only route restriction disabled direct
+and P2P routes; the app still decoded the recording through the relay. This did
+not change camera settings. The SDK requested `10:15:20Z` while the camera OSD
+and app used Africa/Johannesburg (UTC+02:00). `CasUtils.convertCasTime` explicitly
+uses `TimeZone.getDefault()` with `yyyyMMdd'T'HHmmss'Z'`, confirming the suffix
+is literal. The earlier assumption that native `Z` guarantees UTC was wrong.
+
+A paired Python test changed only the time selector: the UTC-looking selector
+was refused, while the corresponding native local selection downloaded verified
+MPEG-PS. The library now converts public UTC to the explicitly declared native
+selector timezone and reports `native_begin_time`, `native_end_time`, and
+`playback_timezone` alongside the unchanged UTC begin/effective-end fields.
+Duration shortening occurs in UTC before conversion. Offset-transition ranges
+and repeated local times are rejected: the native selector cannot express an
+offset or DST fold. No host-local fallback or automatic two-hour adjustment is
+used; other installations must declare their own selector zone.
+
+`6520` is still an opaque server result, not a universal synonym for a bad time,
+contention, authentication or an SDK failure. An earlier metadata-derived range
+still refused after shifting, so a timezone conversion is not proof that every
+advertised historical interval exists or can be downloaded. Select and qualify
+an actual known-working recording; preserve numeric refusals without retries.

@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.streaming.local.hcnetsdk.api import HcNetSdkLanEndpoint
+from pyezvizapi.streaming.local.recordings import query_lan_recordings
 from pyezvizapi.streaming.recordings import (
     RecordingCatalog,
     download_recordings,
@@ -19,9 +21,15 @@ from pyezvizapi.streaming.recordings import (
 def add_recordings_arguments(subparsers: Any) -> None:
     parser = subparsers.add_parser("recordings", help="Query SD index and download a saved catalog")
     actions = parser.add_subparsers(dest="recordings_action", required=True)
-    listing = actions.add_parser("list", help="Snapshot the cloud SD index (not a LAN query)")
+    listing = actions.add_parser("list", help="Snapshot the SD index over cloud or LAN")
     listing.add_argument("--serial", required=True)
-    listing.add_argument("--channel", type=int, default=0)
+    listing.add_argument("--source", choices=("cloud-sd-v2", "lan-hcnetsdk"), default="cloud-sd-v2")
+    listing.add_argument("--host")
+    listing.add_argument("--lan-password-file")
+    listing.add_argument("--lan-username", default="admin")
+    listing.add_argument("--max-bytes", type=int, default=1024 * 1024)
+    listing.add_argument("--transfer-timeout", type=float, default=60)
+    listing.add_argument("--channel", type=int, help="Cloud default 0; LAN default 1")
     listing.add_argument("--begin-time", required=True, help="UTC YYYYMMDDTHHMMSSZ")
     listing.add_argument("--end-time", required=True, help="UTC YYYYMMDDTHHMMSSZ")
     listing.add_argument("--timezone", required=True, help="IANA index/native selector timezone")
@@ -37,7 +45,7 @@ def add_recordings_arguments(subparsers: Any) -> None:
     download.add_argument(
         "--source", choices=("local-playback", "cloud-playback", "both"), required=True
     )
-    download.add_argument("--local-channel", type=int, default=1)
+    download.add_argument("--local-channel", type=int, help="LAN catalog channel, otherwise 1")
     download.add_argument("--cloud-channel", type=int, help="Default: catalog channel")
     download.add_argument("--host", help="Explicit LAN camera IPv4 address")
     download.add_argument(
@@ -64,22 +72,52 @@ def handle_recordings(args: argparse.Namespace, client: Any) -> int:
 
 def _handle(args: argparse.Namespace, client: Any) -> int:
     if args.recordings_action == "list":
-        catalog = query_recordings(
-            client,
-            args.serial,
-            args.begin_time,
-            args.end_time,
-            channel=args.channel,
-            timezone=args.timezone,
-            page_size=args.page_size,
-            max_queries=args.max_queries,
-            max_records=args.max_records,
-        )
+        if args.source == "lan-hcnetsdk":
+            if not args.host or not args.lan_password_file:
+                raise PyEzvizError("LAN discovery requires --host and --lan-password-file")
+            catalog = query_lan_recordings(
+                HcNetSdkLanEndpoint(serial=args.serial, host=args.host),
+                Path(args.lan_password_file).read_bytes().rstrip(b"\r\n"),
+                args.begin_time,
+                args.end_time,
+                channel=1 if args.channel is None else args.channel,
+                timezone=args.timezone,
+                username=args.lan_username,
+                max_records=args.max_records,
+                max_bytes=args.max_bytes,
+                transfer_timeout=args.transfer_timeout,
+            )
+        else:
+            catalog = _query_cloud(args, client)
         result = catalog.to_dict()
         write_recording_json(Path(args.catalog), result)
         print(json.dumps(result, indent=2))
         return 0
+    return _download(args, client)
+
+
+def _query_cloud(args: argparse.Namespace, client: Any) -> RecordingCatalog:
+    return query_recordings(
+        client,
+        args.serial,
+        args.begin_time,
+        args.end_time,
+        channel=0 if args.channel is None else args.channel,
+        timezone=args.timezone,
+        page_size=args.page_size,
+        max_queries=args.max_queries,
+        max_records=args.max_records,
+    )
+
+
+def _download(args: argparse.Namespace, client: Any) -> int:
     catalog = RecordingCatalog.from_dict(json.loads(Path(args.catalog).read_text()))
+    if (
+        catalog.discovery == "lan-hcnetsdk"
+        and args.source != "local-playback"
+        and args.cloud_channel is None
+    ):
+        raise PyEzvizError("LAN catalogs require an explicit --cloud-channel for cloud downloads")
     routes = ("local-playback", "cloud-playback") if args.source == "both" else (args.source,)
     password = (
         Path(args.lan_password_file).read_bytes().rstrip(b"\r\n")

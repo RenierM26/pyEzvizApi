@@ -806,6 +806,7 @@ if TYPE_CHECKING:
     )
 
     from .streaming.local.playback import download_lan_sd_recording
+    from .streaming.local.recordings import query_lan_recordings
 
 _EXPORTS = {
     "HcNetSdkStreamDetails": "streaming.local.hcnetsdk.api",
@@ -832,6 +833,7 @@ _EXPORTS = {
     "CloudPlaybackClipSource": "streaming.capture",
     "LocalPlaybackClipSource": "streaming.capture",
     "download_lan_sd_recording": "streaming.local.playback",
+    "query_lan_recordings": "streaming.local.recordings",
     "build_vtm_playback_url": "streaming.cloud.playback",
     "get_cloud_playback_stream_info": "streaming.cloud.playback",
     "open_cloud_playback_stream": "streaming.cloud.playback",

@@ -5,6 +5,9 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+- Add account-free native LAN SD recording discovery and route-tagged catalogs,
+  with finite search bounds and explicit channel/timezone handling.
+
 - Add cloud SD catalog snapshots and resumable sequential batch downloads over LAN, cloud relay, or both, with explicit timezone, bounded catalog queries and hash-verified receipts.
 
 ### LAN SD downloads

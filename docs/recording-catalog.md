@@ -1,9 +1,8 @@
 # Stored SD video: catalog and batch download
 
 Current development-branch API. These commands query **camera SD recordings**,
-not subscription cloud storage. Discovery currently requires the cloud v2 index.
-Native LAN-only file discovery is not implemented. Once saved, the catalog can
-be downloaded over LAN with no cloud/account calls.
+not subscription cloud storage. Discovery supports the cloud v2 index or native
+LAN-only HCNetSDK file search. LAN discovery and downloads require no account.
 
 ## 1. Query an explicit interval
 
@@ -25,6 +24,29 @@ index includes every physical byte on the card. Malformed responses fail rather
 than looking like an empty card. Intervals are clipped to the requested bounds,
 sorted and deduplicated; overlapping distinct records are retained.
 
+### Native LAN-only discovery
+
+```bash
+pyezvizapi recordings list --source lan-hcnetsdk --host 192.0.2.10 --serial SERIAL --lan-password-file device-password.txt --channel 1 --begin-time 20261108T060000Z --end-time 20261109T060000Z --timezone Africa/Johannesburg --catalog recordings.json
+```
+
+LAN searches accept at most 24 hours per invocation. They use the supplied
+current device login password, not account credentials. Native start/record/end
+markers, record counts and lengths are validated. No catalog is published until
+the end marker and logout acknowledgement arrive. `--max-records` (10,000),
+`--max-bytes` (1 MiB) and `--transfer-timeout` (60 seconds) bound the entire search.
+An explicit empty native result succeeds; truncation, refusal or budget exhaustion
+fails without replacing the catalog. No fallback or retries occur. Native
+wall-clock timestamps use the explicit timezone; ambiguous clocks are rejected.
+Single-record, 18-record and empty searches were compared with the native SDK
+on H9c; other models are not hardware-qualified. This is file-index completeness,
+not proof that every advertised interval is playable or that the card is healthy.
+
+Catalogs retain `discovery: lan-hcnetsdk` and the one-based native channel. LAN
+downloads default to that channel; cloud downloads of LAN catalogs require an
+explicit `--cloud-channel` because channel numbering differs by route. Existing
+`cloud-sd-v2` catalogs remain readable.
+
 ## 2. Download every catalog interval
 
 LAN, using the **current device login password**, not the account password or
@@ -42,7 +64,8 @@ pyezvizapi --token-file ezviz_token.json recordings download --catalog recording
 
 Use `--source both` with both sets of credentials to download every interval
 sequentially over each route. There is no fallback between routes. LAN defaults
-to channel 1; cloud defaults to the catalog channel (commonly 0). Override with
+to the LAN catalog channel (otherwise 1); cloud catalogs default to their
+catalog channel (commonly 0). Override with
 `--local-channel`/`--cloud-channel`; these channel numbers are not interchangeable.
 On the tested H9c, LAN channel 1 carries one video track plus audio; the cloud
 route carries two video tracks plus audio. This tool does not invent missing
@@ -90,6 +113,18 @@ catalog = query_recordings(
 )
 report = download_recordings(
     client, catalog, "archive", source="cloud-playback", media_key="PRIVATE_KEY",
+)
+```
+
+For account-free discovery:
+
+```python
+from pyezvizapi import HcNetSdkLanEndpoint, query_lan_recordings
+
+catalog = query_lan_recordings(
+    HcNetSdkLanEndpoint("SERIAL", "192.0.2.10"), "DEVICE_PASSWORD",
+    "20261108T060000Z", "20261109T060000Z",
+    timezone="Africa/Johannesburg",
 )
 ```
 

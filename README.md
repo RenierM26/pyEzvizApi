@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/RenierM26/pyEzvizApi/actions/workflows/ci.yaml/badge.svg)](https://github.com/RenierM26/pyEzvizApi/actions/workflows/ci.yaml)
 [![PyPI](https://img.shields.io/pypi/v/pyezvizapi)](https://pypi.org/project/pyezvizapi/)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-renierm-yellow?logo=buymeacoffee)](https://www.buymeacoffee.com/renierm)
 
 A Python client and CLI for the reverse-engineered EZVIZ cloud API, device
 controls, channel-99 push and optional local/cloud media processing.

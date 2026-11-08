@@ -70,6 +70,9 @@ def transport(monkeypatch, data=None, *, login_error=None, selection_status=1, l
             self.sent = []
             clients.append(self)
 
+        def __enter__(self):
+            pytest.fail("Native client __enter__ would connect outside the shared deadline")
+
         def login(self, **kwargs):
             if login_error:
                 raise login_error

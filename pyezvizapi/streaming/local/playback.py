@@ -7,7 +7,7 @@ no cloud discovery, Android runtime, fallback, retry or camera configuration.
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from datetime import datetime
 from ipaddress import IPv4Address
 import os
@@ -253,22 +253,18 @@ def _acquire(
         )
 
     def logout() -> None:
-        control = client()
-        try:
+        with closing(client()) as control:
             control.send_command_frame(frame(_LOGOUT), deadline=deadline)
             response = control.read_tcp_frame(
                 max_frame_bytes=_MAX_METADATA_BYTES, deadline=deadline
             )
             if response.header.field_8 != 1:
                 raise LanPlaybackError("logout", response.header.field_8)
-        finally:
-            control.close()
 
     try:
         # Do not enter the client context here: that would connect before
         # login's deadline-aware connect path gets a chance to run.
-        login = client()
-        try:
+        with closing(client()) as login:
             login_session = login.login(
                 password=password,
                 username=username,
@@ -279,10 +275,7 @@ def _acquire(
             local_ip = str(login.sock.getsockname()[0])
             if not login_session.serial.endswith(endpoint.serial):
                 raise PyEzvizError("LAN SD camera identity differs from supplied serial")
-        finally:
-            login.close()
-        stream = client()
-        try:
+        with closing(client()) as stream:
             stream.send_command_frame(frame(_SELECT_TIME, body), deadline=deadline)
             selected = stream.read_tcp_frame(max_frame_bytes=_MAX_METADATA_BYTES, deadline=deadline)
             if selected.header.field_8 != 1:
@@ -295,8 +288,6 @@ def _acquire(
                 timeout=timeout,
                 max_bytes=max_bytes,
             )
-        finally:
-            stream.close()
     except BaseException as error:
         if login_session is not None:
             try:

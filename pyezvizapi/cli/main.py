@@ -1510,6 +1510,17 @@ def main(argv: list[str] | None = None) -> int:
             _LOGGER.error("%s", error)
             return 1
 
+    local_batch = args.action == "recordings" and (
+        (args.recordings_action == "download" and args.source == "local-playback")
+        or (args.recordings_action == "list" and args.source == "lan-hcnetsdk")
+    )
+    if local_batch:
+        try:
+            return handle_recordings(args, None)
+        except PyEzvizError as exp:
+            _LOGGER.error("%s", exp)
+            return 1
+
     if args.action == "mqtt" and not args.token_file:
         args.token_file = "ezviz_token.json"
     token = _load_token_file(args.token_file)
@@ -1551,14 +1562,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     client: EzvizClient | None = None
-    local_batch = args.action == "recordings" and (
-        (args.recordings_action == "download" and args.source == "local-playback")
-        or (args.recordings_action == "list" and args.source == "lan-hcnetsdk")
-    )
-    if _save_clip_can_run_without_cloud_credentials(args) or local_batch:
+    if _save_clip_can_run_without_cloud_credentials(args):
         try:
             client = EzvizClient(args.username, args.password, args.region, token=token)
-            return handle_recordings(args, client) if local_batch else _handle_save(args, client)
+            return _handle_save(args, client)
         except PyEzvizError as exp:
             _LOGGER.error("%s", exp)
             return 1

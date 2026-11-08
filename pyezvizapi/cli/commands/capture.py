@@ -44,10 +44,12 @@ def _validate_shared_clip_args(
         )
         if args.source == "local-playback":
             from pyezvizapi.streaming.local.hcnetsdk.api import HcNetSdkLanEndpoint  # noqa: PLC0415
-            from pyezvizapi.streaming.local.playback import _validate_connection  # noqa: PLC0415
+            from pyezvizapi.streaming.local.sd_transport import (  # noqa: PLC0415
+                validate_connection as _validate_connection,
+            )
 
             if args.channel is not None:
-                from pyezvizapi.streaming.cloud.playback_range import playback_integer  # noqa: PLC0415
+                from pyezvizapi.streaming.ranges import playback_integer  # noqa: PLC0415
 
                 playback_integer(args.channel, "LAN channel")
             password = _lan_password(args, _owner=_owner)

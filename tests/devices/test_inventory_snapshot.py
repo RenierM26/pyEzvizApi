@@ -392,3 +392,28 @@ def test_actual_camera_attribute_error_isolated_from_healthy_sibling(client, mon
     assert second.health["good"].current
     assert second.devices["bad"] is first.devices["bad"]
     assert second.health["bad"] == DeviceHealth(True, False, first.received_at, "AttributeError")
+
+
+@pytest.mark.parametrize("bad_status", [None, [1], "bad", False, 0])
+def test_actual_acquisition_preserves_malformed_device_status_for_isolation(
+    client, monkeypatch, bad_status
+):
+    page: dict[str, Any] = {
+        "deviceInfos": [
+            {"deviceSerial": "good", "deviceCategory": "IPC", "status": 1, "version": "V1"},
+            {"deviceSerial": "bad", "deviceCategory": "IPC", "status": 1, "version": "V1"},
+        ],
+        "STATUS": {"good": {}, "bad": {}},
+    }
+    monkeypatch.setattr(client, "_get_page_list", lambda: deepcopy(page))
+    options = DevicePollOptions(include_camera_alarms=False)
+    first = client.poll_devices(options)
+    assert first.health["bad"].current
+    page["STATUS"]["bad"] = bad_status
+    page["deviceInfos"][0]["version"] = "V2"
+    records = client.get_device_records(None)
+    assert records["bad"].raw["STATUS"] == bad_status
+    second = client.poll_devices(options)
+    assert second.devices["good"].values["version"] == "V2" and second.health["good"].current
+    assert second.devices["bad"] is first.devices["bad"]
+    assert second.health["bad"] == DeviceHealth(True, False, first.received_at, "TypeError")

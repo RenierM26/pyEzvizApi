@@ -55,6 +55,8 @@ def _render(
     refresh: bool,
 ) -> DeviceState:
     raw = dict(record.raw)
+    if "STATUS" in raw and not isinstance(raw["STATUS"], Mapping):
+        raise TypeError("Device STATUS section must be a mapping")
     info = raw.get("deviceInfos")
     connectivity = info.get("status") if isinstance(info, Mapping) else None
     observed: frozenset[str] = frozenset()

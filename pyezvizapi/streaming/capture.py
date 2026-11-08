@@ -28,7 +28,13 @@ from pyezvizapi.streaming.local.transport import (
 from pyezvizapi.streaming.media.models import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
 
 ClipSource = Literal[
-    "auto", "local-sdk", "local-sdk-ecdh", "hcnetsdk-command-port", "cloud", "cloud-playback"
+    "auto",
+    "local-sdk",
+    "local-sdk-ecdh",
+    "hcnetsdk-command-port",
+    "cloud",
+    "cloud-playback",
+    "local-playback",
 ]
 ClipOutputFormat = Literal["mpegps", "mpegts"]
 
@@ -71,6 +77,30 @@ class CloudPlaybackClipSource:
         positive_timeout(self.transfer_timeout, "transfer_timeout")
         playback_integer(self.max_bytes, "max_bytes")
         playback_integer(self.token_index, "token_index", minimum=0)
+
+
+@dataclass(frozen=True)
+class LocalPlaybackClipSource:
+    """Account-free LAN SD range with explicit camera/device credentials."""
+
+    begin_time: str
+    end_time: str
+    host: str
+    password: str | bytes = field(repr=False)
+    timezone: str = "UTC"
+    kind: Literal["local-playback"] = field(default="local-playback", init=False)
+    username: str = "admin"
+    command_port: int = 8000
+    timeout: float = 10.0
+    max_bytes: int = DEFAULT_PLAYBACK_MAX_BYTES
+    transfer_timeout: float = DEFAULT_PLAYBACK_TRANSFER_TIMEOUT
+
+    def __post_init__(self) -> None:
+        playback_range(self.begin_time, self.end_time)
+        playback_timezone(self.timezone)
+        positive_timeout(self.timeout, "timeout")
+        positive_timeout(self.transfer_timeout, "transfer_timeout")
+        playback_integer(self.max_bytes, "max_bytes")
 
 
 @dataclass(frozen=True)
@@ -174,6 +204,7 @@ type ClipSourceOptions = (
     | HcNetSdkCommandPortClipSource
     | CloudClipSource
     | CloudPlaybackClipSource
+    | LocalPlaybackClipSource
 )
 
 
@@ -192,7 +223,7 @@ class ClipOptions:
     channel: int | None = None
 
     def __post_init__(self) -> None:
-        if isinstance(self.source, CloudPlaybackClipSource):
+        if isinstance(self.source, CloudPlaybackClipSource | LocalPlaybackClipSource):
             selected_end, _ = selected_playback_range(
                 self.source.begin_time,
                 self.source.end_time,
@@ -202,14 +233,18 @@ class ClipOptions:
             )
             native_playback_range(self.source.begin_time, selected_end, self.source.timezone)
             if self.channel is not None:
-                playback_integer(self.channel, "channel", minimum=0)
+                playback_integer(
+                    self.channel,
+                    "channel",
+                    minimum=1 if isinstance(self.source, LocalPlaybackClipSource) else 0,
+                )
 
     def resolved_mux(self) -> MediaMuxOptions:
         """Return explicit mux settings or the source-compatible default."""
 
         if self.mux is not None:
             return self.mux
-        if isinstance(self.source, CloudPlaybackClipSource):
+        if isinstance(self.source, CloudPlaybackClipSource | LocalPlaybackClipSource):
             return MediaMuxOptions(output_format="mpegps")
         if isinstance(self.source, LocalSdkEcdhClipSource):
             return MediaMuxOptions(

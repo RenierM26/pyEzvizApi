@@ -1493,7 +1493,7 @@ def _save_clip_can_run_without_cloud_credentials(args: argparse.Namespace) -> bo
     return (
         args.action == "save"
         and getattr(args, "save_action", None) == "clip"
-        and getattr(args, "source", None) == "hcnetsdk-command-port"
+        and getattr(args, "source", None) in {"hcnetsdk-command-port", "local-playback"}
         and (not args.decrypt_video or _local_sdk_has_static_media_key(args))
     )
 

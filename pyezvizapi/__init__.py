@@ -102,6 +102,7 @@ if TYPE_CHECKING:
         CloudClipSource,
         CloudPlaybackClipSource,
         HcNetSdkCommandPortClipSource,
+        LocalPlaybackClipSource,
         LocalSdkClipSource,
         LocalSdkEcdhClipSource,
     )
@@ -804,6 +805,8 @@ if TYPE_CHECKING:
         AutoMediaStream,
     )
 
+    from .streaming.local.playback import download_lan_sd_recording
+
 _EXPORTS = {
     "HcNetSdkStreamDetails": "streaming.local.hcnetsdk.api",
     "discover_hcnetsdk_stream_details_for_login": "streaming.local.hcnetsdk.api",
@@ -827,6 +830,8 @@ _EXPORTS = {
     "ClipSourceOptions": "streaming.capture",
     "CloudClipSource": "streaming.capture",
     "CloudPlaybackClipSource": "streaming.capture",
+    "LocalPlaybackClipSource": "streaming.capture",
+    "download_lan_sd_recording": "streaming.local.playback",
     "build_vtm_playback_url": "streaming.cloud.playback",
     "get_cloud_playback_stream_info": "streaming.cloud.playback",
     "open_cloud_playback_stream": "streaming.cloud.playback",

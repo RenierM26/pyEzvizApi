@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import pairwise
 
+from pyezvizapi.exceptions import PyEzvizError
+
 MPEG_START_CODE_PREFIX = b"\x00\x00\x01"
 
 
@@ -442,3 +444,32 @@ def _next_mpeg_ps_packet_start(data: bytes, start: int) -> int | None:
             return i
         i += 1
     return None
+
+
+def validate_sd_playback_framing(
+    data: bytes, *, vendor_trailer: bytes = b"\x24kih\x04\x03\x02\x01"
+) -> None:
+    """Require complete contiguous PS framing, including the final packet.
+
+    Reuse the bounded vendor-video recovery used by the decryptor, but never
+    let its successfully parsed prefix hide an incomplete PES or skipped gap.
+    Zero-length video PES may legitimately run to EOF; a recognizable PS packet
+    start inside that payload must not hide a truncated following packet.
+    """
+    framed = data.removesuffix(vendor_trailer)
+    framed = framed[:-4] if framed.endswith(b"\x00\x00\x01\xb9") else framed
+    cursor = 0
+    for packet in _mpeg_ps_video_decrypt_ranges(framed):
+        if packet.start != cursor:
+            raise PyEzvizError("SD playback has incomplete MPEG-PS framing")
+        if (
+            0xE0 <= packet.stream_id <= 0xEF
+            and int.from_bytes(framed[packet.start + 4 : packet.start + 6], "big") == 0
+        ):
+            payload = _pes_payload_start(framed, packet.start)
+            boundary = _next_mpeg_ps_packet_start(framed, payload) if payload is not None else None
+            if boundary is not None and boundary < packet.end:
+                raise PyEzvizError("SD playback has incomplete MPEG-PS framing")
+        cursor = packet.end
+    if cursor != len(framed):
+        raise PyEzvizError("SD playback has incomplete MPEG-PS framing")

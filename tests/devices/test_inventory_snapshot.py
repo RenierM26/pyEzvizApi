@@ -323,7 +323,7 @@ def test_typed_plug_preserves_source_power_code_without_changing_legacy(
 
 
 def test_observed_camera_properties_do_not_inherit_compatibility_defaults(client, monkeypatch):
-    raw = {"deviceInfos": {"deviceCategory": "IPC"}}
+    raw: dict[str, Any] = {"deviceInfos": {"deviceCategory": "IPC"}}
     monkeypatch.setattr(
         client, "get_device_records", lambda _: {"cam": EzvizDeviceRecord.from_api("cam", raw)}
     )

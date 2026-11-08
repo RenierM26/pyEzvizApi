@@ -76,7 +76,8 @@ def observed_fields(raw: Mapping, kind: str) -> frozenset[str]:
         for item in items if isinstance(items, list) else ():
             if not isinstance(item, Mapping) or "dataValue" not in item:
                 continue
-            name = properties.get(item.get("itemKey"))
+            key = item.get("itemKey")
+            name = properties.get(key) if isinstance(key, str) else None
             if name is not None:
                 result.add(name)
         if "brightness" in result:

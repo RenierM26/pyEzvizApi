@@ -32,7 +32,8 @@ def test_invalid_playback_fails_before_constructing_a_client(monkeypatch, extra)
     assert cli.main(args) == 1
 
 
-def test_default_playback_range_and_container_reach_real_public_dispatch(monkeypatch):
+@pytest.mark.parametrize("audio", [False, True])
+def test_default_playback_range_and_container_reach_real_public_dispatch(monkeypatch, audio):
     calls = []
 
     def copy(client, serial, output, begin, end, **kwargs):
@@ -49,8 +50,9 @@ def test_default_playback_range_and_container_reach_real_public_dispatch(monkeyp
         return original(serial, BytesIO(), **kwargs)
 
     monkeypatch.setattr(client, "save_clip", capture)
-    args = build_parser().parse_args(BASE + TIMES)
+    args = build_parser().parse_args(BASE + TIMES + (["--decrypt-audio"] if audio else []))
     assert cli._handle_save_clip(args, client) == 0  # noqa: SLF001
     assert calls[0][2]["duration_seconds"] is None
     assert calls[0][2]["client_type"] == 3
+    assert calls[0][2]["decrypt_audio"] is audio
     client.close_session()

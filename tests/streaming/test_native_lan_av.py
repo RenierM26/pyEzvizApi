@@ -12,14 +12,15 @@ from typing import Any
 
 import pytest
 
-from pyezvizapi import EzvizClient, _local_stream
+from pyezvizapi import EzvizClient
 from pyezvizapi.exceptions import EzvizNoMediaError, PyEzvizError
-from pyezvizapi.hcnetsdk import HcNetSdkLanEndpoint
-from pyezvizapi.local_stream_transport import (
+from pyezvizapi.streaming.local import session as _local_stream
+from pyezvizapi.streaming.local.hcnetsdk.api import HcNetSdkLanEndpoint
+from pyezvizapi.streaming.local.transport import (
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
     hcnetsdk_command_port_native_lan_live_view_plan,
 )
-from pyezvizapi.rtp import RtpAacStream, RtpPacket
+from pyezvizapi.streaming.media.rtp import RtpAacStream, RtpPacket
 
 
 @pytest.mark.parametrize(("native", "override", "expected"), [(True, None, 8000), (True, 8001, 8001), (False, None, None)])

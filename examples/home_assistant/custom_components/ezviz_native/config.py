@@ -8,9 +8,9 @@ from pathlib import Path
 import re
 from typing import Any
 
-from pyezvizapi.hcnetsdk import EzvizCasDeviceInfo, HcNetSdkLanEndpoint
-from pyezvizapi.local_stream_transport import EzvizLocalSdkCredentials
-from pyezvizapi.native_stream import NativeStreamOptions, NativeTrackSelection
+from pyezvizapi.streaming.local.hcnetsdk.api import EzvizCasDeviceInfo, HcNetSdkLanEndpoint
+from pyezvizapi.streaming.local.transport import EzvizLocalSdkCredentials
+from pyezvizapi.streaming.native_stream import NativeStreamOptions, NativeTrackSelection
 
 
 @dataclass(frozen=True)

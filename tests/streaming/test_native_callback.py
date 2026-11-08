@@ -5,8 +5,8 @@ import traceback
 
 import pytest
 
-from pyezvizapi import native_stream
 from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.streaming import native_stream
 from tests.streaming.test_native_stream import Source
 
 

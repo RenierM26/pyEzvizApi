@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyezvizapi import hcnetsdk
 from pyezvizapi.exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
-from pyezvizapi.hcnetsdk import HcNetSdkLanEndpoint, HcNetSdkLoginCandidate
-from tests.streaming.local.test_local_stream_details import wire as wire  # noqa: PLC0414 -- retained pytest fixture registration
+from pyezvizapi.streaming.local.hcnetsdk import api as hcnetsdk
+from pyezvizapi.streaming.local.hcnetsdk.api import HcNetSdkLanEndpoint, HcNetSdkLoginCandidate
+from tests.streaming.local.test_local_stream_details import wire as wire  # noqa: PLC0414 -- pytest fixture registration
 
 TCP_BUDGET = 2.0
 

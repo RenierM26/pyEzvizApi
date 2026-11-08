@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyezvizapi.media import CaptureLimits
+from pyezvizapi.streaming.media.models import CaptureLimits
 from tests._paths import ROOT, resolve_test_module
 
 BASE = ROOT / 'tools'

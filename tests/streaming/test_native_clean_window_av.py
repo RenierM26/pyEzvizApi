@@ -6,14 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyezvizapi import _local_stream as local
-from pyezvizapi._local_stream import (
+from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
+from pyezvizapi.streaming.local import session as local
+from pyezvizapi.streaming.local.session import (
     _clear_native_selected_timeline,
     _copy_clear_native_idmx_timed_av,
     _ffmpeg_video_decode_probe_timeout_seconds,
 )
-from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
-from pyezvizapi.rtp import RtpPacket, decrypt_idmx_aac_packets
+from pyezvizapi.streaming.media.rtp import RtpPacket, decrypt_idmx_aac_packets
 
 
 @pytest.mark.parametrize("unfinished_metadata", [False, True])

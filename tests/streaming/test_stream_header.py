@@ -6,7 +6,7 @@ import struct
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.stream_header import parse_ezviz_stream_header, stream_header_from_preview
+from pyezvizapi.streaming.media.header import parse_ezviz_stream_header, stream_header_from_preview
 
 
 def header(video=5, audio=0x2001, system=2):

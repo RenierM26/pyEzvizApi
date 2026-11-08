@@ -3,19 +3,14 @@ from __future__ import annotations
 import pickle
 
 import pyezvizapi
-from pyezvizapi._hcnetsdk_protocol import HcNetSdkLanEndpoint as ProtocolEndpoint
-from pyezvizapi.clip import ClipOptions
-from pyezvizapi.hcnetsdk import HcNetSdkLanEndpoint
-from pyezvizapi.local_stream import (
-    EzvizLocalSdkEcdhStreamDecoder as LegacyEcdhDecoder,
-)
-from pyezvizapi.local_stream_ecdh import EzvizLocalSdkEcdhStreamDecoder
-from pyezvizapi.local_stream_media import copy_local_stream_to_mpegts
-from pyezvizapi.local_stream_transport import EzvizLocalSdkMediaStream
-from pyezvizapi.stream import VtmStreamClient as LegacyVtmStreamClient
-from pyezvizapi.stream_media import decrypt_hikvision_ps_video
-from pyezvizapi.stream_transport import VtmStreamClient
-from tests._paths import FIXTURES
+from pyezvizapi.streaming.capture import ClipOptions
+from pyezvizapi.streaming.cloud.transport import VtmStreamClient
+from pyezvizapi.streaming.local.ecdh import EzvizLocalSdkEcdhStreamDecoder
+from pyezvizapi.streaming.local.hcnetsdk.api import HcNetSdkLanEndpoint
+from pyezvizapi.streaming.local.hcnetsdk.protocol import HcNetSdkLanEndpoint as ProtocolEndpoint
+from pyezvizapi.streaming.local.media import copy_local_stream_to_mpegts
+from pyezvizapi.streaming.local.transport import EzvizLocalSdkMediaStream
+from pyezvizapi.streaming.media.containers import decrypt_hikvision_ps_video
 
 
 def test_package_all_exports_resolve() -> None:
@@ -107,29 +102,10 @@ def test_stream_exports_have_focused_runtime_owners() -> None:
         assert getattr(pyezvizapi, name) is expected
 
 
-def test_legacy_stream_modules_keep_existing_imports() -> None:
-    assert LegacyEcdhDecoder is EzvizLocalSdkEcdhStreamDecoder
-    assert LegacyVtmStreamClient is VtmStreamClient
-
-
 def test_extracted_model_exports_keep_identity_and_legacy_pickle_resolution():
     assert HcNetSdkLanEndpoint is ProtocolEndpoint
     endpoint = HcNetSdkLanEndpoint("TEST", "192.0.2.10")
     legacy_pickle = pickle.dumps(endpoint, protocol=0).replace(
-        b"pyezvizapi._hcnetsdk_protocol\n", b"pyezvizapi.hcnetsdk\n"
+        b"pyezvizapi.streaming.local.hcnetsdk.protocol\n", b"pyezvizapi.streaming.local.hcnetsdk.api\n"
     )
     assert pickle.loads(legacy_pickle) == endpoint  # local, synthetic round-trip only
-
-
-def test_maintenance_preserves_all_baseline_legacy_namespace_exports():
-    import importlib  # noqa: PLC0415
-    import json  # noqa: PLC0415
-    baseline = json.loads((FIXTURES / 'maintenance-public-exports.json').read_text())
-    for name, contract in baseline.items():
-        module = importlib.import_module("pyezvizapi." + name)
-        expected = set(contract["attributes"])
-        assert expected <= set(dir(module)), name
-        wildcard = set(getattr(module, "__all__", [n for n in dir(module) if not n.startswith("_")]))
-        assert set(contract["wildcard"]) <= wildcard, name
-        if name == "utils":
-            assert wildcard == set(contract["wildcard"])

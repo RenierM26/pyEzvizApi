@@ -2,10 +2,12 @@
 
 Start here when changing the library. Paths below are relative to `pyezvizapi/`.
 
-**Root modules preserve existing imports. Domain packages own implementations.**
-A root compatibility alias is not a second implementation; follow its first
-module docstring. Keep the old module identity so existing patches reach the
-actual runtime owner. `docs/module-map.json` lists every relocated module.
+**Domain packages own implementations.** The only legacy forwarding modules
+are `feature`, `mqtt`, `utils` and `test_cam_rtsp`, retained for `ha-ezviz`.
+They explicitly re-export only the integration's imported names; they are not
+module-identity aliases or private monkeypatch surfaces. Use canonical modules
+for new code and test hooks. See [HA compatibility](ha-compatibility.md) and
+`docs/module-map.json` for removed-path replacements.
 
 | Change | Implementation |
 | --- | --- |
@@ -52,8 +54,8 @@ in the wheel, and are never imported at runtime. This keeps precise annotations
 without an implementation importing its runtime owner back.
 
 Root `__init__.py` keeps its existing lazy exports. Media/HA are not imported as
-a side effect of package discovery. Old module paths remain valid for imports
-and unpickling; new pickle module names may identify the canonical domain.
+a side effect of package discovery. Removed flat paths no longer support imports or historical pickles.
+Canonical classes remain pickleable under their domain module names.
 
 ## Tests
 

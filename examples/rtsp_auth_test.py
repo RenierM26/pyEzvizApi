@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from pyezvizapi.test_cam_rtsp import TestRTSPAuth
+from pyezvizapi.streaming.rtsp_compat import TestRTSPAuth
 
 
 def main() -> int:

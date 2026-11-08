@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from pyezvizapi.rtp_timing import _mpeg_crc32, _pack_header, _pes
+from pyezvizapi.streaming.media.rtp_timing import _mpeg_crc32, _pack_header, _pes
 from tests._paths import ROOT
 
 SCRIPT = ROOT / 'tools/local_av_timeline.py'

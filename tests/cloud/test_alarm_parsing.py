@@ -3,9 +3,9 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, cast
 
-from pyezvizapi.camera import DEFAULT_ALARM_IMAGE_URL, EzvizCamera
+from pyezvizapi._shared.utils import compute_motion_from_alarm, normalize_alarm_time
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.utils import compute_motion_from_alarm, normalize_alarm_time
+from pyezvizapi.devices.camera import DEFAULT_ALARM_IMAGE_URL, EzvizCamera
 
 
 def _camera() -> EzvizCamera:

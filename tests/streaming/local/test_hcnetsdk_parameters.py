@@ -4,12 +4,12 @@ from dataclasses import replace
 
 import pytest
 
-from pyezvizapi.hcnetsdk import (
+from pyezvizapi.streaming.local.hcnetsdk.api import (
     HcNetSdkStreamDetails,
     ezviz_lan_audio_video_compress_info,
     ezviz_lan_compression_config,
 )
-from pyezvizapi.hcnetsdk_parameters import normalize_hcnetsdk_parameters
+from pyezvizapi.streaming.local.hcnetsdk.parameters import normalize_hcnetsdk_parameters
 from tests.streaming.local.test_local_stream_details import ABILITY, config_bytes
 
 

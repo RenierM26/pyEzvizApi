@@ -24,8 +24,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from tests.streaming.test_native_stream import Source, options
 from tests.tools.test_local_av_timeline import encode_three_track_ps
 
-from pyezvizapi.native_stream import NativeMpegTsStream
-from pyezvizapi.stream_selection import select_stream_source
+from pyezvizapi.streaming.native_stream import NativeMpegTsStream
+from pyezvizapi.streaming.selection import select_stream_source
 
 
 def grouped(data, port=1984):

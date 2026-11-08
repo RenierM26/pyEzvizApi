@@ -8,9 +8,9 @@ import time
 import pytest
 import requests
 
-from pyezvizapi import _budget_http
-from pyezvizapi._budget_http import budgeted_http_call
-from pyezvizapi._request_deadline import request_deadline
+from pyezvizapi.cloud import budget as _budget_http
+from pyezvizapi.cloud.budget import budgeted_http_call
+from pyezvizapi.cloud.deadline import request_deadline
 
 CALLER_RETURN_CEILING_SECONDS = 0.4
 EMPTY_JSON = b"{}"

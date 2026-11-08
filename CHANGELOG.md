@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — compatibility cleanup
+
+- Remove 66 unused flat module aliases; canonical replacements are listed in
+  `docs/module-map.json`. Old imports and pickles through removed paths break.
+- Keep only HA-required exports in `feature`, `mqtt`, `utils` and `test_cam_rtsp`.
+  Client methods, status keys, root public exports and CLI commands are unchanged.
+- Move repository tests, tools and examples to canonical imports; see
+  `docs/ha-compatibility.md` for the pinned consumer contract.
+
+
 ## Unreleased — HA native delivery validation
 
 - Add an opt-in temporary HA integration with a loopback-capability HTTP source,
@@ -332,3 +342,7 @@ Before publishing a release:
 3. Ensure CI is green on `main`.
 4. Run **Upload Python Package** manually with the same bare version.
 5. Confirm the workflow publishes to PyPI and creates the matching GitHub release/tag.
+
+The unused `streaming.cloud.legacy` and `streaming.local.legacy` facades are
+also removed. `EzvizCamera.alarm_detection_sensibility()` is removed in favor
+of `alarm_detection_sensitivity()`; the CLI now calls the canonical method.

@@ -16,8 +16,8 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.clip import AutoClipSource
-from pyezvizapi.native_stream import NativeMpegTsStream, native_mpegts_stream_from_client
+from pyezvizapi.streaming.capture import AutoClipSource
+from pyezvizapi.streaming.native_stream import NativeMpegTsStream, native_mpegts_stream_from_client
 
 from .admission import Admission
 from .config import Settings

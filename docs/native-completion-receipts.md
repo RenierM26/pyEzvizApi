@@ -7,7 +7,7 @@ It supplies the library boundary needed by the separate
 ## Public library surface
 
 ```python
-from pyezvizapi.native_completion import NativeMediaCompletion
+from pyezvizapi.streaming.media.completion import NativeMediaCompletion
 
 result: NativeMediaCompletion | None = output.completion
 if result is not None:

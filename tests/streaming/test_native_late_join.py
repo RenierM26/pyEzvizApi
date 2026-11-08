@@ -10,9 +10,13 @@ from types import SimpleNamespace
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.native_access import _units
-from pyezvizapi.native_session import NativeMpegTsSession, _Binding
-from tests.streaming.test_native_session import choices, collect, sample as sample  # noqa: PLC0414 -- retained cross-test fixture re-export
+from pyezvizapi.streaming.media.access import _units
+from pyezvizapi.streaming.native_session import NativeMpegTsSession, _Binding
+from tests.streaming.test_native_session import (
+    choices,
+    collect,
+    sample as sample,  # noqa: PLC0414 -- pytest fixture registration
+)
 from tests.streaming.test_native_stream import Source, repeated_ps_packets
 
 
@@ -218,7 +222,9 @@ class Candidate:
         self.pts, self.time_base = pts, time_base
 
     def __bytes__(self):
-        from tests.streaming.media.test_native_access import chain  # noqa: PLC0415 -- retained lazy fixture import
+        from tests.streaming.media.test_native_access import (  # noqa: PLC0415 -- deferred test import
+            chain,
+        )
         return chain("hevc")
 
 

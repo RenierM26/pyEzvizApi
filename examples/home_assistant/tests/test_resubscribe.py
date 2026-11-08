@@ -12,7 +12,7 @@ from tests.streaming.test_native_late_join import oracle
 from tests.streaming.test_native_stream import Source, repeated_ps_packets
 from tests.tools.test_local_av_timeline import encode_three_track_ps
 
-from pyezvizapi.native_session import NativeMpegTsSession
+from pyezvizapi.streaming.native_session import NativeMpegTsSession
 
 
 async def test_lens_button_revokes_only_retired_lens_and_rejoins_same_source(  # noqa: PLR0915

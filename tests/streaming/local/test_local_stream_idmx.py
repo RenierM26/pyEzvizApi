@@ -9,7 +9,14 @@ from typing import Any
 
 import pytest
 
-from pyezvizapi._local_stream import (
+from pyezvizapi.exceptions import EzvizNoMediaError, PyEzvizError
+from pyezvizapi.streaming.local.hcnetsdk.api import (
+    EzvizInterleavedRtpFrame,
+    EzvizInterleavedRtpFrameHeader,
+    EzvizInterleavedRtpFrameWithPrefix,
+    EzvizLocalPreviewRequest,
+)
+from pyezvizapi.streaming.local.session import (
     _decrypt_idmx_local_packets_to_adts_aac,
     _decrypt_idmx_local_packets_to_annexb,
     _h264_annexb_packet_end_offsets,
@@ -34,13 +41,6 @@ from pyezvizapi._local_stream import (
     summarize_h264_annexb_idr_windows,
     summarize_h264_annexb_units,
     summarize_idmx_h264_local_packets,
-)
-from pyezvizapi.exceptions import EzvizNoMediaError, PyEzvizError
-from pyezvizapi.hcnetsdk import (
-    EzvizInterleavedRtpFrame,
-    EzvizInterleavedRtpFrameHeader,
-    EzvizInterleavedRtpFrameWithPrefix,
-    EzvizLocalPreviewRequest,
 )
 
 FIRST_PREFIX = b"preface"
@@ -459,7 +459,7 @@ def test_local_idmx_h264_route_preserves_ambiguous_sei(
         ),
     ]
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         lambda nal, _key, *, nalu_header_size: nal,
     )
     expected = b"\x00\x00\x00\x01" + sei + b"\x00\x00\x00\x01" + idr
@@ -507,11 +507,11 @@ def test_encrypted_local_idmx_honors_authoritative_hevc_before_shape_probe(
         )
 
     monkeypatch.setattr(
-        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         decrypt_hevc,
     )
     monkeypatch.setattr(
-        "pyezvizapi._local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         reject_h264,
     )
 
@@ -553,7 +553,7 @@ def test_encrypted_local_idmx_rejects_stale_h264_before_hevc_route(
         return nal
 
     monkeypatch.setattr(
-        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         decrypt_hevc,
     )
 
@@ -592,7 +592,7 @@ def test_encrypted_local_idmx_rejects_wrapped_hevc_before_h264_route(
         ),
     ]
     monkeypatch.setattr(
-        "pyezvizapi._local_stream._append_idmx_hevc_media_payload",
+        "pyezvizapi.streaming.local.session._append_idmx_hevc_media_payload",
         lambda *_args, **_kwargs: pytest.fail("stale wrapped HEVC was emitted"),
     )
 
@@ -705,7 +705,7 @@ def test_encrypted_local_idmx_rejects_ambiguous_h264_epoch_before_hevc_route(
         return nal
 
     monkeypatch.setattr(
-        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         decrypt_hevc,
     )
 
@@ -760,7 +760,7 @@ def test_encrypted_local_idmx_rejects_unsupported_authoritative_video_route(
         )
     ]
     monkeypatch.setattr(
-        "pyezvizapi._local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         lambda *_args, **_kwargs: pytest.fail("unsupported route reached H.264"),
     )
 
@@ -867,11 +867,11 @@ def test_encrypted_local_idmx_rejects_mixed_authoritative_video_codecs(
         ),
     ]
     monkeypatch.setattr(
-        "pyezvizapi._local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         lambda *_args, **_kwargs: pytest.fail("H.264 decryption must not start"),
     )
     monkeypatch.setattr(
-        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         lambda *_args, **_kwargs: pytest.fail("HEVC decryption must not start"),
     )
 
@@ -1617,7 +1617,7 @@ def test_idmx_packets_from_selected_annexb_anchors_hevc_after_synthesized_prefix
     ]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_hevc_annexb_packet_spans",
+        "pyezvizapi.streaming.local.session._idmx_hevc_annexb_packet_spans",
         lambda *_args, **_kwargs: (full_annexb, spans),
     )
 
@@ -1644,7 +1644,7 @@ def test_idmx_hevc_span_map_records_fragment_flushed_at_eof(
         return len(rtp).to_bytes(4, "little") + rtp
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         lambda nal, _key: nal,
     )
     packets = [
@@ -1664,11 +1664,11 @@ def test_idmx_encrypted_span_maps_use_descriptor_video_payloads(
 ) -> None:
     expected_h264 = b"\x00\x00\x00\x01\x65dynamic"
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         lambda nal, _key, *, nalu_header_size: nal,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         lambda nal, _key: nal,
     )
     h264_packets = [
@@ -1740,7 +1740,7 @@ def test_idmx_hevc_span_map_honors_authoritative_route_before_shape_evidence(
         )
     ]
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         lambda nal, _key: nal,
     )
 
@@ -1763,7 +1763,7 @@ def test_idmx_hevc_span_map_preserves_pending_fragment_across_standalone_nal(
         return len(rtp).to_bytes(4, "little") + rtp
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         lambda nal, _key: nal,
     )
     vps = b"\x40\x01vps"
@@ -1864,15 +1864,15 @@ def test_copy_decrypted_mpegts_keeps_all_packets_when_video_is_untrimmed(
             return [SimpleNamespace(body=packet) for packet in packets]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._local_stream_packets_are_idmx",
+        "pyezvizapi.streaming.local.session._local_stream_packets_are_idmx",
         lambda _packets: True,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb_with_codec",
+        "pyezvizapi.streaming.local.session._decrypt_idmx_local_packets_to_annexb_with_codec",
         lambda *_args, **_kwargs: (full_annexb, None),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_local_packets_have_aac",
+        "pyezvizapi.streaming.local.session._idmx_local_packets_have_aac",
         lambda _packets: True,
     )
 
@@ -1887,15 +1887,15 @@ def test_copy_decrypted_mpegts_keeps_all_packets_when_video_is_untrimmed(
         return selected_packets
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_packets_from_selected_annexb",
+        "pyezvizapi.streaming.local.session._idmx_packets_from_selected_annexb",
         fake_select,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_audio_metadata",
+        "pyezvizapi.streaming.local.session._idmx_audio_metadata",
         lambda *_args, **_kwargs: (16_000, 1),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_audio_payload_types",
+        "pyezvizapi.streaming.local.session._idmx_audio_payload_types",
         lambda *_args, **_kwargs: frozenset({105}),
     )
 
@@ -1916,11 +1916,11 @@ def test_copy_decrypted_mpegts_keeps_all_packets_when_video_is_untrimmed(
         return audio
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_adts_aac",
+        "pyezvizapi.streaming.local.session._decrypt_idmx_local_packets_to_adts_aac",
         fake_audio,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._copy_idmx_audio_video_to_mpegts",
+        "pyezvizapi.streaming.local.session._copy_idmx_audio_video_to_mpegts",
         lambda video, selected_audio, *_args, **_kwargs: mux_calls.append(
             (video, selected_audio)
         ),
@@ -1959,35 +1959,35 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_path_keeps_aac(
         return audio
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        "pyezvizapi.streaming.local.session._iter_local_stream_payloads",
         fake_iter_payloads,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window",
+        "pyezvizapi.streaming.local.session.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window",
         fake_collect,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
+        "pyezvizapi.streaming.local.session._decrypt_idmx_local_packets_to_annexb",
         lambda *_args, **_kwargs: full_annexb,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_h264_packets_from_selected_annexb",
+        "pyezvizapi.streaming.local.session._idmx_h264_packets_from_selected_annexb",
         lambda *_args, **_kwargs: packets[1:],
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_adts_aac",
+        "pyezvizapi.streaming.local.session._decrypt_idmx_local_packets_to_adts_aac",
         fake_audio,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_audio_metadata",
+        "pyezvizapi.streaming.local.session._idmx_audio_metadata",
         lambda *_args, **_kwargs: (16_000, 1),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_audio_payload_types",
+        "pyezvizapi.streaming.local.session._idmx_audio_payload_types",
         lambda *_args, **_kwargs: frozenset({105}),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._copy_idmx_audio_video_to_mpegts",
+        "pyezvizapi.streaming.local.session._copy_idmx_audio_video_to_mpegts",
         lambda video, selected_audio, *_args, **_kwargs: mux_calls.append(
             (video, selected_audio)
         ),
@@ -2022,7 +2022,7 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_path_without_selected_aac(
     process = object()
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        "pyezvizapi.streaming.local.session._iter_local_stream_payloads",
         lambda *_args, **_kwargs: iter(packets),
     )
 
@@ -2031,27 +2031,27 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_path_without_selected_aac(
         return selected_annexb
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window",
+        "pyezvizapi.streaming.local.session.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window",
         fake_collect,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
+        "pyezvizapi.streaming.local.session._decrypt_idmx_local_packets_to_annexb",
         lambda *_args, **_kwargs: full_annexb,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_h264_packets_from_selected_annexb",
+        "pyezvizapi.streaming.local.session._idmx_h264_packets_from_selected_annexb",
         lambda *_args, **_kwargs: packets[1:],
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_adts_aac",
+        "pyezvizapi.streaming.local.session._decrypt_idmx_local_packets_to_adts_aac",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_audio_metadata",
+        "pyezvizapi.streaming.local.session._idmx_audio_metadata",
         lambda *_args, **_kwargs: (16_000, 1),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._open_local_h264_mpegts_remux_process",
+        "pyezvizapi.streaming.local.session._open_local_h264_mpegts_remux_process",
         lambda _path: process,
     )
 
@@ -2065,7 +2065,7 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_path_without_selected_aac(
         video_calls.extend(payloads)
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._copy_mpegps_payloads_to_mpegts",
+        "pyezvizapi.streaming.local.session._copy_mpegps_payloads_to_mpegts",
         fake_copy,
     )
 
@@ -2089,7 +2089,7 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_path_aligns_clear_video(
     mapped_full_streams: list[bytes] = []
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        "pyezvizapi.streaming.local.session._iter_local_stream_payloads",
         lambda *_args, **_kwargs: iter(packets),
     )
 
@@ -2098,15 +2098,15 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_path_aligns_clear_video(
         return selected_annexb
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window",
+        "pyezvizapi.streaming.local.session.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window",
         fake_collect,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
+        "pyezvizapi.streaming.local.session._decrypt_idmx_local_packets_to_annexb",
         lambda *_args, **_kwargs: decrypted_annexb,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_local_packets_to_h264_annexb",
+        "pyezvizapi.streaming.local.session._idmx_local_packets_to_h264_annexb",
         lambda *_args, **_kwargs: clear_annexb,
     )
 
@@ -2120,19 +2120,19 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_path_aligns_clear_video(
         return candidate_packets[1:]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_h264_packets_from_selected_annexb",
+        "pyezvizapi.streaming.local.session._idmx_h264_packets_from_selected_annexb",
         fake_selected_packets,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_adts_aac",
+        "pyezvizapi.streaming.local.session._decrypt_idmx_local_packets_to_adts_aac",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._open_local_h264_mpegts_remux_process",
+        "pyezvizapi.streaming.local.session._open_local_h264_mpegts_remux_process",
         lambda _path: object(),
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._copy_mpegps_payloads_to_mpegts",
+        "pyezvizapi.streaming.local.session._copy_mpegps_payloads_to_mpegts",
         lambda *_args, **_kwargs: None,
     )
 
@@ -2166,7 +2166,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_direct_hevc_idmx_payload
         return nal
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         fake_decrypt_hevc_nal_prefix,
     )
     rtp_timestamp = 0x3601D1EF
@@ -2232,7 +2232,7 @@ def test_copy_local_stream_to_decrypted_mpegts_handles_live_padded_extended_hevc
         return nal
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         fake_decrypt_hevc_nal_prefix,
     )
     rtp_timestamp = 0x3601D1EF
@@ -2317,7 +2317,7 @@ def test_copy_local_stream_to_decrypted_mpegts_uses_hevc_route_mid_gop(
     )
     fake_ffmpeg.chmod(0o755)
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         lambda nal, _aes_key: nal,
     )
     mid_gop = b"\x02\x01mid-gop"
@@ -2372,11 +2372,11 @@ def test_copy_local_stream_to_decrypted_mpegts_prefers_direct_hevc_before_h264_e
         raise AssertionError("direct HEVC should not hit H.264 fallback")
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         fake_decrypt_hevc_nal_prefix,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         fail_h264_decrypt,
     )
     rtp_timestamp = 0x3601D1EF
@@ -2448,11 +2448,11 @@ def test_copy_local_stream_to_decrypted_mpegts_honors_h264_encrypted_header_with
         raise AssertionError(f"ambiguous H.264 encrypted-header hit HEVC: {nal!r}")
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         fake_decrypt_h264_nal_prefix,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         fail_hevc_decrypt,
     )
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
@@ -2506,7 +2506,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_h264_idmx_payload(
         return nal[:1] + b"plain-" + nal[1:]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         fake_decrypt_h264_nal_prefix,
     )
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
@@ -2570,7 +2570,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_fragmented_h264_idmx_pay
         return nal[:1] + b"plain-" + nal[1:]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         fake_decrypt_h264_nal_prefix,
     )
     rtp_timestamp = 0x3601D1EF
@@ -2637,7 +2637,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_h264_encrypted_header_id
         return b"\x65plain-" + nal[1:]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         fake_decrypt_h264_nal_prefix,
     )
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
@@ -2685,7 +2685,7 @@ def test_copy_local_stream_to_decrypted_mpegts_handles_direct_hevc_fu_without_co
         return nal
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_hevc_nal_prefix",
         fake_decrypt_hevc_nal_prefix,
     )
     rtp_timestamp = 0x3601D1EF
@@ -2871,7 +2871,7 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
         yield from packets
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        "pyezvizapi.streaming.local.session._iter_local_stream_payloads",
         fake_iter_payloads,
     )
     decrypt_probe_calls: list[list[bytes]] = []
@@ -2885,11 +2885,11 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
         return b"\x00\x00\x00\x01\x65bad"
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
+        "pyezvizapi.streaming.local.session._decrypt_idmx_local_packets_to_annexb",
         fake_decrypt_idmx_local_packets_to_annexb,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._idmx_h264_packets_from_selected_annexb",
+        "pyezvizapi.streaming.local.session._idmx_h264_packets_from_selected_annexb",
         lambda candidate_packets, **_kwargs: candidate_packets,
     )
 
@@ -3643,7 +3643,7 @@ def test_h264_selected_packets_slice_descriptor_routed_aggregate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        "pyezvizapi.streaming.local.session._decrypt_h264_nal_prefix",
         lambda nal, _key, *, nalu_header_size: nal,
     )
     outer_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"

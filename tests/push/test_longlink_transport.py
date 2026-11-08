@@ -7,7 +7,7 @@ from threading import Event, Thread
 
 import pytest
 
-from pyezvizapi._longlink_transport import LbsConnection
+from pyezvizapi.push.longlink.transport import LbsConnection
 
 
 def test_preserves_next_frame() -> None:

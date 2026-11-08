@@ -614,11 +614,6 @@ class EzvizCamera:
         )
         return bool(self._client.detection_sensibility(self._serial, sensitivity, type_value))
 
-    # Backwards-compatible alias (deprecated)
-    def alarm_detection_sensibility(self, sensibility: int, type_value: int = 0) -> bool:
-        """Deprecated: use alarm_detection_sensitivity()."""
-        return self.alarm_detection_sensitivity(sensibility, type_value)
-
     # Generic switch helper
     def set_switch(self, switch: DeviceSwitchType, enable: bool = False) -> bool:
         """Set a device switch to enabled/disabled.

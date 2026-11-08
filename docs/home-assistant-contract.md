@@ -40,7 +40,7 @@ Integrations may inspect this for feature discovery, but raw nested EZVIZ fields
 can appear, disappear, or change shape when EZVIZ changes its backend.
 
 When adding new integration features, prefer wrapping raw-field interpretation in
-small helpers under `pyezvizapi.feature` or typed records under
+small helpers under `pyezvizapi.devices.features` or typed records under
 `pyezvizapi.models` instead of duplicating fragile parsing in Home Assistant
 entity platforms.
 

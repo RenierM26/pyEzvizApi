@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 import pytest
 
-from pyezvizapi.cas import (
+from pyezvizapi.cloud.cas import (
     CAS_ANDROID_CLIENT_TYPE,
     CAS_COMMAND_DEVICE_MESSAGE,
     CAS_COMMAND_GET_OPERATION_CODE,
@@ -285,9 +285,9 @@ def test_cas_get_encryption_parses_xml_response(monkeypatch) -> None:
         connect_calls.append(address)
         return fake_socket
 
-    monkeypatch.setattr("pyezvizapi.cas.socket.create_connection", fake_create_connection)
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.socket.create_connection", fake_create_connection)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.random.randrange", lambda value: 1)
 
     result = _cas_client().cas_get_encryption("CAM123")
 
@@ -326,11 +326,11 @@ def test_cas_get_encryption_allows_custom_client_type(monkeypatch) -> None:
     fake_socket = FakeSocket(_cas_response(body))
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.random.randrange", lambda value: 1)
 
     result = EzvizCAS(_token(), client_type=1).cas_get_encryption("CAM123")
 
@@ -352,11 +352,11 @@ def test_cas_get_encryption_reads_chunked_framed_response(monkeypatch) -> None:
     fake_socket = ChunkedSocket(_cas_response(body))
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.random.randrange", lambda value: 1)
 
     result = _cas_client().cas_get_encryption("CAM123")
 
@@ -372,11 +372,11 @@ def test_cas_get_encryption_reads_native_zero_tail_hint_response(monkeypatch) ->
     fake_socket = FakeSocket(_cas_response(body, tail_size_hint=0))
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.random.randrange", lambda value: 1)
 
     result = _cas_client().cas_get_encryption("CAM123")
 
@@ -398,11 +398,11 @@ def test_cas_get_encryption_can_require_tls_certificate_validation(
     fake_socket = FakeSocket(_cas_response(body))
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.random.randrange", lambda value: 1)
 
     result = EzvizCAS(
         _token(),
@@ -432,9 +432,9 @@ def test_cas_get_encryption_tolerates_only_expired_tls_certificate(
         connect_calls.append(address)
         return sockets.pop(0)
 
-    monkeypatch.setattr("pyezvizapi.cas.socket.create_connection", fake_create_connection)
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.socket.create_connection", fake_create_connection)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.random.randrange", lambda value: 1)
 
     result = _cas_client().cas_get_encryption("CAM123")
 
@@ -453,10 +453,10 @@ def test_cas_get_encryption_strict_tls_rejects_expired_certificate(
     fake_socket = FakeSocket(verify_error=_certificate_expired_error())
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
 
     with pytest.raises(PyEzvizError, match="CAS TLS handshake failed"):
         EzvizCAS(
@@ -477,8 +477,8 @@ def test_cas_get_encryption_rejects_non_expiry_tls_errors(
         connect_calls.append(address)
         return fake_socket
 
-    monkeypatch.setattr("pyezvizapi.cas.socket.create_connection", fake_create_connection)
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.socket.create_connection", fake_create_connection)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
 
     with pytest.raises(PyEzvizError, match="CAS TLS handshake failed"):
         _cas_client().cas_get_encryption("CAM123")
@@ -503,11 +503,11 @@ def test_cas_get_encryption_accepts_wildcard_certificate_hostname(
     sockets = [verified_socket, relaxed_socket]
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: sockets.pop(0),
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.random.randrange", lambda value: 1)
 
     result = EzvizCAS(_token("eucas.ezvizlife.com")).cas_get_encryption("CAM123")
 
@@ -527,10 +527,10 @@ def test_cas_get_encryption_rejects_common_name_only_certificate(
     sockets = [verified_socket, relaxed_socket]
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: sockets.pop(0),
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
 
     with pytest.raises(PyEzvizError, match="not valid"):
         _cas_client().cas_get_encryption("CAM123")
@@ -548,10 +548,10 @@ def test_cas_get_encryption_rejects_mismatched_certificate_hostname(
     sockets = [verified_socket, relaxed_socket]
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: sockets.pop(0),
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
 
     with pytest.raises(PyEzvizError, match="not valid"):
         _cas_client().cas_get_encryption("CAM123")
@@ -589,10 +589,10 @@ def test_cas_get_encryption_rejects_empty_xml_body(monkeypatch) -> None:
     fake_socket = FakeSocket(_cas_response(b""))
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
 
     with pytest.raises(PyEzvizError, match="did not contain an XML body"):
         _cas_client().cas_get_encryption("CAM123")
@@ -604,10 +604,10 @@ def test_cas_get_encryption_rejects_malformed_xml_body(monkeypatch) -> None:
     fake_socket = FakeSocket(_cas_response(b"<Response>"))
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
 
     with pytest.raises(PyEzvizError, match="Could not parse CAS"):
         _cas_client().cas_get_encryption("CAM123")
@@ -626,9 +626,9 @@ def test_probe_local_operation_code_uses_plain_socket(monkeypatch) -> None:
     def fail_ssl_context(purpose: ssl.Purpose = ssl.Purpose.SERVER_AUTH) -> FakeSSLContext:
         raise AssertionError("LAN probe must not create a TLS context")
 
-    monkeypatch.setattr("pyezvizapi.cas.socket.create_connection", fake_create_connection)
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", fail_ssl_context)
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.socket.create_connection", fake_create_connection)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", fail_ssl_context)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.random.randrange", lambda value: 1)
 
     result = EzvizCAS(_token()).probe_local_operation_code(
         "CAM123",
@@ -657,10 +657,10 @@ def test_probe_local_operation_code_retries_partial_socket_writes(monkeypatch) -
     fake_socket = PartialSendSocket(LOCAL_RESPONSE)
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.random.randrange", lambda value: 1)
 
     result = EzvizCAS(_token()).probe_local_operation_code(
         "CAM123",
@@ -684,7 +684,7 @@ def test_probe_local_operation_code_reports_connection_reset(monkeypatch) -> Non
     fake_socket = ResetSocket()
 
     monkeypatch.setattr(
-        "pyezvizapi.cas.socket.create_connection",
+        "pyezvizapi.cloud.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
 
@@ -706,9 +706,9 @@ def test_set_camera_defence_state_sends_encrypted_payload(monkeypatch) -> None:
         connect_calls.append(address)
         return fake_socket
 
-    monkeypatch.setattr("pyezvizapi.cas.socket.create_connection", fake_create_connection)
-    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.socket.create_connection", fake_create_connection)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cloud.cas.random.randrange", lambda value: 1)
     monkeypatch.setattr(
         EzvizCAS,
         "cas_get_encryption",

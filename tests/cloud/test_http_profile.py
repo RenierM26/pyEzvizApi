@@ -8,17 +8,17 @@ from typing import Any
 import pytest
 import requests
 
-from pyezvizapi._longlink_profile import (
-    profile_for_token,
-    session_header_for_token,
-    synchronize_http_headers,
-)
 from pyezvizapi.constants import (
     ANDROID_PROFILE,
     HEADERS,
     REQUEST_HEADER,
     WEB_PROFILE,
     HttpProfile,
+)
+from pyezvizapi.push.longlink.profile import (
+    profile_for_token,
+    session_header_for_token,
+    synchronize_http_headers,
 )
 
 

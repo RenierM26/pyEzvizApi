@@ -21,7 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from pyezvizapi.__main__ import (  # noqa: E402
+from pyezvizapi.cli.main import (  # noqa: E402
     _cas_time_from_millis,
     _cloud_video_start_millis,
     _codec_nalu_header_size,
@@ -32,7 +32,7 @@ from pyezvizapi.__main__ import (  # noqa: E402
 )
 from pyezvizapi.client import EzvizClient  # noqa: E402
 from pyezvizapi.exceptions import PyEzvizError  # noqa: E402
-from pyezvizapi.stream import decrypt_hikvision_ps_video  # noqa: E402
+from pyezvizapi.streaming.cloud.protocol import decrypt_hikvision_ps_video  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:

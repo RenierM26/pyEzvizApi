@@ -13,7 +13,7 @@ from typing import Any, cast
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.remux import (
+from pyezvizapi.streaming.media.remux import (
     BoundedStderrTail,
     copy_remuxed_output,
     ffmpeg_mpegts_command,
@@ -21,7 +21,7 @@ from pyezvizapi.remux import (
     remux_bytes,
     write_aac_remux_input,
 )
-from pyezvizapi.rtp import RtpAacStream
+from pyezvizapi.streaming.media.rtp import RtpAacStream
 
 PROGRAM_STREAM = b"program-stream"
 TRANSPORT_STREAM = b"transport-stream"

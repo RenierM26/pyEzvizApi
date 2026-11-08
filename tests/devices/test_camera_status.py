@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any, cast
 
-from pyezvizapi.camera import EzvizCamera
 from pyezvizapi.client import EzvizClient
+from pyezvizapi.devices.camera import EzvizCamera
 from pyezvizapi.models import EzvizDeviceRecord
 
 

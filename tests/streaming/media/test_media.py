@@ -11,36 +11,36 @@ from typing import Any
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.hcnetsdk import (
-    HcNetSdkRealDataPacket,
-    HcNetSdkRealDataType,
-    hcnetsdk_media_packet_source,
-    hcnetsdk_real_data_to_media_packet,
+from pyezvizapi.streaming.cloud.protocol import (
+    VtmChannel,
+    VtmPacket,
+    vtm_media_packet_source,
+    vtm_packet_to_media_packet,
 )
-from pyezvizapi.local_stream import (
-    EzvizLocalStreamPacket,
-    local_media_packet_source,
-    local_stream_packet_to_media_packet,
-)
-from pyezvizapi.local_stream_ecdh import (
+from pyezvizapi.streaming.local.ecdh import (
     EzvizLocalSdkEcdhMediaStream,
     EzvizLocalSdkEcdhStreamPacket,
     local_ecdh_media_packet_source,
     local_ecdh_packet_to_media_packet,
 )
-from pyezvizapi.media import (
+from pyezvizapi.streaming.local.hcnetsdk.api import (
+    HcNetSdkRealDataPacket,
+    HcNetSdkRealDataType,
+    hcnetsdk_media_packet_source,
+    hcnetsdk_real_data_to_media_packet,
+)
+from pyezvizapi.streaming.local.session import (
+    EzvizLocalStreamPacket,
+    local_media_packet_source,
+    local_stream_packet_to_media_packet,
+)
+from pyezvizapi.streaming.media.models import (
     CaptureLimits,
     MediaDecodeOptions,
     MediaMuxOptions,
     MediaPacket,
     MediaPacketSource,
     has_positive_finite_capture_bound,
-)
-from pyezvizapi.stream import (
-    VtmChannel,
-    VtmPacket,
-    vtm_media_packet_source,
-    vtm_packet_to_media_packet,
 )
 
 BODY = b"abc"

@@ -8,8 +8,8 @@ import time
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.native_session import NativeMpegTsSession
-from pyezvizapi.native_stream import NativeTrackSelection
+from pyezvizapi.streaming.native_session import NativeMpegTsSession
+from pyezvizapi.streaming.native_stream import NativeTrackSelection
 from tests.streaming.test_native_stream import Source, options
 from tests.streaming.test_stream_sample import packet_oracle
 from tests.tools.test_local_av_timeline import encode_three_track_ps

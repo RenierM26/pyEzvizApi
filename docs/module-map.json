@@ -1,7 +1,12 @@
 {
   "baseline": "bfa5aa5349a87a30bea5de0ff616d4dd17572b2d",
   "legacy_to_implementation": {
-    "__main__": "cli.main",
+    "feature": "devices.features",
+    "mqtt": "push.mqtt",
+    "test_cam_rtsp": "streaming.rtsp_compat",
+    "utils": "_shared.utils"
+  },
+  "historical_relocations": {
     "_cli_arguments": "cli.arguments",
     "capabilities_cli": "cli.capabilities",
     "test_mqtt": "cli.mqtt_listener",
@@ -19,9 +24,7 @@
     "light_bulb": "devices.light_bulb",
     "smart_plug": "devices.smart_plug",
     "device_factory": "devices.factory",
-    "feature": "devices.features",
     "_device_payload": "devices.payload",
-    "mqtt": "push.mqtt",
     "_paho": "push.paho",
     "_longlink": "push.longlink.codec",
     "_longlink_auth": "push.longlink.auth",
@@ -34,13 +37,12 @@
     "_mapping": "_shared.mapping",
     "_image_crypto": "_shared.image_crypto",
     "_resolver": "_shared.resolver",
-    "utils": "_shared.utils",
     "cloud_stream": "streaming.cloud.bootstrap",
     "_stream": "streaming.cloud.protocol",
-    "stream": "streaming.cloud.legacy",
+    "stream": "streaming.cloud.protocol",
     "stream_transport": "streaming.cloud.transport",
     "_local_stream": "streaming.local.session",
-    "local_stream": "streaming.local.legacy",
+    "local_stream": "streaming.local.session",
     "_local_stream_packets": "streaming.local.packets",
     "_local_stream_protocol": "streaming.local.protocol",
     "local_stream_ecdh": "streaming.local.ecdh",
@@ -70,7 +72,10 @@
     "rtsp_auth": "streaming.rtsp_auth",
     "playback": "streaming.playback",
     "app_capture": "streaming.app_capture",
-    "app_timing": "streaming.app_timing",
-    "test_cam_rtsp": "streaming.rtsp_compat"
-  }
+    "app_timing": "streaming.app_timing"
+  },
+  "removed_domain_facades": [
+    "streaming.cloud.legacy",
+    "streaming.local.legacy"
+  ]
 }

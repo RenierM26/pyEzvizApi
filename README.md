@@ -243,8 +243,8 @@ Its speaker/display buffering is not copied into file timestamps. Defaults keep
 independent native origins and received gaps; this opt-in is not an app-player
 replica. See [verified playback probes and conditions](docs/playback-timing.md).
 
-The original `save_clip(...)` keywords and imports from `pyezvizapi.stream` or
-`pyezvizapi.local_stream` remain compatible. New lower-level code should import
+The original `save_clip(...)` keywords and imports from `pyezvizapi.streaming.cloud.protocol` or
+`pyezvizapi.streaming.local.session` remain compatible. New lower-level code should import
 from `stream_transport`, `stream_media`, `local_stream_transport`,
 `local_stream_media`, or `local_stream_ecdh` according to responsibility.
 See [`docs/streaming.md`](docs/streaming.md) for the source conformance matrix,
@@ -983,5 +983,5 @@ the player. Actual frontend/live-camera acceptance remains separate.
 
 See the [code map](docs/code-map.md) for module ownership and the
 [package migration plan](docs/package-layout-migration.md) for compatibility
-constraints. Implementation packages are grouped by domain; legacy import paths
-remain supported.
+history. Implementation packages are grouped by domain; only the four
+[HA-required compatibility modules](docs/ha-compatibility.md) remain supported.

@@ -5,8 +5,8 @@ from threading import Event, Thread
 
 import pytest
 
-from pyezvizapi import _resolver
-from pyezvizapi._resolver import BoundedResolver, ResolverClosed
+from pyezvizapi._shared import resolver as _resolver
+from pyezvizapi._shared.resolver import BoundedResolver, ResolverClosed
 
 
 def test_close_reports_stuck_resolution_then_drains_without_replacement():

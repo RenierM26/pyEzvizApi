@@ -5,11 +5,14 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 import pytest
 
-from pyezvizapi import _alarm_time, _coercion, _image_crypto, _mapping, utils
-from pyezvizapi.constants import HIK_ENCRYPTION_HEADER
-from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.remux import BoundedStderrTail
-from pyezvizapi.utils import (
+from pyezvizapi._shared import (
+    alarm_time as _alarm_time,
+    coercion as _coercion,
+    image_crypto as _image_crypto,
+    mapping as _mapping,
+    utils,
+)
+from pyezvizapi._shared.utils import (
     coerce_int,
     decrypt_image,
     deep_merge,
@@ -17,6 +20,9 @@ from pyezvizapi.utils import (
     parse_timezone_value,
     return_password_hash,
 )
+from pyezvizapi.constants import HIK_ENCRYPTION_HEADER
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.streaming.media.remux import BoundedStderrTail
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
@@ -91,6 +97,6 @@ def test_valid_image_padding_and_legacy_trailing_bytes_remain_supported(size):
 
 
 def test_existing_config_channel_coercion_is_not_a_preview_normalizer():
-    from pyezvizapi.feature import resolve_channel  # noqa: PLC0415
+    from pyezvizapi.devices.features import resolve_channel  # noqa: PLC0415
     assert resolve_channel({"channelNo": 0}) == 1
     assert resolve_channel({"channelNo": "0"}) == 0

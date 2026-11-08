@@ -11,13 +11,13 @@ from typing import Any, cast
 
 import pytest
 
-from pyezvizapi import stream_sample
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.clip import ClipOptions
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.media import CaptureLimits
-from pyezvizapi.rtp_timing import NativeRtpPsMuxer
-from pyezvizapi.stream_sample import (
+from pyezvizapi.streaming import sample as stream_sample
+from pyezvizapi.streaming.capture import ClipOptions
+from pyezvizapi.streaming.media.models import CaptureLimits
+from pyezvizapi.streaming.media.rtp_timing import NativeRtpPsMuxer
+from pyezvizapi.streaming.sample import (
     EncodedTrackSelection,
     capture_media_sample,
     inspect_media_sample,

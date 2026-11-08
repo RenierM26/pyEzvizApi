@@ -12,7 +12,6 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from pyezvizapi._longlink_session import Channel99Session
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import FEATURE_CODE, HEADERS as PUSH_HEADERS
 from pyezvizapi.exceptions import (
@@ -22,7 +21,8 @@ from pyezvizapi.exceptions import (
     EzvizTokenPersistenceError,
     PyEzvizError,
 )
-from pyezvizapi.mqtt import MQTTClient
+from pyezvizapi.push.longlink.session import Channel99Session
+from pyezvizapi.push.mqtt import MQTTClient
 
 
 def response(body):
@@ -131,7 +131,7 @@ def test_background_start_and_full_token_snapshot(monkeypatch):
         factory_holder.append(factory)
         return worker
 
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker", worker_factory)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker", worker_factory)
     client.connect()
     worker.start.assert_called_once()
     session = factory_holder[0]()
@@ -220,7 +220,7 @@ def test_login_persistence_callback_is_reused_for_push(monkeypatch):
         factories.append(factory)
         return worker
 
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker", make_worker)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker", make_worker)
     push = client.get_mqtt_client()
     push.connect()
     session = factories[0]()
@@ -272,7 +272,7 @@ def test_push_serial_uses_host_constant(monkeypatch):
         factories.append(factory)
         return Mock()
 
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker", capture_factory)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker", capture_factory)
     client.connect()
     assert factories[0]().serial == f"MOBILE:ys7:synthetic-user:{FEATURE_CODE}".encode()
 
@@ -318,7 +318,7 @@ def test_push_registration_refreshes_expired_session_and_persists_before_retry(
         }})
 
     monkeypatch.setattr(requests.Session, "put", put)
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     client = MQTTClient(saved, requests.Session(), on_token_updated=snapshots.append)
     client.connect()
     prepare_push(client)
@@ -340,9 +340,9 @@ def test_second_registration_rejection_after_attempt_refresh_is_fatal(monkeypatc
         }})
 
     monkeypatch.setattr(requests.Session, "put", put)
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     monkeypatch.setattr(
-        "pyezvizapi._longlink_session.socket.create_connection",
+        "pyezvizapi.push.longlink.session.socket.create_connection",
         Mock(side_effect=AssertionError("Must not open LBS after registration rejection")),
     )
     client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
@@ -371,9 +371,9 @@ def test_external_refresh_during_registration_supersedes_without_second_refresh(
         raise AssertionError("Superseded push attempt must not refresh credentials")
 
     monkeypatch.setattr(requests.Session, "put", put)
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     create = Mock(side_effect=AssertionError("Must not open LBS for superseded attempt"))
-    monkeypatch.setattr("pyezvizapi._longlink_session.socket.create_connection", create)
+    monkeypatch.setattr("pyezvizapi.push.longlink.session.socket.create_connection", create)
     client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
     client.connect()
     connection = push_session(client)
@@ -401,7 +401,7 @@ def test_push_refresh_persistence_failure_stops_before_registration_retry(monkey
         }})
 
     monkeypatch.setattr(requests.Session, "put", put)
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     saver = Mock(side_effect=OSError("private filesystem error"))
     client = MQTTClient(token(), requests.Session(), on_token_updated=saver)
     client.connect()
@@ -423,9 +423,9 @@ def test_push_refresh_persistence_failure_is_not_hidden_as_superseded(monkeypatc
         }})
 
     monkeypatch.setattr(requests.Session, "put", put)
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     monkeypatch.setattr(
-        "pyezvizapi._longlink_session.socket.create_connection",
+        "pyezvizapi.push.longlink.session.socket.create_connection",
         Mock(side_effect=AssertionError("Must not open LBS after persistence failure")),
     )
     client = MQTTClient(
@@ -446,7 +446,7 @@ def test_push_refresh_persistence_failure_is_not_hidden_as_superseded(monkeypatc
 
 def test_push_state_save_failure_is_fatal(monkeypatch):
 
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     client = MQTTClient(token(), requests.Session(), on_token_updated=Mock(side_effect=OSError()))
     client.connect()
     with pytest.raises(EzvizTokenPersistenceError):
@@ -480,7 +480,7 @@ def test_rejected_refresh_requires_intervention(monkeypatch, refresh_status, met
         return result
 
     monkeypatch.setattr(requests.Session, "put", put)
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     client = MQTTClient(token(), requests.Session(), on_token_updated=lambda snapshot: None)
     client.connect()
     with pytest.raises(EzvizPushFatalError, match="reauthentication required"):
@@ -506,7 +506,7 @@ def test_login_and_push_snapshots_are_serialized(monkeypatch):
             "sessionId": "rotated", "refreshSessionId": "rotated-refresh"
         }
     }))
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     push = client.get_mqtt_client()
     push.connect()
     session = push_session(push)
@@ -573,7 +573,7 @@ def test_migrated_login_discards_old_discovery_and_recovers_after_restart(monkey
     resumed.login()
     discovery.assert_called_once()
     assert snapshots[-1]["service_urls"]["pushDasDomain"] == "current.invalid"
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     push = resumed.get_mqtt_client()
     push.connect()
     assert push_session(push).endpoint == ("current.invalid", 8777)
@@ -584,7 +584,7 @@ def test_invalid_service_ports_raise_handled_error_before_worker_start(monkeypat
     saved = token()
     saved["service_urls"]["pushDasPort"] = port
     start = Mock()
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", start)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", start)
     client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
     with pytest.raises(PyEzvizError):
         client.connect()
@@ -606,7 +606,7 @@ def test_invalid_hostnames_fail_before_worker_start(monkeypatch, host):
     saved = token()
     saved["service_urls"]["pushDasDomain"] = host
     start = Mock()
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", start)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", start)
     client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
     with pytest.raises(PyEzvizError, match="hostname"):
         client.connect()
@@ -626,14 +626,14 @@ def test_invalid_user_ids_raise_handled_error(user_id):
 def test_valid_hostnames_and_ip_literals_are_accepted(monkeypatch, host):
     saved = token()
     saved["service_urls"]["pushDasDomain"] = host
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
     client.connect()
 
 
 def test_reconnect_and_explicit_restart_use_current_discovery(monkeypatch):
     saved = token()
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
     client.connect()
     first = push_session(client)
@@ -652,7 +652,7 @@ def test_identity_change_refreshes_factory_and_rejects_old_session_save(monkeypa
     saved = token()
     saved["push_state"] = {"device_id": "old-device"}
     snapshots: list[dict[str, Any]] = []
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     client = MQTTClient(saved, requests.Session(), on_token_updated=snapshots.append)
     client.connect()
     old = push_session(client)
@@ -708,7 +708,7 @@ def test_push_refresh_updates_owner_replacement_http_session(monkeypatch):
         }})
 
     monkeypatch.setattr(requests.Session, "put", put)
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     push.connect()
     prepare_push(push)
     assert registrations == ["synthetic-session", "rotated"]
@@ -722,7 +722,7 @@ def test_ipv6_api_host_fails_before_worker_start(monkeypatch, host):
     saved = token()
     saved["api_url"] = host
     start = Mock()
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", start)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", start)
     client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
     with pytest.raises(PyEzvizError, match="IPv6 API hosts"):
         client.connect()
@@ -767,7 +767,7 @@ def test_push_registration_and_refresh_preserve_transport_without_mutating_owner
         }})
 
     monkeypatch.setattr(requests.Session, "put", put)
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     client = MQTTClient(token(), supplied, on_token_updated=lambda snapshot: None)
     client.connect()
     prepare_push(client)
@@ -985,7 +985,7 @@ def test_push_snapshot_is_detached_until_committed(monkeypatch, phase):
         if fail:
             raise OSError("storage offline")
 
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     client = MQTTClient(saved, requests.Session(), on_token_updated=persist)
     client.connect()
     session = push_session(client)

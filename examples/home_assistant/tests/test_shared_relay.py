@@ -15,7 +15,7 @@ from test_native_integration import path, route_client
 from tests.streaming.test_native_stream import Source
 from tests.tools.test_local_av_timeline import encode_three_track_ps
 
-from pyezvizapi.native_stream import NativeMpegTsStream
+from pyezvizapi.streaming.native_stream import NativeMpegTsStream
 
 
 async def relay_server(aiohttp_client):

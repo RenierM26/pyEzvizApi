@@ -4,9 +4,9 @@ from typing import Any, cast
 
 import pytest
 
-from pyezvizapi.camera import EzvizCamera
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import BatteryCameraWorkMode, DeviceSwitchType
+from pyezvizapi.devices.camera import EzvizCamera
 from pyezvizapi.exceptions import PyEzvizError
 
 
@@ -182,7 +182,7 @@ def test_camera_alarm_control_methods_forward_to_client() -> None:
     assert camera.alarm_sound(1) is True
     assert camera.do_not_disturb(False) is True
     assert camera.alarm_detection_sensitivity(42, type_value=3) is True
-    assert camera.alarm_detection_sensibility(24) is True
+    assert camera.alarm_detection_sensitivity(24) is True
     assert camera.change_defence_schedule('{"enabled": true}', enable=1) is True
 
     assert client.calls == [

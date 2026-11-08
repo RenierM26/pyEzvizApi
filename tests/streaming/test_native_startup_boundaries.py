@@ -12,9 +12,9 @@ from threading import Event
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.native_access import self_contained_idr
-from pyezvizapi.native_session import NativeMpegTsSession
-from pyezvizapi.rtp_timing import _mpeg_crc32, _pack_header, _pes
+from pyezvizapi.streaming.media.access import self_contained_idr
+from pyezvizapi.streaming.media.rtp_timing import _mpeg_crc32, _pack_header, _pes
+from pyezvizapi.streaming.native_session import NativeMpegTsSession
 from tests.streaming.test_native_late_join import oracle
 from tests.streaming.test_native_resubscribe import interrupted
 from tests.streaming.test_native_session import choices, collect

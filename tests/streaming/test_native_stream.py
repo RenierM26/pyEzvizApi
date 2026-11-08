@@ -14,13 +14,14 @@ from typing import cast
 
 import pytest
 
-from pyezvizapi import native_stream
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.clip import AutoClipSource
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.media import MediaPacket, MediaPacketMetadata
-from pyezvizapi.native_ps import MAX_PENDING_PS_BYTES, NativePsTransform
-from pyezvizapi.native_stream import (
+from pyezvizapi.streaming import native_stream
+from pyezvizapi.streaming.capture import AutoClipSource
+from pyezvizapi.streaming.media.models import MediaPacket, MediaPacketMetadata
+from pyezvizapi.streaming.media.native_ps import MAX_PENDING_PS_BYTES, NativePsTransform
+from pyezvizapi.streaming.media.rtp_timing import _mpeg_crc32, _pack_header, _pes
+from pyezvizapi.streaming.native_stream import (
     OUTPUT_QUEUE_CHUNKS,
     NativeMpegTsStream,
     NativeSourceClock,
@@ -29,7 +30,6 @@ from pyezvizapi.native_stream import (
     NativeTrackSelection,
     native_mpegts_stream_from_client,
 )
-from pyezvizapi.rtp_timing import _mpeg_crc32, _pack_header, _pes
 from tests.streaming.test_stream_sample import annexb_oracle, packet_oracle
 from tests.streaming.test_stream_selection import CAMERA, credentials
 from tests.tools.test_local_av_decrypted import fixture as crypto_fixture
@@ -281,7 +281,7 @@ def test_process_control_callback_is_translated_without_terminating_runner(contr
     # fault injection so a regression cannot poison every subsequent pytest.
     program = """
 import builtins, sys
-from pyezvizapi.native_stream import NativeMpegTsStream, NativeStreamOptions, NativeTrackSelection
+from pyezvizapi.streaming.native_stream import NativeMpegTsStream, NativeStreamOptions, NativeTrackSelection
 from pyezvizapi.exceptions import PyEzvizError
 class NativeCallbackAbort(BaseException):
     pass

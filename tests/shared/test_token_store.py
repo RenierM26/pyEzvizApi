@@ -7,7 +7,7 @@ import tempfile
 
 import pytest
 
-from pyezvizapi._token_store import save_private_token
+from pyezvizapi.cloud.token_store import save_private_token
 
 
 def test_token_replacement_is_owner_only(tmp_path):
@@ -28,7 +28,7 @@ def test_failed_replace_preserves_old_token_and_propagates(tmp_path, monkeypatch
     def fail(*args):
         raise OSError("storage failure")
 
-    monkeypatch.setattr("pyezvizapi._token_store.os.replace", fail)
+    monkeypatch.setattr("pyezvizapi.cloud.token_store.os.replace", fail)
     with pytest.raises(OSError):
         save_private_token(str(target), {"synthetic": "new"})
     assert json.loads(target.read_text()) == {"old": True}
@@ -50,7 +50,7 @@ def test_serialization_failure_closes_file_before_cleanup(tmp_path, monkeypatch)
         assert opened[0].closed, "Windows cannot delete an open temporary file"
         return original_unlink(path, *args, **kwargs)
 
-    monkeypatch.setattr("pyezvizapi._token_store.tempfile.NamedTemporaryFile", temporary)
+    monkeypatch.setattr("pyezvizapi.cloud.token_store.tempfile.NamedTemporaryFile", temporary)
     monkeypatch.setattr(Path, "unlink", unlink)
     target = tmp_path / "token.json"
     target.write_text('{"old":true}')

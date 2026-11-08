@@ -7,7 +7,7 @@ import pytest
 import requests
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.mqtt import MQTTClient
+from pyezvizapi.push.mqtt import MQTTClient
 
 TOKEN = {
     "username": "ezviz-user",

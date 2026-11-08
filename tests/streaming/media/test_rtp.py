@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
-from pyezvizapi.rtp import (
+from pyezvizapi.streaming.media.rtp import (
     KNOWN_AUDIO_PAYLOAD_TYPES,
     KNOWN_VIDEO_PAYLOAD_TYPES,
     RtpAacStream,

@@ -5,8 +5,8 @@ from itertools import product
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.native_ps import NativePsTransform
-from pyezvizapi.rtp_timing import _pack_header
+from pyezvizapi.streaming.media.native_ps import NativePsTransform
+from pyezvizapi.streaming.media.rtp_timing import _pack_header
 import tests.streaming.media.test_ps_stream_isolation as isolation
 
 CASES = (

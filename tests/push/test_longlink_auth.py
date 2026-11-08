@@ -7,12 +7,12 @@ from typing import Any
 import pytest
 import requests
 
-from pyezvizapi import _longlink as wire
-from pyezvizapi._longlink_auth import authenticate
-from pyezvizapi._longlink_session import Channel99Session
 from pyezvizapi.constants import FEATURE_CODE
 from pyezvizapi.exceptions import EzvizPushFatalError, EzvizTokenPersistenceError
-from pyezvizapi.mqtt import MQTTClient
+from pyezvizapi.push.longlink import codec as wire
+from pyezvizapi.push.longlink.auth import authenticate
+from pyezvizapi.push.longlink.session import Channel99Session
+from pyezvizapi.push.mqtt import MQTTClient
 
 SERIAL = b"MOBILE:ys7:synthetic-user:synthetic-phone"
 TOKEN = "synthetic-token"
@@ -240,7 +240,7 @@ def test_public_save_failure_preserves_the_correct_allocation_boundary(monkeypat
             raise OSError("storage offline")
         committed.append(snapshot)
 
-    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr("pyezvizapi.push.mqtt.PushWorker.start", lambda self: None)
     client = MQTTClient(saved, requests.Session(), on_token_updated=persist)
     client.connect()
     worker = client._push_worker  # noqa: SLF001 - exercise real factory/persistence boundary

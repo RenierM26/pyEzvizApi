@@ -2,8 +2,8 @@
 
 import pytest
 
-from pyezvizapi._stream import decrypt_hikvision_ps_video
-from pyezvizapi.rtp_timing import _pes
+from pyezvizapi.streaming.cloud.protocol import decrypt_hikvision_ps_video
+from pyezvizapi.streaming.media.rtp_timing import _pes
 
 _KEY = "camera-key"
 _CLEAR = b"0123456789abcdef"

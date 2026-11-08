@@ -40,6 +40,13 @@ def _present(raw: Mapping, path: tuple[str, ...]) -> bool:
     return True
 
 
+def power_state(value: Any) -> bool | None:
+    """Only native boolean or integer/string 0/1 is a known on/off state."""
+    if type(value) not in (bool, int, str):
+        return None
+    return {True: True, False: False, "1": True, "0": False}.get(value)
+
+
 def plug_power(raw: Mapping) -> tuple[bool, Any]:
     """Retain the original last-row-wins power code, never legacy bool coercion."""
     value: Any = _MISSING

@@ -9,6 +9,7 @@ import math
 from types import MappingProxyType
 from typing import Any, Literal
 
+from pyezvizapi.devices.observation import power_state
 from pyezvizapi.exceptions import PyEzvizError
 
 type DeviceKind = Literal["camera", "detector", "light", "plug"]
@@ -135,10 +136,7 @@ class CameraState(DeviceState):
 class LightState(DeviceState):
     @property
     def is_on(self) -> bool | None:
-        value = self.values.get("is_on")
-        if type(value) not in (bool, int, str):
-            return None
-        return {True: True, False: False, "1": True, "0": False}.get(value)
+        return power_state(self.values.get("is_on"))
 
 
 @dataclass(frozen=True)

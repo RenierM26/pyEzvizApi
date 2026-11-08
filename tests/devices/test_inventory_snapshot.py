@@ -296,7 +296,17 @@ def test_camera_auth_failure_is_global_not_a_device_render_defect(client, monkey
 
 
 @pytest.mark.parametrize(
-    "code,expected", [(0, False), (1, True), (2, None), (-1, None), (None, None), ("future", None)]
+    "code,expected",
+    [
+        (0, False),
+        (1, True),
+        ("0", False),
+        ("1", True),
+        (2, None),
+        (-1, None),
+        (None, None),
+        ("future", None),
+    ],
 )
 def test_typed_plug_preserves_source_power_code_without_changing_legacy(
     client, monkeypatch, code, expected
@@ -306,19 +316,20 @@ def test_typed_plug_preserves_source_power_code_without_changing_legacy(
         "WIFI": {},
         "SWITCH": [{"type": DeviceSwitchType.PLUG.value, "enable": code}],
     }
-    # The legacy wrapper only accepts int/bool rows. Mocking the renderer for
-    # other raw codes also proves the typed boundary cannot inherit its coercion.
+    # Exercise the actual renderer for every raw code, including strings/null.
     if type(code) in (int, bool):
         legacy = factory.smart_plug_status(client, "plug", raw)
         assert legacy["is_on"] is bool(code)
     else:
-        monkeypatch.setattr(factory, "smart_plug_status", lambda *a: {"is_on": True})
+        with pytest.raises(KeyError):
+            factory.smart_plug_status(client, "plug", raw)
     monkeypatch.setattr(
         client, "get_device_records", lambda _: {"plug": EzvizDeviceRecord.from_api("plug", raw)}
     )
     state = client.poll_devices().devices["plug"]
     assert state.is_on is expected
     assert state.values["is_on"] == code
+    assert state.values["switches"].get(DeviceSwitchType.PLUG.value) is expected
     assert state.capabilities.has("is_on") is True
 
 

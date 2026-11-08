@@ -9,10 +9,10 @@ import time
 from typing import Any
 
 from pyezvizapi.cloud.deadline import remaining_request_budget, request_deadline
-from pyezvizapi.constants import DeviceCatagories
+from pyezvizapi.constants import DeviceCatagories, DeviceSwitchType
 from pyezvizapi.devices import factory
 from pyezvizapi.devices.detector import EzvizDetector
-from pyezvizapi.devices.observation import observed_fields, plug_power
+from pyezvizapi.devices.observation import observed_fields, plug_power, power_state
 from pyezvizapi.devices.snapshot import (
     CameraState,
     DetectorState,
@@ -84,11 +84,30 @@ def _render(
         values = factory.light_bulb_status(client, serial, raw)
         state_type = LightState
     else:
-        values = factory.smart_plug_status(client, serial, raw)
+        # Legacy switch_values bool-coerces ints and discards strings/nulls.
+        # Render metadata from an isolated valid row, then restore strict source
+        # power below. Never require the legacy parser to accept a new raw code.
+        renderer_raw = dict(raw)
+        rows = raw.get("SWITCH")
+        renderer_raw["SWITCH"] = (
+            [
+                row
+                for row in rows
+                if not isinstance(row, Mapping) or row.get("type") != DeviceSwitchType.PLUG.value
+            ]
+            if isinstance(rows, list)
+            else []
+        )
+        renderer_raw["SWITCH"].append({"type": DeviceSwitchType.PLUG.value, "enable": 0})
+        values = factory.smart_plug_status(client, serial, renderer_raw)
+        values.get("switches", {}).pop(DeviceSwitchType.PLUG.value, None)
         state_type = PlugState
     values["status"] = connectivity
     if kind == "plug":
         values["is_on"] = plug_power(raw)[1]
+        known_power = power_state(values["is_on"])
+        if known_power is not None:
+            values.setdefault("switches", {})[DeviceSwitchType.PLUG.value] = known_power
     observed = observed_fields(raw, kind)
     return state_type(serial, kind, values, DeviceCapabilities(observed))
 

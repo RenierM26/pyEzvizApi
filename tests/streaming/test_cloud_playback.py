@@ -548,3 +548,29 @@ def test_shared_helper_compatibility_identities():
     assert protocol.mpeg_ps_video_pts_span_seconds is mpegps.mpeg_ps_video_pts_span_seconds
     assert rtp._rtp_media_aes_key is crypto.media_aes_key  # noqa: SLF001 -- compatibility identity
     assert rtp._decrypt_idmx_aac_access_unit is crypto.decrypt_aac_access_unit  # noqa: SLF001 -- compatibility identity
+
+
+def test_temporary_removal_runs_even_when_close_raises(monkeypatch, tmp_path):
+    transport(monkeypatch)
+    path = tmp_path / "recording.ps"
+    path.write_bytes(EXISTING)
+    original = playback.NamedTemporaryFile
+
+    def temporary(*args, **kwargs):
+        staged = original(*args, **kwargs)
+        close = staged.close
+
+        def failed_close():
+            close()
+            raise OSError("simulated close flush failure")
+
+        monkeypatch.setattr(staged, "close", failed_close)
+        return staged
+
+    monkeypatch.setattr(playback, "NamedTemporaryFile", temporary)
+    with pytest.raises(OSError, match="close flush failure"):
+        playback.save_cloud_playback_clip(
+            object(), "CAM123", path, ClipOptions(source=CloudPlaybackClipSource(BEGIN, END))
+        )
+    assert path.read_bytes() == EXISTING
+    assert list(tmp_path.iterdir()) == [path]

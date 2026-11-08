@@ -1,28 +1,38 @@
 # Changelog
 
-## Unreleased — compatibility cleanup
+Release history is below; current `main` may contain unpublished changes.
+See [the release procedure](docs/releases.md) for the version/tag contract.
+
+## Unreleased
+
+### Documentation
+
+- Reorganize the README and task-based guides, index all documentation, and
+  separate current guidance from pinned research/qualification evidence.
+- Correct CLI syntax, canonical import ownership and HA push prerequisites;
+  add offline documentation link/anchor/CLI checks to CI.
+- Keep one Unreleased section for release preparation and move the misplaced
+  alias-removal note into that section.
+
+### Breaking compatibility changes
 
 - Remove 66 unused flat module aliases; canonical replacements are listed in
   `docs/module-map.json`. Old imports and pickles through removed paths break.
+- Remove the two redundant streaming legacy facades and the unused
+  `EzvizCamera.alarm_detection_sensibility()` alias; use
+  `alarm_detection_sensitivity()` instead.
 - Keep only HA-required exports in `feature`, `mqtt`, `utils` and `test_cam_rtsp`.
   Client methods, status keys, root public exports and CLI commands are unchanged.
 - Move repository tests, tools and examples to canonical imports; see
   `docs/ha-compatibility.md` for the pinned consumer contract.
 
-
-## Unreleased — HA native delivery validation
+### HA native validation
 
 - Add an opt-in temporary HA integration with a loopback-capability HTTP source,
   explicit track config flow, bounded admission and joined unload/disconnect cleanup.
 - Verify real HA H.264/AAC and HEVC/AAC HLS ingestion in an isolated pinned runtime.
 - Keep original native callback failures sticky across backend retries and hide
   private callback exception text from native-library error printing.
-
-All notable changes to this project should be documented in this file.
-
-This project follows [Semantic Versioning](https://semver.org/) for published releases.
-
-## Unreleased
 
 ### Fixed
 
@@ -333,16 +343,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 - Removed pandas from the runtime dependency set.
 
-## Release checklist
+## Release procedure
 
-Before publishing a release:
-
-1. Bump `project.version` in `pyproject.toml`.
-2. Move relevant entries from `Unreleased` to a dated version section by running **Prepare Release** with the bare version and merging the generated changelog PR.
-3. Ensure CI is green on `main`.
-4. Run **Upload Python Package** manually with the same bare version.
-5. Confirm the workflow publishes to PyPI and creates the matching GitHub release/tag.
-
-The unused `streaming.cloud.legacy` and `streaming.local.legacy` facades are
-also removed. `EzvizCamera.alarm_detection_sensibility()` is removed in favor
-of `alarm_detection_sensitivity()`; the CLI now calls the canonical method.
+See [the release procedure](docs/releases.md) for version selection, changelog
+preparation, publication and separate downstream integration updates.

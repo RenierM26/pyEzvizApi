@@ -1,5 +1,10 @@
 # Independent HLS startup under the optional native Opus profile
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](../README.md) and [current HA status](../home-assistant.md).
+
+
 This is an isolated source proposal, not a dependency release or production
 installation. The library remains headless; HA stays optional. Existing RTSP,
 continuous-source behavior and strict `opus-source-clock-v1` remain unchanged.

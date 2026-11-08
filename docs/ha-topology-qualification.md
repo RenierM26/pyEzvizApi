@@ -5,6 +5,11 @@
 
 # Isolated HA consumer topology qualification
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](README.md) and [current HA status](home-assistant.md).
+
+
 ## Tested boundary
 
 The normal example entry/cameras use the real HA2026.10.4 go2rtc WebRTC

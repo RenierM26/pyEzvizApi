@@ -1,5 +1,10 @@
 # Maintenance implementation plan
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](README.md) and [current HA status](home-assistant.md).
+
+
 Baseline: `7b26386038995f7172c20a6bd9cde597f120ecee`.
 
 Implement small, independently reviewable corrections before structural moves.

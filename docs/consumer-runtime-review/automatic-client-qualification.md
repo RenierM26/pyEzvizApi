@@ -1,5 +1,10 @@
 # Automatic receiver and authenticated client qualification
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](../README.md) and [current HA status](../home-assistant.md).
+
+
 Main-based follow-up to merged PR399 (`9a4fbe8`). These are **isolated source
 proposals**, not dependency releases, a supported HA deployment or permission to
 replace managed HA/relay binaries. No production/account/camera changes or new

@@ -1,5 +1,10 @@
 # Bounded late WebRTC repair — follow-up to PR397
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](../README.md) and [current HA status](../home-assistant.md).
+
+
 ## Scope
 
 PR397 was merged at `e231e42800effaca989671c027b5dac9ec236ce3`.

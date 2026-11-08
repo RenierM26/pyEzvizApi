@@ -8,6 +8,10 @@ The EZVIZ cloud API is reverse-engineered and response shapes can drift. The
 intent of this contract is not to freeze every raw field forever, but to keep
 common integration-facing behavior stable and make breaking changes deliberate.
 
+See [current HA consumer status](home-assistant.md) for tested versions, the
+custom integration's push migration gap and the separate native validation example.
+This contract is not a claim that every released HA pin supports current main.
+
 ## Stability levels
 
 ### Stable public API
@@ -118,18 +122,23 @@ Expected auth exceptions:
 - `HTTPError` wraps HTTP status failures from `requests`.
 - `InvalidURL` indicates connection/proxy/endpoint URL failures.
 
-## MQTT push behavior
+## Push transport, persistence and decoded events
 
-`MQTTClient.decode_mqtt_message()` should continue to:
+Channel-99 replaces the obsolete push-registration transport. Existing consumers
+must migrate explicitly with `enable_channel99()` and persist the complete token.
+Pass a synchronous durable `on_token_updated` callback to `EzvizClient`; the
+factory forwards it to the push client. A worker-side save must complete before
+returning. Monitor `raise_if_failed()`/diagnostics and stop the worker separately
+on unload. `connect()` returning does not mean the broker is ready.
 
-- accept UTF-8 JSON bytes;
-- parse comma-separated `ext` strings into named fields;
-- coerce known numeric `ext` fields to integers when possible;
-- preserve unknown/top-level message fields;
-- raise `PyEzvizError` for malformed JSON.
+The pinned custom consumer does not yet meet these prerequisites; polling
+remains independent. See [migration and lifecycle](channel99.md), not only the
+message-decoder contract, before bumping an integration dependency.
 
-`messages_by_device` stores the most recent decoded payload per device serial
-using bounded LRU-like behavior.
+`MQTTClient.decode_mqtt_message()` accepts UTF-8 JSON bytes, parses known `ext`
+fields, coerces known numeric values where possible, preserves unknown fields,
+and raises `PyEzvizError` for malformed JSON. `messages_by_device` retains a
+bounded latest-payload cache. Decoder compatibility does not establish delivery.
 
 ## Deprecation guidance
 
@@ -154,17 +163,7 @@ The optional [continuous native PS boundary](native-ha-stream.md) now owns
 incremental selected-track copy and source cancellation. Its HA HTTP route and
 actual frontend acceptance remain separate integration work.
 
-When publishing a `pyezvizapi` release intended for Home Assistant consumption:
-
-1. Confirm CI is green on `main`, including Ruff, codespell, dependency audit,
-   mypy, Pyright, tests, package build, metadata checks, and wheel smoke tests.
-2. Confirm `CHANGELOG.md` summarizes integration-facing changes.
-3. Run **Prepare Release** with the bare version and merge the generated
-   changelog PR.
-4. Run **Upload Python Package** manually with the same bare version so the
-   trusted publish workflow validates, builds, smoke-tests, uploads to PyPI, and
-   creates the matching GitHub release/tag.
-5. Smoke-test installation in a clean environment.
-6. Update `requirements` pins in the custom integration first when appropriate.
-7. For Home Assistant core, open/update the dependency bump PR with a concise
-   list of integration-facing changes and relevant test coverage.
+For publication, follow [the release procedure](releases.md), then validate the
+actual published artifact and coordinate downstream dependency pins separately.
+Include breaking aliases and push migration in the release notes. Do not equate
+a merged library PR with an installed HA upgrade.

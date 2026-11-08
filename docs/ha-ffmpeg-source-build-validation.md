@@ -1,5 +1,10 @@
 # FFmpeg source-build validation boundary
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](README.md) and [current HA status](home-assistant.md).
+
+
 The parser-startup fix has now been tested with actual source-built FFmpeg 9.0.2
 and PyAV 19.0.0, not the diagnostic preload. This is local dependency review
 material, not maintained release support or a new requirement silently added to

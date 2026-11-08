@@ -1,5 +1,10 @@
 # Initial source-clock preservation: external review proposals
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](README.md) and [current HA status](home-assistant.md).
+
+
 This is an isolated follow-up to the [shared session spike](native-shared-session.md).
 It changes no pyezvizapi runtime and is not a shipping HA/FFmpeg workaround.
 Production, live cameras and the existing draft PR397 are unchanged.

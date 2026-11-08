@@ -141,7 +141,7 @@ compare PCM after the first 1,024 samples and report that priming boundary.
 
 ### Generated startup-boundary qualification (2026-11-01)
 
-`tests/test_native_startup_boundaries.py` adds twelve offline encoder-backed
+`tests/streaming/test_native_startup_boundaries.py` adds twelve offline encoder-backed
 controls, without changing runtime admission. These qualify the native PS → TS
 boundary only; they do not certify HA segmentation, MP4 configuration records,
 browser decoders or a live camera's parameter-change behavior.

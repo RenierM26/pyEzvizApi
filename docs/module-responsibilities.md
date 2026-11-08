@@ -1,8 +1,14 @@
 # Implementation responsibilities after the maintenance extraction
 
+> **Pinned historical evidence / proposal.** Retained for its recorded revisions and
+> reproducibility, not current installation or deployment status. Start with the
+> [documentation index](README.md) and [current HA status](home-assistant.md).
+
+
 > Historical checkpoint from PR #410. For current implementation paths, use
-> [the code map](code-map.md). Flat paths below remain compatibility imports;
-> they no longer imply implementation ownership.
+> [the code map](code-map.md). Flat paths below describe that checkpoint only.
+> Most were removed by the later alias cleanup and **do not import today**; see
+> [the current compatibility boundary](ha-compatibility.md).
 
 | Responsibility | Implementation | Compatibility boundary |
 | --- | --- | --- |

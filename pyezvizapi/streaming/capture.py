@@ -12,8 +12,10 @@ from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.streaming.cloud.playback_range import (
     DEFAULT_PLAYBACK_MAX_BYTES,
     DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,
+    native_playback_range,
     playback_integer,
     playback_range,
+    playback_timezone,
     positive_timeout,
     selected_playback_range,
 )
@@ -48,6 +50,7 @@ class CloudPlaybackClipSource:
 
     begin_time: str
     end_time: str
+    timezone: str = field(default="UTC", kw_only=True)
     kind: Literal["cloud-playback"] = field(default="cloud-playback", init=False)
     decrypt_audio: bool = False
     client_type: int = 3
@@ -61,6 +64,7 @@ class CloudPlaybackClipSource:
 
     def __post_init__(self) -> None:
         playback_range(self.begin_time, self.end_time)
+        playback_timezone(self.timezone)
         if not isinstance(self.decrypt_audio, bool):
             raise PyEzvizError("SD playback decrypt_audio must be a boolean")
         positive_timeout(self.timeout, "timeout")
@@ -189,13 +193,14 @@ class ClipOptions:
 
     def __post_init__(self) -> None:
         if isinstance(self.source, CloudPlaybackClipSource):
-            selected_playback_range(
+            selected_end, _ = selected_playback_range(
                 self.source.begin_time,
                 self.source.end_time,
                 None
                 if isinstance(self.duration_seconds, _SourceDefaultDuration)
                 else self.duration_seconds,
             )
+            native_playback_range(self.source.begin_time, selected_end, self.source.timezone)
             if self.channel is not None:
                 playback_integer(self.channel, "channel", minimum=0)
 

@@ -37,16 +37,21 @@ def _validate_shared_clip_args(
             args.begin_time or "",
             args.end_time or "",
             timeout=args.timeout,
+            timezone=args.playback_timezone,
             token_index=args.token_index,
             max_bytes=args.playback_max_bytes,
             transfer_timeout=args.playback_transfer_timeout,
         )
         CaptureLimits(duration_seconds=args.duration, max_packets=args.max_packets)
         from pyezvizapi.streaming.cloud.playback_range import (  # noqa: PLC0415
+            native_playback_range,
             selected_playback_range,
         )
 
-        selected_playback_range(args.begin_time or "", args.end_time or "", args.duration)
+        selected_end, _ = selected_playback_range(
+            args.begin_time or "", args.end_time or "", args.duration
+        )
+        native_playback_range(args.begin_time or "", selected_end, args.playback_timezone)
         if args.format not in (None, "mpegps"):
             raise _owner.PyEzvizError("SD playback requires --format mpegps")
     elif (
@@ -54,6 +59,7 @@ def _validate_shared_clip_args(
         or args.end_time is not None
         or args.lid is not None
         or args.decrypt_audio
+        or args.playback_timezone != "UTC"
     ):
         raise _owner.PyEzvizError("Playback time/lid selectors require --source cloud-playback")
     if not args.native_shared_clock:
@@ -164,6 +170,7 @@ def _handle_save_clip(
     if args.source == "cloud-playback":
         save_kwargs.update(
             cloud_playback_begin_time=args.begin_time,
+            cloud_playback_timezone=args.playback_timezone,
             cloud_playback_decrypt_audio=args.decrypt_audio,
             cloud_playback_end_time=args.end_time,
             cloud_playback_lid=args.lid,

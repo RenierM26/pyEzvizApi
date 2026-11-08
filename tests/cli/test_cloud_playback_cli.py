@@ -57,3 +57,47 @@ def test_default_playback_range_and_container_reach_real_public_dispatch(monkeyp
     assert calls[0][2]["client_type"] == 3
     assert calls[0][2]["decrypt_audio"] is audio
     client.close_session()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--playback-timezone", "Not/AZone"],
+        [
+            "--playback-timezone",
+            "America/New_York",
+            "--begin-time",
+            "20261101T061000Z",
+            "--end-time",
+            "20261101T061020Z",
+        ],
+    ],
+)
+def test_timezone_failure_precedes_account_access(monkeypatch, extra):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Invalid timezone reached account construction")
+
+    monkeypatch.setattr(cli, "EzvizClient", forbidden)
+    assert cli.main(BASE + TIMES + extra) == 1
+
+
+def test_cli_routes_explicit_timezone_to_capture(monkeypatch):
+    calls = []
+
+    def copy(client, serial, output, begin, end, **kwargs):
+        calls.append(kwargs)
+        output.write(b"PS")
+        return {"bytes": 2}
+
+    monkeypatch.setattr(playback, "copy_cloud_playback_to_mpegps", copy)
+    client = EzvizClient(token={"session_id": "synthetic", "api_url": "api.example.test"})
+    original = client.save_clip
+    monkeypatch.setattr(
+        client, "save_clip", lambda serial, path, **kwargs: original(serial, BytesIO(), **kwargs)
+    )
+    args = build_parser().parse_args(BASE + TIMES + ["--playback-timezone", "Africa/Johannesburg"])
+    try:
+        assert cli._handle_save_clip(args, client) == 0  # noqa: SLF001 -- command dispatch
+    finally:
+        client.close_session()
+    assert calls[0]["timezone"] == "Africa/Johannesburg"

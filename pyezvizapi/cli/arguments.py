@@ -522,6 +522,35 @@ def add_save_arguments(subparsers: Any) -> None:
     add_save_image_arguments(subparsers_save)
 
 
+def _add_playback_arguments(parser: Any) -> None:
+    """Group bounded SD playback selectors separately from live options."""
+    parser.add_argument(
+        "--decrypt-audio",
+        action="store_true",
+        help="Explicitly decrypt encrypted SD ADTS AAC (cloud-playback only)",
+    )
+    parser.add_argument("--begin-time", help="SD playback UTC begin: YYYYMMDDTHHMMSSZ")
+    parser.add_argument("--end-time", help="SD playback UTC end: YYYYMMDDTHHMMSSZ")
+    parser.add_argument(
+        "--playback-timezone",
+        default="UTC",
+        help="IANA timezone for native playback selectors (UTC inputs; default: UTC)",
+    )
+    parser.add_argument("--lid", help="Optional native SD playback label/session selector")
+    parser.add_argument(
+        "--playback-max-bytes",
+        type=int,
+        default=DEFAULT_PLAYBACK_MAX_BYTES,
+        help="SD playback byte budget (default: 128 MiB)",
+    )
+    parser.add_argument(
+        "--playback-transfer-timeout",
+        type=float,
+        default=DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,
+        help="SD playback total transfer budget, including bootstrap (seconds)",
+    )
+
+
 def add_save_clip_arguments(subparsers_save: Any) -> None:
     parser_save_clip = subparsers_save.add_parser(
         "clip",
@@ -545,28 +574,7 @@ def add_save_clip_arguments(subparsers_save: Any) -> None:
             "port 8000 (default: local-sdk)"
         ),
     )
-    parser_save_clip.add_argument(
-        "--decrypt-audio",
-        action="store_true",
-        help="Explicitly decrypt encrypted SD ADTS AAC (cloud-playback only)",
-    )
-    parser_save_clip.add_argument("--begin-time", help="SD playback UTC begin: YYYYMMDDTHHMMSSZ")
-    parser_save_clip.add_argument("--end-time", help="SD playback UTC end: YYYYMMDDTHHMMSSZ")
-    parser_save_clip.add_argument(
-        "--lid", help="Optional native SD playback label/session selector"
-    )
-    parser_save_clip.add_argument(
-        "--playback-max-bytes",
-        type=int,
-        default=DEFAULT_PLAYBACK_MAX_BYTES,
-        help="SD playback byte budget (default: 128 MiB)",
-    )
-    parser_save_clip.add_argument(
-        "--playback-transfer-timeout",
-        type=float,
-        default=DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,
-        help="SD playback total transfer budget, including bootstrap (seconds)",
-    )
+    _add_playback_arguments(parser_save_clip)
     parser_save_clip.add_argument(
         "--channel",
         type=int,

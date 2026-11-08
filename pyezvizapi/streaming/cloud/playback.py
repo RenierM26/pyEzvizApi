@@ -27,8 +27,8 @@ from pyezvizapi.streaming.cloud.playback_audio import decrypt_playback_adts_audi
 from pyezvizapi.streaming.cloud.playback_range import (
     DEFAULT_PLAYBACK_MAX_BYTES as DEFAULT_PLAYBACK_MAX_BYTES,  # noqa: PLC0414 -- preserve compatibility export
     DEFAULT_PLAYBACK_TRANSFER_TIMEOUT as DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,  # noqa: PLC0414 -- preserve compatibility export
+    native_playback_range,
     playback_integer,
-    playback_range,
     positive_timeout as _positive_timeout,
     selected_playback_range,
 )
@@ -64,12 +64,13 @@ def build_vtm_playback_url(  # noqa: PLR0913 -- native URL field contract
     end_time: str,
     *,
     channel: int = 1,
+    timezone: str = "UTC",
     client_type: int = 3,
     lid: str | None = None,
     timestamp_ms: int | None = None,
 ) -> str:
     """Build the native ysproto playback selector; never guess a timezone."""
-    playback_range(begin_time, end_time)
+    begin_time, end_time = native_playback_range(begin_time, end_time, timezone)
     playback_integer(channel, "channel", minimum=0)
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise PyEzvizError("SD playback port must be a valid TCP port")
@@ -105,13 +106,14 @@ def get_cloud_playback_stream_info(
     end_time: str,
     *,
     channel: int | None = None,
+    timezone: str = "UTC",
     client_type: int = 3,
     token_index: int = 0,
     refresh_vtm: bool = True,
     lid: str | None = None,
 ) -> dict[str, Any]:
     """Resolve the ordinary VTM resource/token, but request its playback mode."""
-    playback_range(begin_time, end_time)
+    native_playback_range(begin_time, end_time, timezone)
     playback_integer(token_index, "token_index", minimum=0)
     if channel is not None:
         playback_integer(channel, "channel", minimum=0)
@@ -135,6 +137,7 @@ def get_cloud_playback_stream_info(
         begin_time,
         end_time,
         channel=selected_channel,
+        timezone=timezone,
         client_type=client_type,
         lid=lid,
     )
@@ -148,6 +151,7 @@ def open_cloud_playback_stream(  # noqa: PLR0913 -- source options
     end_time: str,
     *,
     channel: int | None = None,
+    timezone: str = "UTC",
     client_type: int = 3,
     token_index: int = 0,
     refresh_vtm: bool = True,
@@ -166,6 +170,7 @@ def open_cloud_playback_stream(  # noqa: PLR0913 -- source options
             begin_time,
             end_time,
             channel=channel,
+            timezone=timezone,
             client_type=client_type,
             token_index=token_index,
             refresh_vtm=refresh_vtm,
@@ -292,6 +297,7 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
     end_time: str,
     *,
     channel: int | None = None,
+    timezone: str = "UTC",
     client_type: int = 3,
     token_index: int = 0,
     refresh_vtm: bool = True,
@@ -316,6 +322,7 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
     EOF/idle alone must never turn an arbitrary prefix into success.
     """
     end_time, requested = selected_playback_range(begin_time, end_time, duration_seconds)
+    native_begin, native_end = native_playback_range(begin_time, end_time, timezone)
     timeout = _positive_timeout(timeout, "timeout")
     transfer_timeout = _positive_timeout(transfer_timeout, "transfer_timeout")
     playback_integer(max_bytes, "max_bytes")
@@ -338,6 +345,7 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
             begin_time,
             end_time,
             channel=channel,
+            timezone=timezone,
             client_type=client_type,
             token_index=token_index,
             refresh_vtm=refresh_vtm,
@@ -380,6 +388,9 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
     output.flush()
     return {
         "begin_time": begin_time,
+        "native_begin_time": native_begin,
+        "native_end_time": native_end,
+        "playback_timezone": timezone,
         "end_time": end_time,
         "observed_pts_span_seconds": span,
         "range_complete": complete,
@@ -446,6 +457,7 @@ def save_cloud_playback_clip(client: Any, serial: str, output: Any, options: Any
             source.begin_time,
             source.end_time,
             channel=options.channel,
+            timezone=source.timezone,
             client_type=source.client_type,
             token_index=source.token_index,
             refresh_vtm=source.refresh_vtm,

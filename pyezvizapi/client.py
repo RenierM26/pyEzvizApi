@@ -2289,6 +2289,7 @@ class EzvizClient:
         native_shared_clock: bool = False,
         app_relative_clock: bool = False,
         cloud_playback_begin_time: str | None = None,
+        cloud_playback_timezone: str = "UTC",
         cloud_playback_end_time: str | None = None,
         cloud_playback_lid: str | None = None,
         cloud_playback_decrypt_audio: bool = False,
@@ -2333,6 +2334,7 @@ class EzvizClient:
                         if isinstance(cloud_client_type, _compat_module_6._SourceDefaultClientType)
                         else cloud_client_type,
                         decrypt_audio=cloud_playback_decrypt_audio,
+                        timezone=cloud_playback_timezone,
                         token_index=cloud_token_index,
                         refresh_vtm=cloud_refresh_vtm,
                         timeout=timeout,

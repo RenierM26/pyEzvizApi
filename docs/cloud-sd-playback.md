@@ -16,14 +16,19 @@ until included in a published version; use the matching source checkout/docs.
 ## CLI
 
 First list known SD recording descriptors using [the recording commands](cli.md#sdcard_videos),
-then select a short range. Times below are synthetic **UTC** values in native
-`YYYYMMDDTHHMMSSZ` format. Convert an account/camera-local wall time explicitly;
-the library does not infer a timezone or reinterpret a local time ending in `Z`.
+then select a known continuous recorded range. Public begin/end inputs are
+**UTC instants**, written `YYYYMMDDTHHMMSSZ`. The native app protocol, however,
+formats its selector in a local wall clock with a **literal `Z`**, not a UTC
+indicator. Use `--playback-timezone` to declare that native selector clock.
+It defaults to `UTC` for compatibility; non-UTC installations must configure it
+explicitly (for example `Africa/Johannesburg`). Never use the agent/host timezone
+implicitly or blindly attach `Z` to unzoned recording-search descriptors.
 
 ```bash
 pyezvizapi --token-file ezviz_token.json --json save clip \
   --source cloud-playback --serial CAMERA_SERIAL --channel 1 \
   --begin-time 20261108T120000Z --end-time 20261108T120020Z \
+  --playback-timezone Africa/Johannesburg \
   --decrypt-video --format mpegps --output sd-clip.ps
 ```
 
@@ -72,6 +77,7 @@ result = client.save_clip(
     "CAMERA_SERIAL", "sd-clip.ps", source="cloud-playback",
     cloud_playback_begin_time="20261108T120000Z",
     cloud_playback_end_time="20261108T120020Z",
+    cloud_playback_timezone="Africa/Johannesburg",
     channel=1, decrypt_video=True, cloud_playback_decrypt_audio=True,
 )
 ```
@@ -86,6 +92,7 @@ result = client.save_clip_with_options(
     ClipOptions(
         source=CloudPlaybackClipSource(
             "20261108T120000Z", "20261108T120020Z",
+            timezone="Africa/Johannesburg",
             max_bytes=128 * 1024 * 1024, transfer_timeout=60, decrypt_audio=True,
         ),
         decode=MediaDecodeOptions(decrypt_video=True, nalu_header_size=None),
@@ -109,7 +116,7 @@ lazy root exports: `build_vtm_playback_url`, `get_cloud_playback_stream_info`,
 
 Capture/validation failures do not truncate an existing path or append a prefix
 to a caller buffer. Output is published only after validation/decryption; a final
-filesystem/write failure is not an atomic rollback. Input accumulation is capped by the configured byte limit; decryption and
+path publication uses atomic replacement; caller-owned file-like outputs cannot roll back their final write failures. Input accumulation is capped by the configured byte limit; decryption and
 publication may hold additional copies. Choose smaller limits for constrained hosts.
 
 A clean peer EOF or idle timeout **alone is not completion**. Full-range saves
@@ -187,3 +194,31 @@ CLI, typed sources and copier share finite-budget and effective UTC-range rules.
 An omitted duration retains the entire selection; explicit ten seconds selects
 ten seconds, and a duration beyond the range is clamped to its end. The effective
 end must be a whole UTC second. Live-capture defaults are unchanged.
+
+
+## Native clock qualification and relay refusals
+
+A bounded trace of the official EZVIZ 7.4.1 app on the same H9c captured its
+`createPlaybackHandleEx` selectors and plaintext StreamInfoReq before control
+packet encryption. A temporary session-only route restriction disabled direct
+and P2P routes; the app still decoded the recording through the relay. This did
+not change camera settings. The SDK requested `10:15:20Z` while the camera OSD
+and app used Africa/Johannesburg (UTC+02:00). `CasUtils.convertCasTime` explicitly
+uses `TimeZone.getDefault()` with `yyyyMMdd'T'HHmmss'Z'`, confirming the suffix
+is literal. The earlier assumption that native `Z` guarantees UTC was wrong.
+
+A paired Python test changed only the time selector: the UTC-looking selector
+was refused, while the corresponding native local selection downloaded verified
+MPEG-PS. The library now converts public UTC to the explicitly declared native
+selector timezone and reports `native_begin_time`, `native_end_time`, and
+`playback_timezone` alongside the unchanged UTC begin/effective-end fields.
+Duration shortening occurs in UTC before conversion. Offset-transition ranges
+and repeated local times are rejected: the native selector cannot express an
+offset or DST fold. No host-local fallback or automatic two-hour adjustment is
+used; other installations must declare their own selector zone.
+
+`6520` is still an opaque server result, not a universal synonym for a bad time,
+contention, authentication or an SDK failure. An earlier metadata-derived range
+still refused after shifting, so a timezone conversion is not proof that every
+advertised historical interval exists or can be downloaded. Select and qualify
+an actual known-working recording; preserve numeric refusals without retries.

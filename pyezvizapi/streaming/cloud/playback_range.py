@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 import math
 import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pyezvizapi.exceptions import PyEzvizError
 
@@ -12,7 +13,7 @@ MAX_PLAYBACK_RANGE_SECONDS = 86400
 
 
 def playback_range(begin_time: str, end_time: str) -> tuple[datetime, datetime]:
-    """Accept native UTC selectors only; never infer a process/camera timezone."""
+    """Accept public UTC selections; never infer a process/camera timezone."""
     values = []
     for value in (begin_time, end_time):
         if not isinstance(value, str) or not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", value):
@@ -63,3 +64,34 @@ def selected_playback_range(
         if end.microsecond:
             raise PyEzvizError("SD playback duration must select whole UTC seconds")
     return end.strftime("%Y%m%dT%H%M%SZ"), (end - begin).total_seconds()
+
+
+def playback_timezone(name: str) -> tzinfo:
+    """Resolve an explicit selector timezone without host-local fallbacks."""
+    if not isinstance(name, str) or not name:
+        raise PyEzvizError("SD playback timezone must be an explicit IANA timezone")
+    if name == "UTC":
+        return UTC
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise PyEzvizError("SD playback timezone is not a known IANA timezone") from error
+
+
+def native_playback_range(begin_time: str, end_time: str, timezone: str = "UTC") -> tuple[str, str]:
+    """Project UTC inputs into the native selector's wall clock.
+
+    The app formats local time with a literal Z; that suffix is not a native
+    UTC guarantee. Reject offset transitions and ambiguous wall times rather
+    than silently selecting a different instant. The native URL carries no
+    offset/fold discriminator.
+    """
+    begin, end = playback_range(begin_time, end_time)
+    zone = playback_timezone(timezone)
+    local_begin, local_end = begin.astimezone(zone), end.astimezone(zone)
+    if local_begin.utcoffset() != local_end.utcoffset() or any(
+        value.replace(fold=0).utcoffset() != value.replace(fold=1).utcoffset()
+        for value in (local_begin, local_end)
+    ):
+        raise PyEzvizError("SD playback range crosses an offset change or ambiguous local time")
+    return (local_begin.strftime("%Y%m%dT%H%M%SZ"), local_end.strftime("%Y%m%dT%H%M%SZ"))

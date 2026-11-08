@@ -529,6 +529,13 @@ def _add_playback_arguments(parser: Any) -> None:
         action="store_true",
         help="Explicitly decrypt encrypted SD ADTS AAC (cloud-playback only)",
     )
+    parser.add_argument(
+        "--lan-password-file",
+        help="Private file containing the local-playback device password (no cloud lookup)",
+    )
+    parser.add_argument(
+        "--lan-username", default="admin", help="Local-playback device username (default: admin)"
+    )
     parser.add_argument("--begin-time", help="SD playback UTC begin: YYYYMMDDTHHMMSSZ")
     parser.add_argument("--end-time", help="SD playback UTC end: YYYYMMDDTHHMMSSZ")
     parser.add_argument(
@@ -566,6 +573,7 @@ def add_save_clip_arguments(subparsers_save: Any) -> None:
             "cloud",
             "hcnetsdk-command-port",
             "cloud-playback",
+            "local-playback",
         ),
         default="local-sdk",
         help=(
@@ -590,7 +598,7 @@ def add_save_clip_arguments(subparsers_save: Any) -> None:
         "--duration",
         type=_parse_duration_seconds,
         default=_SOURCE_DEFAULT_DURATION,
-        help="Capture duration; accepts seconds or units like 10s/1m (default: full range for cloud-playback, 10s otherwise)",
+        help="Capture duration; accepts seconds or units like 10s/1m (default: full range for SD playback, 10s otherwise)",
     )
     parser_save_clip.add_argument(
         "--max-packets",

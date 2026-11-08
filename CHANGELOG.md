@@ -5,6 +5,15 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### LAN SD downloads
+
+- Add account-free LAN SD recording downloads (`save clip --source local-playback`,
+  `LocalPlaybackClipSource`, `download_lan_sd_recording`) using explicit camera
+  IP/device credentials and UTC-to-camera-timezone selectors. Bounded native
+  completion, complete MPEG-PS/PTS validation and atomic path publication;
+  existing live/cloud routes remain unchanged.
+
+
 ### Documentation
 
 - Reorganize the README and task-based guides, index all documentation, and

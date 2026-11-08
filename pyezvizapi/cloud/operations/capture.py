@@ -260,9 +260,15 @@ def save_clip_with_options(
     Explicit native timing captures are staged: unsupported clocks must not
     truncate an existing output or append partial media to a caller buffer.
     """
-    from pyezvizapi.streaming.capture import CloudPlaybackClipSource  # noqa: PLC0415
+    from pyezvizapi.streaming.capture import CloudPlaybackClipSource, LocalPlaybackClipSource  # noqa: PLC0415
     from pyezvizapi.streaming.cloud.playback import save_cloud_playback_clip  # noqa: PLC0415
 
+    if isinstance(options.source, LocalPlaybackClipSource):
+        from pyezvizapi.streaming.local.playback import save_lan_playback_clip  # noqa: PLC0415
+
+        return _owner.cast(
+            "_owner_types.SaveMediaResult", save_lan_playback_clip(serial, output, options)
+        )
     if isinstance(options.source, CloudPlaybackClipSource):
         return _owner.cast(
             "_owner_types.SaveMediaResult", save_cloud_playback_clip(self, serial, output, options)

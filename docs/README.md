@@ -20,6 +20,7 @@ See [release availability](releases.md#source-state-is-not-a-published-release).
 ## Current user guides
 
 - [Cloud-mediated SD-card playback](cloud-sd-playback.md)
+- [LAN-only SD-card downloads](lan-sd-playback.md)
 
 - [Getting started](getting-started.md)
 - [Python client usage](python-api.md)

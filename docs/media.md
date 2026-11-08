@@ -9,6 +9,7 @@ successful remux is not evidence of HA/browser playback or audible audio.
 | --- | --- | --- |
 | Existing HA camera playback | Consumer's RTSP URL → HA stream/FFmpeg | Device RTSP support, correct credentials and reachable LAN endpoint; [HA status](home-assistant.md) |
 | Save an image or bounded clip | CLI `save` or `EzvizClient.save_*` | Credentials/keys and source support; FFmpeg for remux, sometimes FFprobe; [saving guide](media-saving.md) |
+| LAN-only SD-card recording download | `save clip --source local-playback` | Explicit IP, device password and UTC range; no account/cloud; [LAN SD downloads](lan-sd-playback.md) |
 | Camera SD-card recording download | `save clip --source cloud-playback` | Explicit UTC range, MPEG-PS, byte/time budgets; [SD playback](cloud-sd-playback.md) |
 | Cloud replay download | `cloud_video_download` | Account recording access and ticket/replay metadata; [CLI](cli.md#cloud_videos) |
 | Inspect VTM/local transports | `stream trace`, `dump`, `proxy`, local SDK commands | Specialist/debug workflow, source-specific credentials, finite limits; [stream CLI](stream-cli.md) |

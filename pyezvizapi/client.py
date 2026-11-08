@@ -183,6 +183,7 @@ ClipOutputFormat = _compat_module_6.ClipOutputFormat
 ClipSource = _compat_module_6.ClipSource
 ClipSourceOptions = _compat_module_6.ClipSourceOptions
 CloudPlaybackClipSource = _compat_module_6.CloudPlaybackClipSource
+LocalPlaybackClipSource = _compat_module_6.LocalPlaybackClipSource
 CloudClipSource = _compat_module_6.CloudClipSource
 HcNetSdkCommandPortClipSource = _compat_module_6.HcNetSdkCommandPortClipSource
 LocalSdkClipSource = _compat_module_6.LocalSdkClipSource
@@ -2288,6 +2289,12 @@ class EzvizClient:
         local_sdk_ecdh_max_frames: int | None = None,
         native_shared_clock: bool = False,
         app_relative_clock: bool = False,
+        local_playback_begin_time: str | None = None,
+        local_playback_end_time: str | None = None,
+        local_playback_timezone: str = "UTC",
+        local_playback_username: str = "admin",
+        local_playback_max_bytes: int = DEFAULT_PLAYBACK_MAX_BYTES,
+        local_playback_transfer_timeout: float = DEFAULT_PLAYBACK_TRANSFER_TIMEOUT,
         cloud_playback_begin_time: str | None = None,
         cloud_playback_timezone: str = "UTC",
         cloud_playback_end_time: str | None = None,
@@ -2318,6 +2325,35 @@ class EzvizClient:
         ``0`` default.
         Passing ``0`` or ``None`` explicitly preserves that exact choice.
         """
+        if source == "local-playback":
+            if timeout is None or native_shared_clock or app_relative_clock:
+                raise PyEzvizError("LAN SD playback requires finite timeout and original clocks")
+            return self.save_clip_with_options(
+                serial,
+                output,
+                ClipOptions(
+                    source=LocalPlaybackClipSource(
+                        local_playback_begin_time or "",
+                        local_playback_end_time or "",
+                        host=host or "",
+                        password=hcnetsdk_command_password or b"",
+                        timezone=local_playback_timezone,
+                        username=local_playback_username,
+                        command_port=8000 if command_port is None else command_port,
+                        timeout=timeout,
+                        max_bytes=local_playback_max_bytes,
+                        transfer_timeout=local_playback_transfer_timeout,
+                    ),
+                    capture=CaptureLimits(
+                        duration_seconds=duration_seconds, max_packets=max_packets
+                    ),
+                    decode=MediaDecodeOptions(decrypt_video=decrypt_video),
+                    mux=MediaMuxOptions(
+                        output_format=output_format or "mpegps", ffmpeg_path=ffmpeg_path
+                    ),
+                    channel=channel,
+                ),
+            )
         if source == "cloud-playback":
             if timeout is None:
                 raise PyEzvizError("SD playback requires a finite socket timeout")
@@ -4231,6 +4267,7 @@ __all__ = [
     "Iterator",
     "JsonDict",
     "Literal",
+    "LocalPlaybackClipSource",
     "LocalSdkClipSource",
     "LocalSdkEcdhClipSource",
     "MQTTClient",

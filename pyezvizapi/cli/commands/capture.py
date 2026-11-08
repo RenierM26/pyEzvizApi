@@ -29,7 +29,7 @@ def _validate_shared_clip_args(
     args: _owner_types.argparse.Namespace, *, _owner: _ModuleType
 ) -> None:
     """Reject unsupported clock assertions before account or camera access."""
-    if args.source == "cloud-playback":
+    if args.source in {"cloud-playback", "local-playback"}:
         from pyezvizapi.streaming.capture import CloudPlaybackClipSource  # noqa: PLC0415
         from pyezvizapi.streaming.media.models import CaptureLimits  # noqa: PLC0415
 
@@ -42,6 +42,28 @@ def _validate_shared_clip_args(
             max_bytes=args.playback_max_bytes,
             transfer_timeout=args.playback_transfer_timeout,
         )
+        if args.source == "local-playback":
+            from pyezvizapi.streaming.local.hcnetsdk.api import HcNetSdkLanEndpoint  # noqa: PLC0415
+            from pyezvizapi.streaming.local.playback import _validate_connection  # noqa: PLC0415
+
+            if args.channel is not None:
+                from pyezvizapi.streaming.cloud.playback_range import playback_integer  # noqa: PLC0415
+
+                playback_integer(args.channel, "LAN channel")
+            password = _lan_password(args, _owner=_owner)
+            _validate_connection(
+                HcNetSdkLanEndpoint(
+                    serial=args.serial,
+                    host=args.host or "",
+                    command_port=8000 if args.command_port is None else args.command_port,
+                ),
+                args.lan_username,
+                password,
+            )
+            if args.max_packets is not None or args.decrypt_video or args.decrypt_audio or args.lid:
+                raise _owner.PyEzvizError(
+                    "LAN SD does not support packet limits, decryption or lid"
+                )
         CaptureLimits(duration_seconds=args.duration, max_packets=args.max_packets)
         from pyezvizapi.streaming.cloud.playback_range import (  # noqa: PLC0415
             native_playback_range,
@@ -61,7 +83,9 @@ def _validate_shared_clip_args(
         or args.decrypt_audio
         or args.playback_timezone != "UTC"
     ):
-        raise _owner.PyEzvizError("Playback time/lid selectors require --source cloud-playback")
+        raise _owner.PyEzvizError(
+            "Playback time selectors require --source cloud-playback or local-playback"
+        )
     if not args.native_shared_clock:
         return
     if args.source not in {"local-sdk", "hcnetsdk-command-port"} or args.format not in {
@@ -78,6 +102,19 @@ def _validate_shared_clip_args(
         raise _owner.PyEzvizError(
             "--native-shared-clock does not support encrypted startup trimming"
         )
+
+
+def _lan_password(args: _owner_types.argparse.Namespace, *, _owner: _ModuleType) -> bytes | str:
+    if args.lan_password_file:
+        if args.hcnetsdk_command_password:
+            raise _owner.PyEzvizError("Supply one LAN password source, not both")
+        try:
+            with _owner.Path(args.lan_password_file).open("rb") as password_file:
+                # 64 password bytes plus CRLF; one extra byte detects overflow.
+                return password_file.read(67).removesuffix(b"\n").removesuffix(b"\r")
+        except OSError:
+            raise _owner.PyEzvizError("Unable to read LAN device password file") from None
+    return args.hcnetsdk_command_password or b""
 
 
 def _handle_save_clip(
@@ -131,7 +168,7 @@ def _handle_save_clip(
     if output_format is None:
         output_format = (
             "mpegps"
-            if args.source == "cloud-playback"
+            if args.source in {"cloud-playback", "local-playback"}
             or (args.source == "local-sdk-ecdh" and (not args.decrypt_video))
             else "mpegts"
         )
@@ -167,6 +204,16 @@ def _handle_save_clip(
         save_kwargs["native_shared_clock"] = True
     if args.source in {"local-sdk", "local-sdk-ecdh"}:
         save_kwargs["register_p2p_session"] = not args.no_p2p_register
+    if args.source == "local-playback":
+        save_kwargs.update(
+            local_playback_begin_time=args.begin_time,
+            local_playback_end_time=args.end_time,
+            local_playback_timezone=args.playback_timezone,
+            local_playback_username=args.lan_username,
+            local_playback_max_bytes=args.playback_max_bytes,
+            local_playback_transfer_timeout=args.playback_transfer_timeout,
+            hcnetsdk_command_password=_lan_password(args, _owner=_owner),
+        )
     if args.source == "cloud-playback":
         save_kwargs.update(
             cloud_playback_begin_time=args.begin_time,

@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pyezvizapi._shared.mapping import fetch_nested_value
+from pyezvizapi.devices.firmware import firmware_status
 from pyezvizapi.models import EzvizDeviceRecord
 
 # Field names introduced and hardware-reported by Simone Rescio in PR #99.
@@ -119,12 +120,11 @@ class EzvizDetector:
             "serial": self._serial,
             "name": self.fetch_key(["deviceInfos", "name"]),
             "version": self.fetch_key(["deviceInfos", "version"]),
-            "upgrade_available": bool(self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3),
+            **firmware_status(self.fetch_key(["UPGRADE"]), self.fetch_key(["STATUS"])),
             "status": self.fetch_key(["deviceInfos", "status"]),
             "device_category": self.fetch_key(["deviceInfos", "deviceCategory"]),
             "device_sub_category": self.fetch_key(["deviceInfos", "deviceSubCategory"]),
             "upgrade_percent": self.fetch_key(["STATUS", "upgradeProcess"]),
-            "upgrade_in_progress": bool(self.fetch_key(["STATUS", "upgradeStatus"]) == 0),
             "latest_firmware_info": self.fetch_key(["UPGRADE", "upgradePackageInfo"]),
             "supportExt": self.fetch_key(["deviceInfos", "supportExt"]),
             "switches": {},

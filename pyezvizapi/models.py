@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import json
 from typing import Any
 
+from pyezvizapi.constants import DeviceCatagories
 from pyezvizapi.devices.payload import switch_values
 
 
@@ -175,7 +176,11 @@ class EzvizDeviceRecord:
         if device_status is None:
             device_status = status.get("globalStatus")
 
-        switches = switch_values(data.get("SWITCH"))
+        category = device_infos.get("deviceCategory") or device_infos.get("device_category")
+        switches = switch_values(
+            data.get("SWITCH"),
+            channel_no=0 if category == DeviceCatagories.SOCKET.value else None,
+        )
 
         return cls(
             serial=serial,

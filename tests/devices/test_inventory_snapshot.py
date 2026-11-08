@@ -321,8 +321,7 @@ def test_typed_plug_preserves_source_power_code_without_changing_legacy(
         legacy = factory.smart_plug_status(client, "plug", raw)
         assert legacy["is_on"] is bool(code)
     else:
-        with pytest.raises(KeyError):
-            factory.smart_plug_status(client, "plug", raw)
+        assert factory.smart_plug_status(client, "plug", raw)["is_on"] is None
     monkeypatch.setattr(
         client, "get_device_records", lambda _: {"plug": EzvizDeviceRecord.from_api("plug", raw)}
     )

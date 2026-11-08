@@ -5,6 +5,12 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+- Align plug channel selection and firmware status with the native app: explicit
+  device channel0 cannot be overwritten by other channels; positive update codes
+  report availability; reboot/wait/download remain in progress. Expose normalized
+  firmware status/phase consistently across device families, leaving unknown and
+  model-specific phase meanings unguessed.
+
 - Add bounded `poll_devices()` with immutable typed snapshots, detached dictionary
   adapters, per-device health and pure family selectors; keep legacy loaders intact.
 - Preserve unknown detector semantics and isolate malformed device renders without

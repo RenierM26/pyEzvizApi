@@ -78,7 +78,7 @@ def _render(
         wrapper = EzvizDetector(client, serial, record)
         values = wrapper.status()
         values["status"] = connectivity
-        observed = wrapper.observed_fields()
+        observed = wrapper.observed_fields() | observed_fields(raw, kind)
         return DetectorState(serial, kind, values, DeviceCapabilities(observed))
     elif kind == "light":
         values = factory.light_bulb_status(client, serial, raw)

@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from pyezvizapi.constants import DeviceSwitchType
+from pyezvizapi.devices.payload import switch_rows
 
 _COMMON = {
     "serial": ("deviceInfos", "deviceSerial"),
@@ -18,6 +19,10 @@ _COMMON = {
     "supportExt": ("deviceInfos", "supportExt"),
     "switches": ("SWITCH",),
     "optionals": ("STATUS", "optionals"),
+    "upgrade_available": ("UPGRADE", "isNeedUpgrade"),
+    "upgrade_in_progress": ("STATUS", "upgradeStatus"),
+    "upgrade_status": ("STATUS", "upgradeStatus"),
+    "upgrade_phase": ("STATUS", "upgradeStatus"),
 }
 _CAMERA = {
     "battery_level": ("STATUS", "optionals", "powerRemaining"),
@@ -28,7 +33,6 @@ _CAMERA = {
     "push_notify_alarm": ("NODISTURB", "alarmEnable"),
     "push_notify_call": ("NODISTURB", "callingEnable"),
 }
-_MISSING = object()
 
 
 def _present(raw: Mapping, path: tuple[str, ...]) -> bool:
@@ -48,13 +52,11 @@ def power_state(value: Any) -> bool | None:
 
 
 def plug_power(raw: Mapping) -> tuple[bool, Any]:
-    """Retain the original last-row-wins power code, never legacy bool coercion."""
-    value: Any = _MISSING
-    rows = raw.get("SWITCH")
-    for item in rows if isinstance(rows, list) else ():
-        if isinstance(item, Mapping) and item.get("type") == DeviceSwitchType.PLUG.value:
-            value = item.get("enable", _MISSING)
-    return value is not _MISSING, None if value is _MISSING else value
+    """Select the app's device-level plug channel before strict power validation."""
+    row = switch_rows(raw.get("SWITCH"), channel_no=0).get(DeviceSwitchType.PLUG.value)
+    if row is None or "enable" not in row:
+        return False, None
+    return True, row["enable"]
 
 
 def observed_fields(raw: Mapping, kind: str) -> frozenset[str]:

@@ -36,7 +36,7 @@ client.close_session()
   deep compatibility copy. `select()` returns a new mapping of immutable states.
 - `device_snapshot`, `select()` and `as_dict()` do not use the network. Legacy
   `load_devices()`/`load_cameras()`/family loaders retain their historical semantics
-  and caches; the new API does not change them.
+  and caches. The status corrections below apply to both old and typed entrypoints.
 
 ## Typed states and unknowns
 
@@ -73,3 +73,29 @@ Push is a separate optional lifecycle. Use credential-backed `enable_channel99()
 for migration, an acknowledged durable `on_token_updated` callback, and the push
 client's `raise_if_failed()` monitor. Never reinterpret legacy tokens by changing
 a header, or acknowledge a merely queued config-entry save as durable persistence.
+
+
+## App-verified status corrections
+
+The Android app 7.6.1.0824 supplies these rules; offline controls exercise the
+actual renderers without account access or firmware actions:
+
+- Device-level plug state uses switch type14 and the first explicit `channelNo=0`
+  row. Other channels cannot override it. For older responses omitting channelNo,
+  unscoped rows retain last-row precedence, but explicit target-channel rows win.
+  Socket `EzvizDeviceRecord.switches`, `EzvizSmartPlug.status()` and typed inventory
+  use the same selection. A missing plug switch is unknown, not a failed render.
+  Other families' existing switch-selection behavior is unchanged.
+- Firmware availability follows a positive integer `UPGRADE.isNeedUpgrade`, not
+  equality to3. Booleans, fractional values and malformed codes are not accepted
+  as availability codes; numeric strings are normalized.
+- `upgrade_in_progress` covers0(upgrading),1(rebooting),14(waiting/queued) and
+  15(downloading). `upgrade_status` retains a normalized integer code and
+  `upgrade_phase` exposes the known native UI phase. Code2 is current/success,
+  code3 failure; model-specific17 and unknown codes keep a raw code with no guessed
+  phase. These shared fields are present on camera, detector, light and plug views.
+
+This intentionally corrects status values while retaining the existing loader
+entrypoints and caches. It does not infer detector alarm enums, start an upgrade,
+normalize model-dependent aggregate progress percentages, or establish live
+hardware behavior.

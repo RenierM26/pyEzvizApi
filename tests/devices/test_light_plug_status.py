@@ -141,7 +141,7 @@ def test_smart_plug_status_extracts_switch_state_and_wifi_ip() -> None:
     assert status["device_category"] == "Socket"
     assert status["device_sub_category"] == "plug"
     assert status["upgrade_percent"] == 0
-    assert status["upgrade_in_progress"] is False
+    assert status["upgrade_in_progress"] is True
     assert status["latest_firmware_info"] is None
     assert status["local_ip"] == "192.0.2.61"
     assert status["wan_ip"] == "198.51.100.60"

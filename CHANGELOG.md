@@ -5,6 +5,12 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+- Expose the existing LAN-only RTSP service control as `lan rtsp status|enable|disable`
+  with private-file credentials, preservation of unrelated services, strict switch
+  validation and configuration read-back. No cloud fallback or automatic write
+  retries; configuration success does not establish streaming support. Document
+  canonical SDK imports and credit @cgaspard3333's C3X observations in issue #345.
+
 - Align plug channel selection and firmware status with the native app: explicit
   device channel0 cannot be overwritten by other channels; positive update codes
   report availability; reboot/wait/download remain in progress. Expose normalized

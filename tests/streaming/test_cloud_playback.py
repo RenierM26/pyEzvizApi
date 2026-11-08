@@ -334,3 +334,33 @@ def test_application_level_playback_refusal_is_not_reported_as_an_empty_clip(mon
     with pytest.raises(PyEzvizError, match=r"negotiation.*7"):
         playback.copy_cloud_playback_to_mpegps(object(), "CAM123", BytesIO(), BEGIN, END)
     assert sock.closed
+
+
+def test_invalid_native_timeout_is_rejected_before_connecting():
+    with pytest.raises(PyEzvizError, match="32-bit"):
+        VtmStreamClient("ysproto://example.test:8554/playback", stream_info_timeout=-1)
+
+
+def test_short_writing_output_is_fully_written_not_reported_as_complete_prefix(monkeypatch):
+    sock, _, _ = transport(monkeypatch)
+
+    class ShortWriter(BytesIO):
+        def write(self, value):
+            return super().write(value[:17])
+
+    output = ShortWriter()
+    result = playback.copy_cloud_playback_to_mpegps(object(), "CAM123", output, BEGIN, END)
+    assert len(output.getvalue()) == result["bytes"]
+    assert output.getvalue() == media() and sock.closed
+
+
+def test_zero_progress_output_write_fails(monkeypatch):
+    sock, _, _ = transport(monkeypatch)
+
+    class StalledWriter(BytesIO):
+        def write(self, value):
+            return 0
+
+    with pytest.raises(PyEzvizError, match="write"):
+        playback.copy_cloud_playback_to_mpegps(object(), "CAM123", StalledWriter(), BEGIN, END)
+    assert sock.closed

@@ -334,7 +334,7 @@ def copy_cloud_playback_to_mpegps(  # noqa: PLR0913 -- public copier contract
         decrypt_audio=decrypt_audio,
         nalu_header_size=nalu_header_size,
     )
-    output.write(data)
+    _write_playback_output(output, data)
     output.flush()
     return {
         "begin_time": begin_time,
@@ -363,6 +363,20 @@ def _decode_playback_media(
     if decrypt_audio:
         data = decrypt_playback_adts_audio(data, key)
     return data
+
+
+def _write_playback_output(output: BinaryIO, data: bytes | memoryview) -> None:
+    view = memoryview(data)
+    offset = 0
+    while offset < len(view):
+        written = output.write(view[offset:])
+        if (
+            not isinstance(written, int)
+            or isinstance(written, bool)
+            or not 0 < written <= len(view) - offset
+        ):
+            raise PyEzvizError("SD playback output write made no valid progress")
+        offset += written
 
 
 def save_cloud_playback_clip(client: Any, serial: str, output: Any, options: Any) -> dict[str, Any]:
@@ -411,10 +425,10 @@ def save_cloud_playback_clip(client: Any, serial: str, output: Any, options: Any
         path = Path(output)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as dest:
-            dest.write(data.getbuffer())
+            _write_playback_output(dest, data.getbuffer())
         output_name = str(path)
     else:
-        output.write(data.getbuffer())
+        _write_playback_output(output, data.getbuffer())
         output.flush()
         output_name = None
     return {

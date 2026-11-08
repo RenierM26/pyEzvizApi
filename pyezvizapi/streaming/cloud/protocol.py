@@ -234,6 +234,13 @@ class VtmStreamTimeout(DeviceException):
     """VTM socket inactivity, distinct from framing/authentication failures."""
 
 
+def _validate_stream_info_timeout(value: int | None) -> None:
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 0x7FFFFFFF
+    ):
+        raise PyEzvizError("VTM request timeout must be a positive signed 32-bit integer")
+
+
 class VtmStreamClient:
     """Experimental synchronous client for the APK-discovered VTM TCP stream.
 
@@ -252,6 +259,7 @@ class VtmStreamClient:
         stream_info_timeout: int | None = None,
         socket_factory: SocketFactory = socket.create_connection,
     ) -> None:
+        _validate_stream_info_timeout(stream_info_timeout)
         self.stream_url = stream_url
         self._playback_mode = stream_url.partition("?")[0].endswith("/playback")
         self.timeout = timeout
@@ -930,13 +938,8 @@ def build_stream_info_request(
             _proto_string(6, client_version),
         )
     )
+    _validate_stream_info_timeout(stream_info_timeout)
     if stream_info_timeout is not None:
-        if (
-            isinstance(stream_info_timeout, bool)
-            or not isinstance(stream_info_timeout, int)
-            or not 1 <= stream_info_timeout <= 0x7FFFFFFF
-        ):
-            raise PyEzvizError("VTM request timeout must be a positive signed 32-bit integer")
         parts.append(_proto_varint(8, stream_info_timeout))
     return b"".join(parts)
 

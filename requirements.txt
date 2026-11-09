@@ -1,4 +1,4 @@
-pycryptodome==4.2.0
+pycryptodome==4.3.0
 requests==2.34.2
-paho-mqtt==2.1.0
+paho-mqtt==2.2.0
 xmltodict==1.0.4

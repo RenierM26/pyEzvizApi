@@ -89,7 +89,7 @@ jobs:
           print("Both public bases, proposals and extracted source hashes verified")
           PY
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: consumer-go/go.mod
           cache-dependency-path: consumer-go/go.sum

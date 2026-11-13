@@ -22,7 +22,10 @@ def set_camera_defence_old(
     self: _owner_types.EzvizClient, serial: str, enable: int, *, _owner: _ModuleType
 ) -> bool:
     """Enable/Disable motion detection on camera."""
-    cas_client = _owner.EzvizCAS(_owner.cast("dict[str, _owner_types.Any]", self._token))
+    cas_client = _owner.EzvizCAS(
+        _owner.cast("dict[str, _owner_types.Any]", self._token),
+        **_owner._feature_code_options(self.feature_code),
+    )
     cas_client.set_camera_defence_state(serial, enable)
     return True
 

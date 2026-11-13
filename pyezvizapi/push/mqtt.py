@@ -20,6 +20,7 @@ from typing import Any, Final, TypedDict, cast
 import requests
 
 from pyezvizapi.cloud.auth import discover_services, isolated_session, refresh_credentials
+from pyezvizapi.cloud.identity import resolve_feature_code
 from pyezvizapi.cloud.token import (
     ClientToken as EzvizToken,
     ServiceUrls,
@@ -30,6 +31,7 @@ from pyezvizapi.cloud.token import (
 from pyezvizapi.constants import (
     ANDROID_PROFILE,
     DEFAULT_TIMEOUT,
+    FEATURE_CODE,
     PROFILE as PUSH_PROFILE,
     REGISTER as PUSH_REGISTER,
 )
@@ -141,6 +143,7 @@ class MQTTClient:
         max_messages: int = 1000,
         on_token_updated: Callable[[dict[str, Any]], None] | None = None,
         _token_lock: RLock | None = None,
+        feature_code: str | None = None,
     ) -> None:
         """Initialize the Ezviz MQTT client.
 
@@ -172,6 +175,8 @@ class MQTTClient:
             raise PyEzvizError(
                 "Ezviz internal username is required. Ensure EzvizClient.login() was called first."
             )
+
+        self._feature_code = resolve_feature_code(feature_code, FEATURE_CODE)
 
         # Requests session (synchronous)
         self._token_lock = _token_lock if _token_lock is not None else RLock()
@@ -240,7 +245,7 @@ class MQTTClient:
             raise PyEzvizError("Channel-99 requires on_token_updated to durably save the token")
         token = cast(dict[str, Any], self._token)
         with self._token_lock:
-            validate_push_token(token)
+            validate_push_token(token, feature_code=self._feature_code)
 
         def save_token(snapshot: dict[str, Any]) -> None:
             assert self._on_token_updated is not None
@@ -256,9 +261,10 @@ class MQTTClient:
             # identity and HTTPS credential. An obsolete attempt must neither
             # overwrite current state nor turn a stale rejection into a fatal error.
             with self._token_lock:
+                validate_push_token(token, feature_code=self._feature_code)
                 user_id = token["user_id"]
                 session_id = cast(str, token["session_id"])
-                serial = _push_serial(user_id)
+                serial = _push_serial(user_id, feature_code=self._feature_code)
                 state = deepcopy(token.get("push_state", {}))
                 if not isinstance(state, dict):
                     raise PyEzvizError("Invalid saved push state")
@@ -268,6 +274,7 @@ class MQTTClient:
                         return (
                             token.get("user_id") == user_id
                             and token.get("session_id") == session_id
+                            and token.get("feature_code") == self._feature_code
                         )
 
                 def adopt_session(rotated_session_id: str) -> None:
@@ -277,6 +284,7 @@ class MQTTClient:
                         if (
                             token.get("user_id") != user_id
                             or token.get("session_id") != rotated_session_id
+                            or token.get("feature_code") != self._feature_code
                         ):
                             raise PyEzvizError("Push credentials changed; reconnect required")
                         session_id = rotated_session_id
@@ -336,6 +344,7 @@ class MQTTClient:
             ANDROID_PROFILE,
             token["session_id"],
             scope="profile",
+            feature_code=self._feature_code,
         )
         for attempt in range(2):
             with self._token_lock:
@@ -385,6 +394,7 @@ class MQTTClient:
                         self._timeout,
                         notify,
                         lambda: discover_services(session, token, self._timeout),
+                        feature_code=self._feature_code,
                     )
             except EzvizAuthTokenExpired as error:
                 raise EzvizPushFatalError(

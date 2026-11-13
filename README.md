@@ -94,3 +94,12 @@ Apache-2.0; see [LICENSE](https://github.com/RenierM26/pyEzvizApi/blob/main/LICE
 For one bounded refresh shared across HA platforms, immutable typed states and
 per-device freshness, see [Device inventory](docs/device_inventory.md). Existing
 family loaders remain compatible.
+
+### Stable identities for container applications (unreleased)
+
+Applications can opt into a persisted per-client `feature_code` instead of the
+legacy MAC-derived identity. Persist it before first login and provide the same
+value when restoring saved credentials; the SDK never silently adopts a token's
+identity or changes process-wide defaults. See
+[persisted installation identities](docs/auth/persisted-client-identity.md) for
+ownership, migration, validation and consumer-release requirements.

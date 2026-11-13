@@ -21,6 +21,7 @@ from typing import Any, BinaryIO, Literal, cast
 
 from Crypto.Cipher import AES
 
+from pyezvizapi.cloud.identity import feature_code_options as _feature_code_options_static
 from pyezvizapi.streaming.local import packets as _local_stream_packets
 from pyezvizapi.streaming.local.packets import (
     H264_FU_A_NAL_TYPE,
@@ -2053,7 +2054,10 @@ def get_local_sdk_stream_credentials_from_client(
             max_retries=p2p_register_max_retries,
         )
     cas_session = CasDeviceSession.from_response(
-        EzvizCAS(client.export_token()).cas_get_encryption(cas_serial or serial)
+        EzvizCAS(
+            client.export_token(),
+            **_feature_code_options_static(getattr(client, "feature_code", None)),
+        ).cas_get_encryption(cas_serial or serial)
     )
     media_key: str | bytes | None = None
     if fetch_media_key:

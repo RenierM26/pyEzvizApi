@@ -5,6 +5,17 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Added
+
+- Support opt-in persisted client identities through `feature_code` on
+  `EzvizClient`, `MQTTClient` and `EzvizCAS`, with a read-only
+  `EzvizClient.feature_code` property. Applications can persist the identity before
+  first login and reuse it after container MAC changes; the SDK does not manage
+  identity storage. See [persisted client identity](docs/auth/persisted-client-identity.md).
+- Preserve MAC-derived identity defaults when no identity is supplied. Saved
+  channel-99 credentials must still match the selected identity; this does not
+  bypass token expiry, revocation or MFA requirements.
+
 ## v2.0.0 - 2026-11-08
 
 Release preparation; publication is pending. See [upgrade and release notes](docs/release-2.0.0.md).

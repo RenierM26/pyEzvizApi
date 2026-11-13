@@ -10,6 +10,7 @@ import ipaddress
 import re
 from typing import Any, NotRequired, TypedDict
 
+from pyezvizapi.cloud.identity import resolve_feature_code
 from pyezvizapi.constants import FEATURE_CODE, PROFILE
 from pyezvizapi.exceptions import EzvizAuthTokenExpired, PyEzvizError
 
@@ -81,32 +82,34 @@ def _push_endpoint(urls: Any) -> tuple[str, int]:
     return host, port
 
 
-def _push_serial(user_id: Any) -> bytes:
+def _push_serial(user_id: Any, *, feature_code: str | None = None) -> bytes:
     """Validate the account component and native subserial length bound."""
     if not isinstance(user_id, str) or re.fullmatch(r"[A-Za-z0-9_.-]+", user_id) is None:
         raise PyEzvizError("Invalid channel-99 user ID")
-    serial = f"MOBILE:ys7:{user_id}:{FEATURE_CODE}".encode("ascii")
+    selected = resolve_feature_code(feature_code, FEATURE_CODE)
+    serial = f"MOBILE:ys7:{user_id}:{selected}".encode("ascii")
     if len(serial) > 127:
         raise PyEzvizError("Channel-99 user ID exceeds protocol limit")
     return serial
 
 
-def validate_feature_code(token: dict[str, Any]) -> None:
-    """Reject saved channel-99 credentials belonging to a different host identity."""
-    if token.get("push_profile") == PROFILE and token.get("feature_code") != FEATURE_CODE:
+def validate_feature_code(token: dict[str, Any], *, feature_code: str | None = None) -> None:
+    """Reject saved channel-99 credentials bound to a different selected identity."""
+    expected = resolve_feature_code(feature_code, FEATURE_CODE)
+    if token.get("push_profile") == PROFILE and token.get("feature_code") != expected:
         raise EzvizAuthTokenExpired(
             "Channel-99 host feature code changed or is missing; "
             "create a fresh login without the old token or push state"
         )
 
 
-def validate_push_token(token: dict[str, Any]) -> None:
+def validate_push_token(token: dict[str, Any], *, feature_code: str | None = None) -> None:
     """Validate persisted login/discovery before starting the push worker."""
-    validate_feature_code(token)
+    validate_feature_code(token, feature_code=feature_code)
     if not all(token.get(key) for key in ("user_id", "feature_code", "session_id", "api_url")):
         raise PyEzvizError("Channel-99 login metadata is incomplete; migrate the login first")
     _push_endpoint(token.get("service_urls", {}))
-    _push_serial(token["user_id"])
+    _push_serial(token["user_id"], feature_code=feature_code)
     if ":" in _hostname(token["api_url"]):
         raise PyEzvizError("IPv6 API hosts are not supported")
     if (

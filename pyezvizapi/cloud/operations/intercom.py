@@ -328,7 +328,7 @@ def remote_unlock(  # noqa: PLR0913 -- explicit runtime context plus retained si
         lock_type (str, optional): Optional lock type hint used by some devices.
         bind_code (str, optional): Explicit bind code. When omitted, the latest
             terminal bind code is used if available, otherwise the legacy
-            ``FEATURE_CODE + user_id`` bind code is used.
+            ``client.feature_code + user_id`` bind code is used.
         terminal_filter_name (str, optional): Terminal name to prefer when
             resolving an implicit bind code. Defaults to ``"Hassio"`` to match
             the library login terminal. Pass ``None`` to use the newest valid
@@ -358,7 +358,7 @@ def remote_unlock(  # noqa: PLR0913 -- explicit runtime context plus retained si
                 "Terminal bind unavailable for %s, using legacy bind code: %s", serial, err
             )
     if effective_bind_code is None:
-        effective_bind_code = f"{_owner.FEATURE_CODE}{user_id}"
+        effective_bind_code = f"{self.feature_code}{user_id}"
     un_lock_info: dict[str, _owner_types.Any] = {
         "bindCode": effective_bind_code,
         "lockNo": lock_no,
@@ -401,7 +401,7 @@ def remote_lock(
     route_resource = resource_id or "Video"
     route_index = str(local_index if local_index is not None else 1)
     un_lock_info: dict[str, _owner_types.Any] = {
-        "bindCode": f"{_owner.FEATURE_CODE}{user_id}",
+        "bindCode": f"{self.feature_code}{user_id}",
         "lockNo": lock_no,
         "streamToken": stream_token or "",
         "userName": user_id,

@@ -14,6 +14,7 @@ import requests
 from pyezvizapi.cloud import transport as _http_transport
 from pyezvizapi.cloud.budget import budgeted_http_call
 from pyezvizapi.cloud.endpoints import API_ENDPOINT_REFRESH_SESSION_ID, API_ENDPOINT_SERVER_INFO
+from pyezvizapi.cloud.identity import resolve_feature_code
 from pyezvizapi.cloud.responses import meta_code, object_section, parse_json, response_summary
 from pyezvizapi.cloud.token import validate_feature_code
 from pyezvizapi.constants import FEATURE_CODE
@@ -51,9 +52,12 @@ def refresh_credentials(
     timeout: int,
     notify: Callable[[], None],
     discover: Callable[[], Any],
+    *,
+    feature_code: str | None = None,
 ) -> None:
     """Rotate an existing login; account/password fallback belongs to the caller."""
-    validate_feature_code(token)
+    selected = resolve_feature_code(feature_code, FEATURE_CODE)
+    validate_feature_code(token, feature_code=selected)
     try:
         response = budgeted_http_call(
             session,
@@ -61,7 +65,7 @@ def refresh_credentials(
             url=f"https://{token['api_url']}{API_ENDPOINT_REFRESH_SESSION_ID}",
             data={
                 "refreshSessionId": token["rf_session_id"],
-                "featureCode": FEATURE_CODE,
+                "featureCode": selected,
                 **profile_for_token(token).registration,
             },
             allow_redirects=False,
@@ -89,7 +93,7 @@ def refresh_credentials(
     ):
         raise PyEzvizError("Invalid refresh credential fields")
     token.update(session_id=session_id, rf_session_id=refresh_id)
-    token["feature_code"] = FEATURE_CODE
+    token["feature_code"] = selected
     synchronize_http_headers(
         session.headers, profile_for_token(token), token["session_id"], scope="session"
     )

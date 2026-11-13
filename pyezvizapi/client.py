@@ -736,6 +736,12 @@ from pyezvizapi.cloud.operations import settings as _settings
 from pyezvizapi.cloud.operations import recordings as _recordings
 
 
+from pyezvizapi.cloud.identity import (
+    feature_code_options as _feature_code_options,
+    resolve_feature_code as _resolve_feature_code,
+)
+
+
 class EzvizClient:
     """Initialize api client object."""
 
@@ -762,9 +768,17 @@ class EzvizClient:
         token: JsonDict | None = None,
         *,
         on_token_updated: Callable[[dict[str, Any]], None] | None = None,
+        feature_code: str | None = None,
     ) -> None:
-        """Initialize the client object."""
-        validate_feature_code(token or {})
+        """Initialize the client, optionally with an application-persisted identity.
+
+        ``feature_code`` is a 32-character lowercase hexadecimal installation ID.
+        When omitted the historical MAC-derived identity is retained. Applications
+        must persist their chosen identity before first login and provide it again
+        with saved credentials; tokens never implicitly override this selection.
+        """
+        self._feature_code = _resolve_feature_code(feature_code, FEATURE_CODE)
+        validate_feature_code(token or {}, feature_code=self._feature_code)
         self._token_lock = RLock()
         self._on_token_updated = on_token_updated
         self.account = account
@@ -785,6 +799,7 @@ class EzvizClient:
             profile_for_token(self._token),
             session_header_for_token(self._token),
             scope="profile",
+            feature_code=self.feature_code,
         )
         self._timeout = timeout
         self._cameras: dict[str, Any] = {}
@@ -795,6 +810,15 @@ class EzvizClient:
         self._device_snapshot: DeviceSnapshot | None = None
         self.mqtt_client: MQTTClient | None = None
         self._debug_request_counters: dict[str, int] = {}
+
+    @property
+    def feature_code(self) -> str:
+        """Return this client's identity for persistence or child transports.
+
+        Applications own durable storage. Pass the same explicit feature code on
+        restoration; a saved token never implicitly changes the chosen identity.
+        """
+        return self._feature_code
 
     def _notify_token_updated(self) -> None:
         """Save rotating credentials before any subsequent discovery can fail."""
@@ -821,7 +845,7 @@ class EzvizClient:
         payload = {
             "account": self.account,
             "password": self.password,
-            "featureCode": FEATURE_CODE,
+            "featureCode": self.feature_code,
             "msgType": "3" if smscode else "0",
             "bizType": "TERMINAL_BIND" if smscode else "",
             "cuName": "SGFzc2lv",  # hassio base64 encoded
@@ -858,7 +882,7 @@ class EzvizClient:
                     "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
                     "username": str(json_result["loginUser"]["username"]),
                     "api_url": str(json_result["loginArea"]["apiDomain"]),
-                    "feature_code": FEATURE_CODE,
+                    "feature_code": self.feature_code,
                 }
             )
             synchronize_http_headers(
@@ -866,6 +890,7 @@ class EzvizClient:
                 profile_for_token(self._token),
                 session_id,
                 scope="session",
+                feature_code=self.feature_code,
             )
             # A fresh login may change profile/region. Never persist old discovery
             # alongside new credentials: a failed lookup must be retried on resume.
@@ -1044,6 +1069,7 @@ class EzvizClient:
                     profile_for_token(self._token),
                     current_session_header(self._session.headers),
                     scope="identity",
+                    feature_code=self.feature_code,
                 )
                 if prepared.url is not None:
                     parts = urlsplit(prepared.url)
@@ -2935,7 +2961,7 @@ class EzvizClient:
             lock_type (str, optional): Optional lock type hint used by some devices.
             bind_code (str, optional): Explicit bind code. When omitted, the latest
                 terminal bind code is used if available, otherwise the legacy
-                ``FEATURE_CODE + user_id`` bind code is used.
+                ``client.feature_code + user_id`` bind code is used.
             terminal_filter_name (str, optional): Terminal name to prefer when
                 resolving an implicit bind code. Defaults to ``"Hassio"`` to match
                 the library login terminal. Pass ``None`` to use the newest valid
@@ -3013,7 +3039,7 @@ class EzvizClient:
                     "Channel-99 migration requires a fresh credential login"
                 )
             self._token["push_profile"] = PUSH_PROFILE
-            self._token["feature_code"] = FEATURE_CODE
+            self._token["feature_code"] = self.feature_code
             for key in ("push_state", "service_urls", "user_id", "username"):
                 cast(dict[str, Any], self._token).pop(key, None)
             synchronize_http_headers(
@@ -3021,6 +3047,7 @@ class EzvizClient:
                 ANDROID_PROFILE,
                 None,
                 scope="profile",
+                feature_code=self.feature_code,
             )
             # Do not refresh a legacy session while presenting the new profile.
             self._token["session_id"] = None
@@ -3034,7 +3061,7 @@ class EzvizClient:
 
     def _login_or_refresh(self, sms_code: int | None = None) -> JsonDict:
         """Login implementation under the shared credential lock."""
-        validate_feature_code(cast(dict[str, Any], self._token))
+        validate_feature_code(cast(dict[str, Any], self._token), feature_code=self.feature_code)
         session_id = self._token.get("session_id")
         refresh_session_id = self._token.get("rf_session_id")
         if session_id and refresh_session_id:
@@ -3045,6 +3072,7 @@ class EzvizClient:
                     bounded_request_timeout(self._timeout),
                     self._notify_token_updated,
                     self.get_service_urls,
+                    feature_code=self.feature_code,
                 )
             except EzvizAuthTokenExpired:
                 if not (self.account and self.password):
@@ -4059,6 +4087,7 @@ class EzvizClient:
                     on_message_callback=on_message_callback,
                     on_token_updated=self._on_token_updated,
                     _token_lock=self._token_lock,
+                    **_feature_code_options(self.feature_code),
                 )
             return self.mqtt_client
 
@@ -4133,6 +4162,7 @@ class EzvizClient:
                 profile_for_token(self._token),
                 recreated_session_header_for_token(self._token),
                 scope="profile",
+                feature_code=self.feature_code,
             )
             if self.mqtt_client is not None:
                 # This factory-owned client shares our replaceable HTTP session.

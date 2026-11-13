@@ -55,6 +55,7 @@ def synchronize_http_headers(
     session_id: object | str | bytes | None = HttpProfile.DEFAULT_SESSION,
     *,
     scope: Literal["profile", "identity", "session"],
+    feature_code: str | None = None,
 ) -> None:
     """Synchronize profile-owned headers without touching endpoint headers.
 
@@ -78,6 +79,8 @@ def synchronize_http_headers(
             headers[name] = profile.headers[name]
         else:
             headers.pop(name, None)
+    if feature_code is not None and scope != "session":
+        headers["featureCode"] = feature_code
     if session_id is None:
         headers.pop("sessionId", None)
     elif session_id is not HttpProfile.DEFAULT_SESSION:

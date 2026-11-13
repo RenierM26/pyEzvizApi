@@ -8,6 +8,8 @@ from collections.abc import Mapping as _StaticMapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
+from pyezvizapi.cloud.identity import feature_code_options as _feature_code_options_static
+
 if TYPE_CHECKING:
     import pyezvizapi._typing.cli as _owner_types
 
@@ -170,7 +172,10 @@ def _local_sdk_cas_device_info(
             if callable(register):
                 register(max_retries=_owner.MAX_RETRIES)
         session = _owner.CasDeviceSession.from_response(
-            _owner.EzvizCAS(client.export_token()).cas_get_encryption(cas_serial)
+            _owner.EzvizCAS(
+                client.export_token(),
+                **_feature_code_options_static(getattr(client, "feature_code", None)),
+            ).cas_get_encryption(cas_serial)
         )
         return _owner.EzvizCasDeviceInfo(
             serial=serial,

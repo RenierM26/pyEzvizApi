@@ -19,6 +19,7 @@ from Crypto.Cipher import AES
 from cryptography import x509
 import xmltodict
 
+from pyezvizapi.cloud.identity import resolve_feature_code
 from pyezvizapi.cloud.token import validate_feature_code
 from pyezvizapi.constants import FEATURE_CODE, XOR_KEY
 from pyezvizapi.exceptions import InvalidHost, PyEzvizError
@@ -400,8 +401,10 @@ class EzvizCAS:
         *,
         client_type: int = CAS_ANDROID_CLIENT_TYPE,
         verify_tls_certificate: bool = False,
+        feature_code: str | None = None,
     ) -> None:
         """Initialize the client object."""
+        self._feature_code = resolve_feature_code(feature_code, FEATURE_CODE)
         self._session = None
         self._client_type = client_type
         self._verify_tls_certificate = verify_tls_certificate
@@ -413,7 +416,7 @@ class EzvizCAS:
         }
         if not token or "service_urls" not in token:
             raise PyEzvizError("Missing service_urls in token; call EzvizClient.login() first")
-        validate_feature_code(token)
+        validate_feature_code(token, feature_code=self._feature_code)
         self._service_urls: dict[str, Any] = token["service_urls"]
 
     def _cloud_address(self) -> tuple[str, int]:
@@ -487,7 +490,7 @@ class EzvizCAS:
             _build_operation_code_request(
                 session_id=cast(str | None, self._token["session_id"]),
                 devserial=devserial,
-                hardware_code=FEATURE_CODE,
+                hardware_code=self._feature_code,
                 client_type=self._client_type,
             ),
             host=host,
@@ -519,7 +522,7 @@ class EzvizCAS:
             _build_operation_code_request(
                 session_id=cast(str | None, self._token["session_id"]),
                 devserial=devserial,
-                hardware_code=FEATURE_CODE,
+                hardware_code=self._feature_code,
                 client_type=self._client_type,
             ),
             host=host,

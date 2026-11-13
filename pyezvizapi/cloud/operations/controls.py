@@ -915,7 +915,7 @@ def set_video_enc(
             "isEncrypt": enable,
             "oldPassword": old_password,
             "password": new_password,
-            "featureCode": _owner.FEATURE_CODE,
+            "featureCode": self.feature_code,
             "validateCode": camera_verification_code,
             "msgType": -1,
         },

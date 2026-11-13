@@ -431,7 +431,7 @@ def get_cam_key(
                 "clientNo": "web_site",
                 "clientType": 3,
                 "netType": "WIFI",
-                "featureCode": _owner.FEATURE_CODE,
+                "featureCode": self.feature_code,
                 "sessionId": self._token.get("session_id"),
             },
             retry_401=True,

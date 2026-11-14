@@ -5,6 +5,10 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.3.0 - 2026-11-14
+
+See [release notes](docs/release-2.3.0.md).
+
 ### Added
 
 - Add application-independent audio, capability, port-security, linked-tracking,
@@ -31,7 +35,7 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
   conversion where compatible, and retain distinct chime/voice/microphone rules.
 - Explicitly close decoded images and cropped frames after multi-lens processing;
   preserve decode fallback and error propagation without changing global Pillow
-  policy. No new device commands or release-version changes.
+  policy. No new device commands are introduced by the refactor.
 
 ## v2.2.0 - 2026-11-14
 

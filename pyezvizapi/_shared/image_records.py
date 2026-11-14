@@ -147,7 +147,7 @@ def decode_image_records(
             if not blocks:
                 raise PyEzvizError("Invalid encrypted image payload")
             records = tuple(ImageRecord(block, envelope="legacy") for block in blocks)
-        elif mode is ImageKeyMode.HEX:
+        elif mode is ImageKeyMode.HEX and not is_clear_image(image_data):
             records = (ImageRecord(image_data, envelope="legacy"),)
         else:
             data, detection = _detection_footer(image_data)
@@ -155,7 +155,9 @@ def decode_image_records(
     decoded: list[ImageRecord] = []
     for record in records:
         plain = record.image_data
-        if plain.startswith(HIK_ENCRYPTION_HEADER) or mode is ImageKeyMode.HEX:
+        if not is_clear_image(plain) and (
+            plain.startswith(HIK_ENCRYPTION_HEADER) or mode is ImageKeyMode.HEX
+        ):
             if (
                 record.envelope == "legacy"
                 and mode is ImageKeyMode.TEXT

@@ -373,6 +373,37 @@ def test_legacy_processing_hook_still_observes_clear_images_with_a_key(monkeypat
     assert calls == [plain]
 
 
+@pytest.mark.parametrize("kind", [*KINDS, "raw"])
+def test_clear_images_bypass_configured_hex_mode_without_any_key(monkeypatch, kind):
+    plain = jpeg()
+    payload = plain if kind == "raw" else envelope(kind, [plain])
+    assert decode_image_records(payload, key_mode=ImageKeyMode.HEX)[0].image_data == plain
+    assert process_image_bytes(payload, None, 1, 1, key_mode=ImageKeyMode.HEX) == plain
+    client, calls = client_with_image(monkeypatch, payload)
+    assert (
+        client.download_alarm_image("https://image.example.test", key_mode=ImageKeyMode.HEX)
+        == plain
+    )
+    assert not calls
+
+
+@pytest.mark.parametrize("kind", ["mutichhikpic", "hiklittlepic", "mutichhiklit"])
+@pytest.mark.parametrize("mode,key", [(ImageKeyMode.TEXT, PASSWORD), (ImageKeyMode.HEX, HEX_KEY)])
+def test_mixed_clear_and_encrypted_records_use_keys_only_where_needed(monkeypatch, kind, mode, key):
+    first, second = jpeg((8, 8)), jpeg((10, 8))
+    payload = envelope(kind, [first, encrypt(second, key, mode)])
+    assert [record.image_data for record in decode_image_records(payload, key, key_mode=mode)] == [
+        first,
+        second,
+    ]
+    client, calls = client_with_image(monkeypatch, payload)
+    assert (
+        client.download_alarm_image("https://image.example.test", encryption_key=key, key_mode=mode)
+        == first + second
+    )
+    assert not calls
+
+
 def test_unsupported_key_mode_fails(monkeypatch):
     plain = jpeg()
     with pytest.raises(PyEzvizError, match="mode"):

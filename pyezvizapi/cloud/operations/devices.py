@@ -496,10 +496,18 @@ def download_alarm_image(
     except ValueError as err:
         raise _owner.PyEzvizError("Unsupported image key mode") from err
     records = parse_image_envelope(image_data)
-    needs_key = key_mode == ImageKeyMode.HEX or (
-        any(record.image_data.startswith(_owner.HIK_ENCRYPTION_HEADER) for record in records)
+    needs_key = (
+        any(
+            not is_clear_image(record.image_data)
+            and (
+                key_mode is ImageKeyMode.HEX
+                or record.image_data.startswith(_owner.HIK_ENCRYPTION_HEADER)
+            )
+            for record in records
+        )
         if records is not None
-        else not is_clear_image(image_data) and _owner.HIK_ENCRYPTION_HEADER in image_data
+        else not is_clear_image(image_data)
+        and (key_mode is ImageKeyMode.HEX or _owner.HIK_ENCRYPTION_HEADER in image_data)
     )
     if not needs_key and not is_image_envelope(image_data):
         return image_data

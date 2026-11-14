@@ -15,7 +15,6 @@ from pyezvizapi._shared.image_crypto import ImageKeyMode
 from pyezvizapi._shared.image_records import (
     ImageRecord,
     decode_image_records as _decode_image_payload,
-    is_clear_image,
     is_image_envelope,
 )
 from pyezvizapi.exceptions import PyEzvizError
@@ -86,11 +85,7 @@ def process_image_bytes(
         if image_index:
             raise PyEzvizError("Image occurrence requires channel-indexed records")
         # Keep this compatibility hook for callers instrumenting legacy decryption.
-        decrypted = (
-            decrypt_image(image_data, password)
-            if password and not is_clear_image(image_data)
-            else image_data
-        )
+        decrypted = decrypt_image(image_data, password) if password else image_data
         segments = extract_jpeg_segments(decrypted) or [decrypted]
     if len(segments) == 1 and lens_total > 1:
         segments = split_composite_image(segments[0], lens_total)

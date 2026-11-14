@@ -13,6 +13,7 @@ from pyezvizapi._shared.image_crypto import ImageKeyMode, decrypt_image, decrypt
 from pyezvizapi._shared.image_records import parse_image_envelope
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import HIK_ENCRYPTION_HEADER
+from pyezvizapi.devices import images
 from pyezvizapi.devices.images import decode_image_records, process_image_bytes
 from pyezvizapi.exceptions import PyEzvizError
 
@@ -357,6 +358,19 @@ def test_clear_jpeg_metadata_magic_does_not_trigger_decryption_or_key_lookup(mon
     client, calls = client_with_image(monkeypatch, plain)
     assert client.download_alarm_image("https://image.example.test") == plain
     assert not calls
+
+
+def test_legacy_processing_hook_still_observes_clear_images_with_a_key(monkeypatch):
+    plain, calls = jpeg(), []
+    original = images.decrypt_image
+
+    def observed(data, key):
+        calls.append(data)
+        return original(data, key)
+
+    monkeypatch.setattr(images, "decrypt_image", observed)
+    assert process_image_bytes(plain, PASSWORD, 1, 1) == plain
+    assert calls == [plain]
 
 
 def test_unsupported_key_mode_fails(monkeypatch):

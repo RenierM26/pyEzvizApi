@@ -48,6 +48,11 @@ def decrypt_image(input_data: bytes, password: str) -> bytes:
         if len(input_data) < min_length:
             raise PyEzvizError("Invalid image data")
 
+        # Do not interpret encryption-like bytes inside a clear JPEG/PNG's
+        # metadata as a legacy encrypted block. Keep the public decrypt hook.
+        if input_data.startswith((b"\xff\xd8", b"\x89PNG\r\n\x1a\n")):
+            return input_data
+
         header_index = input_data.find(HIK_ENCRYPTION_HEADER)
         if header_index == -1:
             _LOGGER.debug("Image header doesn't contain %s", HIK_ENCRYPTION_HEADER)

@@ -120,13 +120,8 @@ def test_encryption_magic_inside_ciphertext_is_not_a_record_boundary():
     key = PASSWORD.ljust(16, "\x00").encode()
     first_cipher = HIK_ENCRYPTION_HEADER
     padding_plain = bytes([16]) * 16
-    cipher = AES.new(key, AES.MODE_ECB)
-    second_cipher = cipher.encrypt(
-        bytes(a ^ b for a, b in zip(padding_plain, first_cipher, strict=True))
-    )
-    first_plain = bytes(
-        a ^ b for a, b in zip(cipher.decrypt(first_cipher), b"01234567" + b"\x00" * 8, strict=True)
-    )
+    second_cipher = AES.new(key, AES.MODE_CBC, first_cipher).encrypt(padding_plain)
+    first_plain = AES.new(key, AES.MODE_CBC, b"01234567" + b"\x00" * 8).decrypt(first_cipher)
     hash_header = encrypt(b"")[:48]
     framed = PREFIX + record(hash_header + first_cipher + second_cipher)
     assert decrypt_image(framed, PASSWORD) == first_plain

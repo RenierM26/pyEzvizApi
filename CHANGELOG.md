@@ -5,6 +5,13 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Fixed
+
+- Preserve the primary HTTP error cause when both modern PUT and legacy POST
+  switch endpoints fail. Consumers can distinguish primary permission denials
+  and gateway timeouts without mistaking the fallback status for the first
+  request. Fallback success, API errors and cache update semantics are unchanged.
+
 ## v2.1.0 - 2026-11-14
 
 Release preparation; publication is pending. See [release notes](docs/release-2.1.0.md).

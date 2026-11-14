@@ -84,7 +84,9 @@ def set_switch(
                 serial, switch_type, enable, channel, max_retries=max_retries
             )
         except _owner.PyEzvizError:
-            raise first_error from None
+            # Keep the primary transport cause, not the legacy failure context.
+            # Consumers need its HTTP status even when the fallback also fails.
+            raise first_error from first_error.__cause__
 
 
 def switch_status(

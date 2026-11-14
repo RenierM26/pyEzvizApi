@@ -5,8 +5,26 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Added
+
+- Decode clear or encrypted `hikpic`, `hiklittlepic` and `mutichhiklit`-family
+  envelopes alongside `mutichhikpic`, with route-specific declared bounds and
+  auxiliary-data handling. Structured `decode_image_records` output preserves
+  channel IDs, repeated records, opaque headers/trailers and bounded detection
+  footer data; existing bytes-returning APIs remain available.
+- Add explicit `ImageKeyMode.HEX` for 16-byte raw hexadecimal image keys and
+  caller-owned text `key_candidates` selected by the embedded hash. No key-mode
+  guessing, default-password fallback, credential persistence or key rotation is
+  performed. See [image decoding](docs/image-decryption.md) for support limits.
+
 ### Fixed
 
+- Unpack clear multi-image envelopes and select concatenated/composite JPEG
+  lenses even without a password. Channel-indexed records require an exact
+  channel/occurrence instead of silently returning another lens.
+- Size text AES keys after UTF-8 encoding, matching the app's 16-byte truncation
+  and zero padding. ASCII behavior is unchanged; non-ASCII device credential
+  acceptance remains firmware-dependent and is not claimed by synthetic tests.
 - Parse length-delimited `mutichhikpic` image records before AES decryption so
   opaque inter-record bytes and trailers are not mistaken for ciphertext. Validate
   record/block bounds, encryption magic and alignment; retain password and PKCS7

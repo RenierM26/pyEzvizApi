@@ -13,6 +13,8 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from pyezvizapi._shared.image_crypto import ImageKeyMode
+    from pyezvizapi._shared.image_records import ImageRecord
     from pyezvizapi.client import EzvizClient
     from pyezvizapi.cloud.cas import EzvizCAS
     from pyezvizapi.constants import (
@@ -821,6 +823,8 @@ if TYPE_CHECKING:
     from .streaming.local.recordings import query_lan_recordings
 
 _EXPORTS = {
+    "ImageKeyMode": "_shared.image_crypto",
+    "ImageRecord": "_shared.image_records",
     "CameraState": "devices.snapshot",
     "DetectorState": "devices.snapshot",
     "DeviceCapabilities": "devices.snapshot",

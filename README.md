@@ -19,6 +19,9 @@ multi-lens image helpers, with compatible focused modules and field-preserving
 updates. Image processing uses the optional `images` extra (Pillow).
 See the [2.3.0 release notes](docs/release-2.3.0.md) for scope and qualification.
 
+For current unreleased envelope, explicit key-mode and channel-aware image APIs,
+see [cloud image decoding](docs/image-decryption.md).
+
 
 ## Upgrading to 2.0
 

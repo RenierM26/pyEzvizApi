@@ -11,6 +11,9 @@ from pyezvizapi.constants import HIK_ENCRYPTION_HEADER
 from pyezvizapi.exceptions import PyEzvizError
 
 _LOGGER = logging.getLogger("pyezvizapi.utils")
+_MULTI_IMAGE_MAGIC = b"mutichhikpic"
+_MULTI_IMAGE_PREFIX_SIZE = 14
+_MULTI_IMAGE_RECORD_SIZE = 12
 
 
 def decrypt_image(input_data: bytes, password: str) -> bytes:
@@ -30,19 +33,22 @@ def decrypt_image(input_data: bytes, password: str) -> bytes:
     header_len = len(HIK_ENCRYPTION_HEADER)
     min_length = header_len + 32  # header + md5 hash
 
-    if len(input_data) < min_length:
-        raise PyEzvizError("Invalid image data")
-
-    header_index = input_data.find(HIK_ENCRYPTION_HEADER)
-    if header_index == -1:
-        _LOGGER.debug("Image header doesn't contain %s", HIK_ENCRYPTION_HEADER)
-        return input_data
-
-    if header_index:
-        _LOGGER.debug("Image header found at offset %s, trimming preamble", header_index)
-        input_data = input_data[header_index:]
+    # Length-delimited envelopes must retain their prefix until block splitting.
+    # Searching/trimming at the first encryption magic loses record boundaries.
+    if not input_data.startswith(_MULTI_IMAGE_MAGIC):
         if len(input_data) < min_length:
-            raise PyEzvizError("Invalid image data after trimming preamble")
+            raise PyEzvizError("Invalid image data")
+
+        header_index = input_data.find(HIK_ENCRYPTION_HEADER)
+        if header_index == -1:
+            _LOGGER.debug("Image header doesn't contain %s", HIK_ENCRYPTION_HEADER)
+            return input_data
+
+        if header_index:
+            _LOGGER.debug("Image header found at offset %s, trimming preamble", header_index)
+            input_data = input_data[header_index:]
+            if len(input_data) < min_length:
+                raise PyEzvizError("Invalid image data after trimming preamble")
 
     hash_end = header_len + 32
     blocks = _split_encrypted_blocks(input_data, header_len, min_length)
@@ -57,8 +63,43 @@ def decrypt_image(input_data: bytes, password: str) -> bytes:
     return b"".join(decrypted_parts)
 
 
+def _split_framed_images(data: bytes, header_len: int, min_length: int) -> list[bytes]:
+    """Extract exact encrypted extents from a length-delimited multi-image envelope.
+
+    The two outer suffix bytes, four record metadata bytes and length-bounded
+    trailers are opaque. No frame-count, version or fixed trailer-size semantics
+    are inferred from the observed format.
+    """
+    cursor = _MULTI_IMAGE_PREFIX_SIZE
+    blocks: list[bytes] = []
+    while cursor < len(data):
+        if len(data) - cursor < _MULTI_IMAGE_RECORD_SIZE:
+            raise PyEzvizError("Invalid multi-image framing: truncated record header")
+        remaining = int.from_bytes(data[cursor + 4 : cursor + 8], "big")
+        encrypted_len = int.from_bytes(data[cursor + 8 : cursor + 12], "big")
+        block_start = cursor + _MULTI_IMAGE_RECORD_SIZE
+        block_end = block_start + encrypted_len
+        record_end = cursor + 8 + remaining
+        if (
+            encrypted_len < min_length + AES.block_size
+            or (encrypted_len - min_length) % AES.block_size
+        ):
+            raise PyEzvizError("Invalid multi-image framing: encrypted block size")
+        if record_end < block_end or record_end > len(data):
+            raise PyEzvizError("Invalid multi-image framing: record bounds")
+        if data[block_start : block_start + header_len] != HIK_ENCRYPTION_HEADER:
+            raise PyEzvizError("Invalid multi-image framing: missing encryption header")
+        blocks.append(data[block_start:block_end])
+        cursor = record_end
+    if not blocks:
+        raise PyEzvizError("Invalid multi-image framing: missing records")
+    return blocks
+
+
 def _split_encrypted_blocks(data: bytes, header_len: int, min_length: int) -> list[bytes]:
-    """Split concatenated hikencodepicture segments into individual blocks."""
+    """Split length-delimited or legacy concatenated encryption blocks."""
+    if data.startswith(_MULTI_IMAGE_MAGIC):
+        return _split_framed_images(data, header_len, min_length)
     blocks: list[bytes] = []
     cursor = 0
     data_len = len(data)

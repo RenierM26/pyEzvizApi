@@ -5,6 +5,10 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.4.0 - 2026-11-14
+
+See [release notes](docs/release-2.4.0.md).
+
 ### Added
 
 - Decode clear or encrypted `hikpic`, `hiklittlepic` and `mutichhiklit`-family

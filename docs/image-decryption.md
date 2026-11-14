@@ -87,8 +87,10 @@ disk-cache path encodes JPEG. Decoder format preservation is not a claim that
 the camera or cloud sends PNGs. Byte payloads are omitted from record reprs. A channel-indexed
 envelope requires an exact channel and occurrence; missing values raise
 `PyEzvizError`. An unspecified zero channel retains positional compatibility.
-Unindexed raw images retain positional clamping and vertical composite cropping
-in `process_image_bytes`. Unlike the old helper, clear images are unpacked and
+Unindexed raw images retain positional clamping; only JPEGs undergo heuristic
+vertical composite cropping in `process_image_bytes`. Non-JPEG images remain
+unchanged, without guessing lens splits, color conversion or transcoding.
+Unlike the old helper, clear images are unpacked and
 selected even when no password is configured. A single channel-indexed record is
 not heuristically split into additional channels.
 

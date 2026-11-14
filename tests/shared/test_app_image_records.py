@@ -463,6 +463,23 @@ def test_png_and_jpeg_records_keep_formats_and_channel_identity(png_with_jpeg_ma
     assert process_image_bytes(payload, PASSWORD, 2, 2) == other
 
 
+@pytest.mark.parametrize("image_mode", ["RGBA", "P"])
+@pytest.mark.parametrize("kind", ["raw", "hikpic", "unindexed-multi"])
+@pytest.mark.parametrize("password", [None, PASSWORD])
+def test_nonjpeg_images_are_not_guessed_to_be_jpeg_composites(image_mode, kind, password):
+    with Image.new(image_mode, (16, 16)) as image, BytesIO() as output:
+        image.save(output, format="PNG")
+        plain = output.getvalue()
+    if kind == "raw":
+        payload = plain
+    elif kind == "hikpic":
+        payload = envelope(kind, [plain])
+    else:
+        payload = envelope("mutichhikpic", [plain], [0])
+    for lens in (1, 2):
+        assert process_image_bytes(payload, password, lens, 2) == plain
+
+
 def test_unsupported_key_mode_fails(monkeypatch):
     plain = jpeg()
     with pytest.raises(PyEzvizError, match="mode"):

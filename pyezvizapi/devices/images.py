@@ -93,7 +93,7 @@ def process_image_bytes(
         segments = (extract_jpeg_segments(decrypted) if decrypted.startswith(JPEG_SOI) else []) or [
             decrypted
         ]
-    if len(segments) == 1 and lens_total > 1:
+    if len(segments) == 1 and lens_total > 1 and segments[0].startswith(JPEG_SOI):
         segments = split_composite_image(segments[0], lens_total)
     return segments[min(lens_index - 1, len(segments) - 1)]
 

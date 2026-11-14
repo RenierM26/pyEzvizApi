@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from enum import StrEnum
 from hashlib import md5
 import logging
 
@@ -14,6 +16,13 @@ _LOGGER = logging.getLogger("pyezvizapi.utils")
 _MULTI_IMAGE_MAGIC = b"mutichhikpic"
 _MULTI_IMAGE_PREFIX_SIZE = 14
 _MULTI_IMAGE_RECORD_SIZE = 12
+
+
+class ImageKeyMode(StrEnum):
+    """Explicit app credential representation; no automatic mode fallback."""
+
+    TEXT = "text"
+    HEX = "hex"
 
 
 def decrypt_image(input_data: bytes, password: str) -> bytes:
@@ -38,6 +47,11 @@ def decrypt_image(input_data: bytes, password: str) -> bytes:
     if not input_data.startswith(_MULTI_IMAGE_MAGIC):
         if len(input_data) < min_length:
             raise PyEzvizError("Invalid image data")
+
+        # Do not interpret encryption-like bytes inside a clear JPEG/PNG's
+        # metadata as a legacy encrypted block. Keep the public decrypt hook.
+        if input_data.startswith((b"\xff\xd8", b"\x89PNG\r\n\x1a\n")):
+            return input_data
 
         header_index = input_data.find(HIK_ENCRYPTION_HEADER)
         if header_index == -1:
@@ -142,7 +156,12 @@ def _decrypt_single_block(block: bytes, password: str, header_len: int, hash_end
     if not ciphertext:
         raise PyEzvizError("Ciphertext too short after alignment adjustment")
 
-    key = str.encode(password.ljust(16, "\u0000")[:16])
+    key = password.encode()[:16].ljust(16, b"\x00")
+    return _decrypt_ciphertext(ciphertext, key)
+
+
+def _decrypt_ciphertext(ciphertext: bytes, key: bytes) -> bytes:
+    """CBC and strict PKCS7 common to text and explicit raw-key image modes."""
     iv_code = bytes([48, 49, 50, 51, 52, 53, 54, 55, 0, 0, 0, 0, 0, 0, 0, 0])
     cipher = AES.new(key, AES.MODE_CBC, iv_code)
 
@@ -162,6 +181,42 @@ def _decrypt_single_block(block: bytes, password: str, header_len: int, hash_end
         output_data.extend(block_chunk)
 
     return bytes(output_data)
+
+
+def decrypt_image_block(
+    block: bytes,
+    password: str | None = None,
+    *,
+    key_mode: ImageKeyMode | str = ImageKeyMode.TEXT,
+    key_candidates: Sequence[str] = (),
+) -> bytes:
+    """Decrypt an exact bounded record using explicit, caller-owned credentials."""
+    if len(block) < 64 or (len(block) - 48) % AES.block_size:
+        raise PyEzvizError("Invalid encrypted image block bounds")
+    if isinstance(key_candidates, (str, bytes)):
+        raise PyEzvizError("Image key candidates must be a sequence of keys")
+    keys = ([password] if password is not None else []) + list(key_candidates)
+    if any(not isinstance(key, str) or not key for key in keys):
+        raise PyEzvizError("Image keys must be nonempty text")
+    keys = list(dict.fromkeys(keys))
+    try:
+        mode = ImageKeyMode(key_mode)
+    except ValueError as err:
+        raise PyEzvizError("Unsupported image key mode") from err
+    if mode is ImageKeyMode.HEX:
+        if (
+            len(keys) != 1
+            or len(keys[0]) != 32
+            or any(char not in "0123456789abcdefABCDEF" for char in keys[0])
+        ):
+            raise PyEzvizError("Hex image mode requires exactly one 16-byte hexadecimal key")
+        return _decrypt_ciphertext(block[48:], bytes.fromhex(keys[0]))
+    if not block.startswith(HIK_ENCRYPTION_HEADER):
+        raise PyEzvizError("Invalid encrypted image header")
+    for key in keys:
+        if return_password_hash(key).encode() == block[16:48]:
+            return _decrypt_ciphertext(block[48:], key.encode()[:16].ljust(16, b"\x00"))
+    raise PyEzvizError("No supplied image key matches the image hash")
 
 
 def return_password_hash(password: str) -> str:

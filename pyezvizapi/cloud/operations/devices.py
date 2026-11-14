@@ -12,6 +12,14 @@ from collections.abc import Mapping as _StaticMapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
+from pyezvizapi._shared.image_crypto import ImageKeyMode
+from pyezvizapi._shared.image_records import (
+    decode_image_records,
+    is_clear_image,
+    is_image_envelope,
+    parse_image_envelope,
+)
+
 if TYPE_CHECKING:
     import pyezvizapi._typing.client as _owner_types
 
@@ -469,22 +477,54 @@ def download_alarm_image(
     decrypt: bool,
     max_retries: int,
     _owner: _ModuleType,
+    key_mode: ImageKeyMode | str = ImageKeyMode.TEXT,
+    key_candidates: tuple[str, ...] = (),
 ) -> bytes:
     """Download an alarm image and decrypt EZVIZ/Hik encrypted payloads.
 
-    Encrypted alarm snapshots contain the ``hikencodepicture`` header. When
-    that header is present and no explicit ``encryption_key`` is supplied,
-    ``serial`` is used to fetch the camera encryption key from the EZVIZ API.
+    Decode recognized envelopes even without encryption; only encrypted records
+    need credentials. Explicit candidates suppress cloud key acquisition and hex
+    mode never falls back to text or a fetched key. Legacy default patch hooks
+    remain supported. No credential or decoded-image cache is owned here.
     """
     resp = self._http_request("GET", image_url, retry_401=False, max_retries=0)
     image_data = resp.content
-    if not decrypt or not image_data or _owner.HIK_ENCRYPTION_HEADER not in image_data:
+    if not decrypt or not image_data:
+        return image_data
+    try:
+        key_mode = ImageKeyMode(key_mode)
+    except ValueError as err:
+        raise _owner.PyEzvizError("Unsupported image key mode") from err
+    records = parse_image_envelope(image_data)
+    needs_key = (
+        any(
+            not is_clear_image(record.image_data)
+            and (
+                key_mode is ImageKeyMode.HEX
+                or record.image_data.startswith(_owner.HIK_ENCRYPTION_HEADER)
+            )
+            for record in records
+        )
+        if records is not None
+        else not is_clear_image(image_data)
+        and (key_mode is ImageKeyMode.HEX or _owner.HIK_ENCRYPTION_HEADER in image_data)
+    )
+    if not needs_key and not is_image_envelope(image_data):
         return image_data
     key = encryption_key
-    if key is None:
+    if needs_key and key is None and not key_candidates:
         if not serial:
             raise _owner.PyEzvizError(
                 "Camera serial or encryption key is required to decrypt image"
             )
+        if key_mode == ImageKeyMode.HEX:
+            raise _owner.PyEzvizError("Hex image mode requires an explicitly supplied key")
         key = self.get_cam_key(serial, smscode=smscode, max_retries=max_retries)
+    if records is not None or key_mode != ImageKeyMode.TEXT or key_candidates:
+        return b"".join(
+            record.image_data
+            for record in decode_image_records(
+                image_data, key, key_mode=key_mode, key_candidates=key_candidates
+            )
+        )
     return _owner.decrypt_image(image_data, key)

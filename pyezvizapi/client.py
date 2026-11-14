@@ -272,6 +272,7 @@ from pyezvizapi.streaming.selection import (
     fallback_stream_source,
     select_stream_source,
 )
+from pyezvizapi._shared.image_crypto import ImageKeyMode
 from pyezvizapi._shared.utils import convert_to_dict, decrypt_image
 
 _LOGGER = logging.getLogger(__name__)
@@ -2220,12 +2221,18 @@ class EzvizClient:
         smscode: str | int | None = None,
         decrypt: bool = True,
         max_retries: int = 0,
+        key_mode: ImageKeyMode | str = ImageKeyMode.TEXT,
+        key_candidates: tuple[str, ...] = (),
     ) -> bytes:
         """Download an alarm image and decrypt EZVIZ/Hik encrypted payloads.
 
         Encrypted alarm snapshots contain the ``hikencodepicture`` header. When
         that header is present and no explicit ``encryption_key`` is supplied,
-        ``serial`` is used to fetch the camera encryption key from the EZVIZ API.
+        ``serial`` fetches the camera key unless caller-owned ``key_candidates``
+        are supplied. ``key_mode="hex"`` requires an explicit 16-byte hex key;
+        text mode is never guessed from key appearance. Recognized clear image
+        envelopes are unpacked without fetching a key. ``decrypt=False`` returns
+        the untouched HTTP body, including any envelope or encrypted bytes.
         """
         return _devices.download_alarm_image(
             self,
@@ -2236,6 +2243,8 @@ class EzvizClient:
             decrypt=decrypt,
             max_retries=max_retries,
             _owner=_sys.modules[__name__],
+            key_mode=key_mode,
+            key_candidates=key_candidates,
         )
 
     def probe_local_stream(

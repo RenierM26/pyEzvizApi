@@ -143,7 +143,10 @@ def test_concatenated_and_composite_lenses():
             sizes.append(decoded.size)
     assert sizes == [(8, 8), (8, 9)]
     assert images.split_composite_image(b"invalid", 2) == [b"invalid"]
-    assert images.process_image_bytes(jpeg, None, 1, 2) == jpeg
+    selected = images.process_image_bytes(jpeg, None, 1, 2)
+    with Image.open(BytesIO(selected)) as decoded:
+        selected_size = decoded.size
+    assert selected_size == (8, 8)
 
 
 @pytest.mark.parametrize("cached", [False, True])

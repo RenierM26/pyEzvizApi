@@ -3,12 +3,21 @@
 Requires the ``images`` extra. Call CPU-bound decoding from a worker in async apps.
 """
 
+from collections.abc import Sequence
 from contextlib import ExitStack, closing
+from dataclasses import replace
 from io import BytesIO
 import logging
 
 from PIL import Image as PilImage, UnidentifiedImageError
 
+from pyezvizapi._shared.image_crypto import ImageKeyMode
+from pyezvizapi._shared.image_records import (
+    ImageRecord,
+    decode_image_records as _decode_image_payload,
+    is_image_envelope,
+)
+from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.utils import decrypt_image
 
 _LOGGER = logging.getLogger(__name__)
@@ -16,15 +25,75 @@ JPEG_SOI = b"\xff\xd8"
 JPEG_EOI = b"\xff\xd9"
 
 
+def decode_image_records(
+    image_data: bytes,
+    password: str | None = None,
+    *,
+    key_mode: ImageKeyMode | str = ImageKeyMode.TEXT,
+    key_candidates: Sequence[str] = (),
+) -> tuple[ImageRecord, ...]:
+    """Return ordered, channel-aware decoded images and retained auxiliary data."""
+    result: list[ImageRecord] = []
+    for record in _decode_image_payload(
+        image_data, password, key_mode=key_mode, key_candidates=key_candidates
+    ):
+        segments = (
+            extract_jpeg_segments(record.image_data)
+            if record.image_data.startswith(JPEG_SOI)
+            else []
+        )
+        if segments:
+            result.extend(replace(record, image_data=part) for part in segments)
+        else:
+            result.append(record)
+    return tuple(result)
+
+
 def process_image_bytes(
-    image_data: bytes, password: str | None, lens_index: int, lens_total: int
+    image_data: bytes,
+    password: str | None,
+    lens_index: int,
+    lens_total: int,
+    *,
+    key_mode: ImageKeyMode | str = ImageKeyMode.TEXT,
+    key_candidates: Sequence[str] = (),
+    image_index: int = 0,
 ) -> bytes:
-    """Pure worker-side decryption, JPEG scanning, decoding and lens cropping."""
-    if not password:
-        return image_data
-    decrypted = decrypt_image(image_data, password)
-    segments = extract_jpeg_segments(decrypted) or [decrypted]
-    if len(segments) == 1 and lens_total > 1:
+    """Select an image without confusing channel identity with record position.
+
+    Clear images are unpacked too. Existing unindexed raw JPEGs keep positional
+    selection and composite cropping; indexed envelopes require the named channel.
+    """
+    if any(
+        type(value) is not int or value < minimum
+        for value, minimum in ((lens_index, 1), (lens_total, 1), (image_index, 0))
+    ):
+        raise PyEzvizError("Image indexes and lens count must be valid integers")
+    try:
+        mode = ImageKeyMode(key_mode)
+    except ValueError as err:
+        raise PyEzvizError("Unsupported image key mode") from err
+    if is_image_envelope(image_data) or key_candidates or mode is ImageKeyMode.HEX:
+        records = decode_image_records(
+            image_data, password, key_mode=mode, key_candidates=key_candidates
+        )
+        if any(record.channel_id is not None for record in records):
+            matches = [record for record in records if record.channel_id == lens_index]
+            if image_index >= len(matches):
+                raise PyEzvizError("Requested image channel or occurrence is not present")
+            return matches[image_index].image_data
+        if image_index:
+            raise PyEzvizError("Image occurrence requires channel-indexed records")
+        segments = [record.image_data for record in records]
+    else:
+        if image_index:
+            raise PyEzvizError("Image occurrence requires channel-indexed records")
+        # Keep this compatibility hook for callers instrumenting legacy decryption.
+        decrypted = decrypt_image(image_data, password) if password else image_data
+        segments = (extract_jpeg_segments(decrypted) if decrypted.startswith(JPEG_SOI) else []) or [
+            decrypted
+        ]
+    if len(segments) == 1 and lens_total > 1 and segments[0].startswith(JPEG_SOI):
         segments = split_composite_image(segments[0], lens_total)
     return segments[min(lens_index - 1, len(segments) - 1)]
 

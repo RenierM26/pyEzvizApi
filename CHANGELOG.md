@@ -5,6 +5,15 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Fixed
+
+- Parse length-delimited `mutichhikpic` image records before AES decryption so
+  opaque inter-record bytes and trailers are not mistaken for ciphertext. Validate
+  record/block bounds, encryption magic and alignment; retain password and PKCS7
+  padding checks and fail the whole response on malformed later frames. Unknown
+  metadata and declared trailer bytes remain opaque; no fixed trimming or padding
+  bypass is used. Legacy unframed image handling remains compatible.
+
 ## v2.3.0 - 2026-11-14
 
 See [release notes](docs/release-2.3.0.md).

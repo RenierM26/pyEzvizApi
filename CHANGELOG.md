@@ -5,6 +5,15 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Fixed
+
+- Select the explicitly advertised `Video` resource for `BDoorBell` intercom
+  gate/door actions instead of an unrelated first resource such as `global`.
+  Reject ambiguous intercom video routes before IO; retain legacy routing for
+  other device categories or discovery data without a `Video` entry. Candidate
+  correction for [#432](https://github.com/RenierM26/pyEzvizApi/issues/432);
+  physical HPD7 confirmation remains pending.
+
 ### Added
 
 - Support opt-in persisted client identities through `feature_code` on

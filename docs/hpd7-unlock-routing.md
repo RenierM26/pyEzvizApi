@@ -1,4 +1,4 @@
-# HPD7 gate/door unlock routing (issue #268)
+# HPD7 gate/door unlock routing (issues #268 and #432)
 
 ## Confirmed library defect
 
@@ -18,7 +18,8 @@ physical HPD7 confirmation is still pending.
 The correction prefers a nonempty string `resourceIdentifier`. It retains the
 old `resourceId` fallback for legacy callers that stored the namespace there.
 It applies to all four camera lock/unlock wrappers because they share routing.
-No bind-code, token, lock-number, or resource-selection policy is changed.
+The original #268 correction changed no bind-code, token, lock-number, or
+resource-selection policy; the later #432 selection change is described below.
 
 ## Official app evidence
 
@@ -54,8 +55,33 @@ token, rejected server response, and legacy fallback with token/type retained.
 PR #404 independently fixes false success reporting for rejected controls.
 This routing fix is based on that PR so a rejected request remains an error.
 
-The wrapper still selects the first resource entry. On a multi-resource device,
-check that its identifier/index are the desired relay's route. The low-level
+## Multi-resource intercom discovery (issue #432)
+
+The #432 report explicitly lists SDK 2.0.0 and shows an action targeting
+`global/0`. The 2.0.0 wrapper still selected the first discovery resource and can choose
+`global` ahead of a later intercom `Video` entry. The earlier
+resource-ID correction alone cannot fix this ordering defect.
+
+For devices reported as `BDoorBell`, the camera lock/unlock wrappers now prefer
+one explicitly reported `resourceIdentifier="Video"` entry, preserving that
+entry's local index (including zero), stream token and type. Multiple `Video`
+entries are rejected before terminal lookup or action IO: the caller must select
+an explicit namespace/index through the low-level client. Other device categories
+and legacy intercom data without an explicit `Video` entry retain their existing
+routing behavior. No route is invented from the model name or `FEATURE_INFO`.
+In particular, `DoorLockMgr` configuration also appears on ordinary cameras and
+does not prove that a namespace supports a lock actuator.
+
+Offline regressions reproduce the old `global/0` URL from global-first discovery,
+then verify `Video/0` through both CLI unlock commands and all four camera lock
+wrappers. Rejected server responses remain errors. This establishes a routing
+correction, not successful physical operation: #432 does not include sanitized
+resource metadata or a captured successful iOS request. Reporter confirmation
+of the device category and `Video` entry, then physical qualification, remain
+necessary before claiming the issue resolved. Terminal binding, permissions,
+firmware and other causes of a generic `meta.code=400` remain separate.
+
+The low-level
 `remote_unlock(resource_id=..., local_index=...)` argument expects the **feature
 namespace**, despite its historical name. The issue reporter's terminal-name
 filtering problem is separate; passing `terminal_filter_name=None` remains the

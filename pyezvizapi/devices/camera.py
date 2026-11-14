@@ -187,11 +187,28 @@ class EzvizCamera:
     ) -> tuple[str, str, str | None, str | None]:
         """Return feature resource identifier, local index, token, and type."""
         resource_infos = self._device.get("resourceInfos") or []
-        info: dict[str, Any] | None = None
+        resources: list[dict[str, Any]] = []
         if isinstance(resource_infos, list):
-            info = next((item for item in resource_infos if isinstance(item, dict)), None)
+            resources = [item for item in resource_infos if isinstance(item, dict)]
         elif isinstance(resource_infos, dict):
-            info = next((item for item in resource_infos.values() if isinstance(item, dict)), None)
+            resources = [item for item in resource_infos.values() if isinstance(item, dict)]
+
+        device_info = self._device.get("deviceInfos")
+        if isinstance(device_info, dict) and device_info.get("deviceCategory") == "BDoorBell":
+            # The app's intercom relay actions use Video, not whichever resource
+            # pagelist happens to list first (often global). DoorLockMgr config
+            # elsewhere in FEATURE_INFO does not establish an actuator route.
+            video_resources = [
+                item for item in resources if item.get("resourceIdentifier") == "Video"
+            ]
+            if len(video_resources) > 1:
+                raise PyEzvizError(
+                    "Ambiguous intercom Video resources; select an explicit resource and "
+                    "local index through the client's remote_unlock/remote_lock API"
+                )
+            if video_resources:
+                resources = video_resources
+        info = next(iter(resources), None)
 
         resource_id = "Video"
         local_index: str = "1"

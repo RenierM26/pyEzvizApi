@@ -33,3 +33,31 @@ composites return their original bytes rather than changing global decoder polic
 Applications continue to own executor selection, lifecycle, command serialization,
 refresh/caching policy, entity IDs, config flows, translations and persistence.
 The helpers do not perform live validation or imply new model discovery support.
+
+## Focused modules and compatibility
+
+`devices.controls` remains a compatibility facade: its public names re-export
+identical objects from `devices.capabilities`, `devices.metadata`, `devices.ports`,
+`devices.tracking` and `devices.lens`. New code can import those modules directly.
+Audio imports only capabilities, rather than the complete compatibility facade.
+
+Normalized port reads and field-preserving port writes share one internal payload
+traversal. Their projection and search-order policies remain distinct: normalized
+reads prioritize recognized wrapper keys, while lossless writes retain insertion
+order and extension fields. Both propagate enclosing boolean enable hints. Write
+objects remain detached from input/cache; malformed raw lists stop that branch.
+
+Audio operations decode the optional configuration once, then apply dedicated
+chime, voice or microphone policy. The legacy microphone reader still accepts
+coercible numeric strings/booleans; this refactor does not tighten that contract.
+The legacy control `coerce_int` adapter retains NaN/infinity exceptions rather
+than silently adopting the shared helper's more tolerant numeric behavior.
+
+Lens decoding explicitly closes source and cropped images, including failure
+paths. Open/load errors still fall back to the original bytes; crop/encoding
+errors still propagate. The JPEG marker parser is unchanged by this refactor.
+
+Traversal also retains visited decoded containers for the duration of the walk.
+This corrects an existing edge case where Python reused an already-freed JSON
+object's ID and a later valid sibling was skipped as a false cycle. Established
+projection, ordering and enable-hint policies are unchanged.

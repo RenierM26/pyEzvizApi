@@ -3,6 +3,7 @@
 Requires the ``images`` extra. Call CPU-bound decoding from a worker in async apps.
 """
 
+from contextlib import ExitStack, closing
 from io import BytesIO
 import logging
 
@@ -77,23 +78,23 @@ def split_composite_image(image_data: bytes, parts: int) -> list[bytes]:
     if parts <= 1:
         return [image_data]
 
-    try:
-        img = PilImage.open(BytesIO(image_data))
-        img.load()
-    except (UnidentifiedImageError, OSError) as err:
-        _LOGGER.debug("Unable to decode composite multi-lens snapshot: %s", err)
-        return [image_data]
+    with ExitStack() as stack:
+        try:
+            img = stack.enter_context(closing(PilImage.open(BytesIO(image_data))))
+            img.load()
+        except (UnidentifiedImageError, OSError) as err:
+            _LOGGER.debug("Unable to decode composite multi-lens snapshot: %s", err)
+            return [image_data]
 
-    width, height = img.size
-    slice_height = max(1, height // parts)
-    segments: list[bytes] = []
+        width, height = img.size
+        slice_height = max(1, height // parts)
+        segments: list[bytes] = []
 
-    for idx in range(parts):
-        top = idx * slice_height
-        bottom = height if idx == parts - 1 else (idx + 1) * slice_height
-        cropped = img.crop((0, top, width, bottom))
-        with BytesIO() as buf:
-            cropped.save(buf, format="JPEG", quality=90)
-            segments.append(buf.getvalue())
+        for idx in range(parts):
+            top = idx * slice_height
+            bottom = height if idx == parts - 1 else (idx + 1) * slice_height
+            with closing(img.crop((0, top, width, bottom))) as cropped, BytesIO() as buf:
+                cropped.save(buf, format="JPEG", quality=90)
+                segments.append(buf.getvalue())
 
-    return segments or [image_data]
+        return segments or [image_data]

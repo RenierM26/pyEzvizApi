@@ -5,6 +5,34 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Added
+
+- Add application-independent audio, capability, port-security, linked-tracking,
+  intelligent-app and multi-lens image helpers, with an optional `images` extra
+  for Pillow ([#438](https://github.com/RenierM26/pyEzvizApi/pull/438)).
+
+### Fixed
+
+- Retain visited decoded port containers during traversal so reused Python object
+  IDs cannot hide later JSON-encoded siblings as false cycles.
+- Preserve sibling settings in microphone writes instead of inventing speaker
+  volume 100; reject missing microphone configuration and non-finite writes.
+  Preserve enclosing port-enable flags and unknown fields in fresh/cached port
+  updates, and avoid splitting EXIF thumbnails into separate JPEG frames (#438).
+
+### Changed
+
+- Organize device helpers into focused capabilities, metadata, ports, tracking
+  and lens modules. Keep `devices.controls` as a compatibility facade with the
+  same public objects and call signatures.
+- Share port-payload traversal while preserving normalized-read versus lossless-
+  write projections, wrapper precedence, enable hints and detached write objects.
+- Decode audio configuration once per operation, reuse shared JSON/scalar
+  conversion where compatible, and retain distinct chime/voice/microphone rules.
+- Explicitly close decoded images and cropped frames after multi-lens processing;
+  preserve decode fallback and error propagation without changing global Pillow
+  policy. No new device commands or release-version changes.
+
 ## v2.2.0 - 2026-11-14
 
 ### Fixed

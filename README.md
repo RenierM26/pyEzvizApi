@@ -12,13 +12,13 @@ may not contain every API described here. Match documentation to your installed
 release tag, or use a source checkout for current development. See the
 [changelog](https://github.com/RenierM26/pyEzvizApi/blob/main/CHANGELOG.md), especially the removed import paths and push migration.
 
-## Release 2.2.0
+## Release 2.3.0
 
-Version 2.2.0 preserves primary HTTP error details when both switch endpoints
-fail, so consumers can distinguish permission denials and gateway timeouts.
-See the [2.2.0 release notes](docs/release-2.2.0.md) for scope and qualification.
-The [2.1.0 changes](docs/release-2.1.0.md) remain included. Check PyPI or GitHub
-releases for actual availability; release preparation alone is not publication.
+Version 2.3.0 adds reusable device audio, capability, port-security, tracking and
+multi-lens image helpers, with compatible focused modules and field-preserving
+updates. Image processing uses the optional `images` extra (Pillow).
+See the [2.3.0 release notes](docs/release-2.3.0.md) for scope and qualification.
+
 
 ## Upgrading to 2.0
 

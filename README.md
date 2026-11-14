@@ -12,12 +12,13 @@ may not contain every API described here. Match documentation to your installed
 release tag, or use a source checkout for current development. See the
 [changelog](https://github.com/RenierM26/pyEzvizApi/blob/main/CHANGELOG.md), especially the removed import paths and push migration.
 
-## Preparing 2.1.0
+## Release 2.2.0
 
-Version 2.1.0 adds opt-in persisted installation identities and corrects
-multi-resource intercom relay routing. See the [2.1.0 release notes](docs/release-2.1.0.md)
-for consumer adoption and qualification limits. Preparation is not publication;
-check the PyPI badge or GitHub releases for actual availability.
+Version 2.2.0 preserves primary HTTP error details when both switch endpoints
+fail, so consumers can distinguish permission denials and gateway timeouts.
+See the [2.2.0 release notes](docs/release-2.2.0.md) for scope and qualification.
+The [2.1.0 changes](docs/release-2.1.0.md) remain included. Check PyPI or GitHub
+releases for actual availability; release preparation alone is not publication.
 
 ## Upgrading to 2.0
 

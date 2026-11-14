@@ -4,6 +4,8 @@ These guides track current `main`, not necessarily the latest PyPI package.
 Use the documentation at a matching release tag for a released installation.
 See [release availability](releases.md#source-state-is-not-a-published-release).
 
+See the [2.2.0 release notes](release-2.2.0.md) for the switch HTTP diagnostics fix.
+
 ## Start by task
 
 | Task | Guide |

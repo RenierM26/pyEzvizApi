@@ -12,6 +12,13 @@ may not contain every API described here. Match documentation to your installed
 release tag, or use a source checkout for current development. See the
 [changelog](https://github.com/RenierM26/pyEzvizApi/blob/main/CHANGELOG.md), especially the removed import paths and push migration.
 
+## Preparing 2.1.0
+
+Version 2.1.0 adds opt-in persisted installation identities and corrects
+multi-resource intercom relay routing. See the [2.1.0 release notes](docs/release-2.1.0.md)
+for consumer adoption and qualification limits. Preparation is not publication;
+check the PyPI badge or GitHub releases for actual availability.
+
 ## Upgrading to 2.0
 
 Version 2.0 removes obsolete flat imports and legacy push registration. Review
@@ -95,7 +102,7 @@ For one bounded refresh shared across HA platforms, immutable typed states and
 per-device freshness, see [Device inventory](docs/device_inventory.md). Existing
 family loaders remain compatible.
 
-### Stable identities for container applications (unreleased)
+### Stable identities for container applications (2.1.0+)
 
 Applications can opt into a persisted per-client `feature_code` instead of the
 legacy MAC-derived identity. Persist it before first login and provide the same

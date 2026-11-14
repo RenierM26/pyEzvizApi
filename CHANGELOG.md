@@ -5,6 +5,10 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.1.0 - 2026-11-14
+
+Release preparation; publication is pending. See [release notes](docs/release-2.1.0.md).
+
 ### Fixed
 
 - Select the explicitly advertised `Video` resource for `BDoorBell` intercom
@@ -27,7 +31,7 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## v2.0.0 - 2026-11-08
 
-Release preparation; publication is pending. See [upgrade and release notes](docs/release-2.0.0.md).
+See [upgrade and release notes](docs/release-2.0.0.md).
 
 ### Push migration (breaking)
 

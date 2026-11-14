@@ -1,6 +1,5 @@
 """Synthetic length-delimited image envelopes; no camera data or credentials."""
 
-from hashlib import md5
 from io import BytesIO
 from struct import pack
 
@@ -14,6 +13,12 @@ from pyezvizapi.devices.images import process_image_bytes
 from pyezvizapi.exceptions import PyEzvizError
 
 PASSWORD = "TESTONLY"
+
+# Public, precomputed test-only protocol vectors; no runtime password hashing.
+HASH_HEADERS = {
+    "TESTONLY": b"ac837ab144ae11d771426037bf46479e",
+    "OTHER": b"bd661a48d4043d7c583bc1c3aee5f523",
+}
 PREFIX = b"mutichhikpic\x00\x01"
 
 
@@ -24,7 +29,7 @@ def jpeg(size):
 
 
 def encrypt(plain, password=PASSWORD):
-    password_hash = md5(md5(password.encode()).hexdigest().encode()).hexdigest().encode()
+    password_hash = HASH_HEADERS[password]
     key = password.ljust(16, "\x00")[:16].encode()
     iv = b"01234567" + b"\x00" * 8
     padding = 16 - len(plain) % 16

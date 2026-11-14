@@ -5,6 +5,8 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.2.0 - 2026-11-14
+
 ### Fixed
 
 - Preserve the primary HTTP error cause when both modern PUT and legacy POST
@@ -14,7 +16,7 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## v2.1.0 - 2026-11-14
 
-Release preparation; publication is pending. See [release notes](docs/release-2.1.0.md).
+See [release notes](docs/release-2.1.0.md).
 
 ### Fixed
 

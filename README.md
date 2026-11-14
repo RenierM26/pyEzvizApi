@@ -12,16 +12,14 @@ may not contain every API described here. Match documentation to your installed
 release tag, or use a source checkout for current development. See the
 [changelog](https://github.com/RenierM26/pyEzvizApi/blob/main/CHANGELOG.md), especially the removed import paths and push migration.
 
-## Release 2.3.0
+## Release 2.4.0
 
-Version 2.3.0 adds reusable device audio, capability, port-security, tracking and
-multi-lens image helpers, with compatible focused modules and field-preserving
-updates. Image processing uses the optional `images` extra (Pillow).
-See the [2.3.0 release notes](docs/release-2.3.0.md) for scope and qualification.
-
-For current unreleased envelope, explicit key-mode and channel-aware image APIs,
-see [cloud image decoding](docs/image-decryption.md).
-
+Version 2.4.0 adds app image envelopes, explicit key modes and channel-aware
+image records, and fixes multi-image framing before AES decryption. Existing
+bytes-returning APIs remain compatible. Image cropping uses the optional
+`images` extra (Pillow); non-JPEG images are preserved without transcoding.
+See the [2.4.0 release notes](docs/release-2.4.0.md) and
+[cloud image decoding](docs/image-decryption.md) for scope and support limits.
 
 ## Upgrading to 2.0
 

@@ -2,6 +2,7 @@
 
 from dataclasses import FrozenInstanceError
 from io import BytesIO
+from random import Random
 from struct import pack
 from types import SimpleNamespace
 
@@ -34,6 +35,17 @@ def jpeg(size=(12, 8)):
     with BytesIO() as output, Image.new("RGB", size, (20, 80, 100)) as image:
         image.save(output, format="JPEG")
         return output.getvalue()
+
+
+@pytest.fixture(scope="module")
+def png_with_jpeg_markers():
+    # Fixed synthetic pixels, not cryptographic randomness or private imagery.
+    pixels = Random(0).randbytes(256 * 256 * 3)
+    with Image.frombytes("RGB", (256, 256), pixels) as image, BytesIO() as output:
+        image.save(output, format="PNG")
+        payload = output.getvalue()
+    assert payload.find(b"\xff\xd8") > 0
+    return payload
 
 
 def encrypt(plain, key=PASSWORD, mode=ImageKeyMode.TEXT):
@@ -402,6 +414,53 @@ def test_mixed_clear_and_encrypted_records_use_keys_only_where_needed(monkeypatc
         == first + second
     )
     assert not calls
+
+
+@pytest.mark.parametrize("kind", [*KINDS, "raw"])
+@pytest.mark.parametrize(
+    "encrypted,key,mode",
+    [
+        (False, None, ImageKeyMode.TEXT),
+        (False, PASSWORD, ImageKeyMode.TEXT),
+        (False, None, ImageKeyMode.HEX),
+        (True, PASSWORD, ImageKeyMode.TEXT),
+        (True, HEX_KEY, ImageKeyMode.HEX),
+    ],
+)
+def test_png_pixel_bytes_are_not_jpeg_frame_boundaries(
+    monkeypatch, png_with_jpeg_markers, kind, encrypted, key, mode
+):
+    plain = png_with_jpeg_markers
+    block = encrypt(plain, key, mode) if encrypted else plain
+    payload = block if kind == "raw" else envelope(kind, [block])
+    records = decode_image_records(payload, key, key_mode=mode)
+    assert len(records) == 1
+    assert records[0].image_data == plain
+    selected = process_image_bytes(payload, key, 1, 1, key_mode=mode)
+    assert selected == plain
+    with Image.open(BytesIO(selected)) as image:
+        image.load()
+        size, image_format = image.size, image.format
+    assert size == (256, 256)
+    assert image_format == "PNG"
+    client, _ = client_with_image(monkeypatch, payload)
+    assert (
+        client.download_alarm_image("https://image.example.test", encryption_key=key, key_mode=mode)
+        == plain
+    )
+
+
+@pytest.mark.parametrize("kind", ["mutichhikpic", "hiklittlepic", "mutichhiklit"])
+def test_png_and_jpeg_records_keep_formats_and_channel_identity(png_with_jpeg_markers, kind):
+    plain, other = png_with_jpeg_markers, jpeg()
+    payload = envelope(kind, [encrypt(plain), encrypt(other)], [9, 2])
+    records = decode_image_records(payload, PASSWORD)
+    assert [(record.channel_id, record.image_data) for record in records] == [
+        (9, plain),
+        (2, other),
+    ]
+    assert process_image_bytes(payload, PASSWORD, 9, 2) == plain
+    assert process_image_bytes(payload, PASSWORD, 2, 2) == other
 
 
 def test_unsupported_key_mode_fails(monkeypatch):

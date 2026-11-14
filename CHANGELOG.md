@@ -19,6 +19,9 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Fixed
 
+- Restrict JPEG frame splitting to JPEG-signatured payloads, preserving already
+  recognized PNG records whose pixel data happens to contain JPEG marker bytes.
+  This is a decoder dispatch guard, not evidence of PNG cloud snapshot responses.
 - Unpack clear multi-image envelopes and select concatenated/composite JPEG
   lenses even without a password. Channel-indexed records require an exact
   channel/occurrence instead of silently returning another lens.

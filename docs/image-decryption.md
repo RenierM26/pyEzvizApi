@@ -78,7 +78,13 @@ records = decode_image_records(
 
 `decode_image_records` returns ordered, immutable records, retaining original
 channel IDs and repeated images. It separates top-level JPEGs without splitting
-EXIF thumbnails. Byte payloads are omitted from record reprs. A channel-indexed
+EXIF thumbnails. Only JPEG-signatured payloads enter the JPEG scanner; recognized
+PNGs are preserved, even if their compressed pixels contain JPEG marker bytes.
+Observed cloud snapshots are JPEGs; PNG network responses are not established.
+The cached app's `DecryptFileOpener.o` does locally encode one multi-image Glide
+stream as PNG (`CompressFormat.PNG`, verified in smali), while its `BitmapUtils.d`
+disk-cache path encodes JPEG. Decoder format preservation is not a claim that
+the camera or cloud sends PNGs. Byte payloads are omitted from record reprs. A channel-indexed
 envelope requires an exact channel and occurrence; missing values raise
 `PyEzvizError`. An unspecified zero channel retains positional compatibility.
 Unindexed raw images retain positional clamping and vertical composite cropping

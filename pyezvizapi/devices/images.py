@@ -37,7 +37,11 @@ def decode_image_records(
     for record in _decode_image_payload(
         image_data, password, key_mode=key_mode, key_candidates=key_candidates
     ):
-        segments = extract_jpeg_segments(record.image_data)
+        segments = (
+            extract_jpeg_segments(record.image_data)
+            if record.image_data.startswith(JPEG_SOI)
+            else []
+        )
         if segments:
             result.extend(replace(record, image_data=part) for part in segments)
         else:
@@ -86,7 +90,9 @@ def process_image_bytes(
             raise PyEzvizError("Image occurrence requires channel-indexed records")
         # Keep this compatibility hook for callers instrumenting legacy decryption.
         decrypted = decrypt_image(image_data, password) if password else image_data
-        segments = extract_jpeg_segments(decrypted) or [decrypted]
+        segments = (extract_jpeg_segments(decrypted) if decrypted.startswith(JPEG_SOI) else []) or [
+            decrypted
+        ]
     if len(segments) == 1 and lens_total > 1:
         segments = split_composite_image(segments[0], lens_total)
     return segments[min(lens_index - 1, len(segments) - 1)]

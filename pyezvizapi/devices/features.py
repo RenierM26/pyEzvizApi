@@ -6,6 +6,7 @@ from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from typing import Any, cast
 
 from pyezvizapi._shared.utils import WILDCARD_STEP, coerce_int, decode_json, first_nested
+from pyezvizapi.devices._port_payload import normalized_port_security
 
 
 def _feature_video_section(camera_data: Mapping[str, Any]) -> dict[str, Any]:
@@ -195,97 +196,9 @@ def support_ext_value(camera_data: Mapping[str, Any], ext_key: str) -> str | Non
     return str(value) if value is not None else None
 
 
-def _normalize_port_list(value: Any) -> list[dict[str, Any]] | None:
-    """Decode a list of port-security entries."""
-
-    value = decode_json(value)
-    if not isinstance(value, Iterable):
-        return None
-
-    normalized: list[dict[str, Any]] = []
-    for raw_entry in value:
-        entry = decode_json(raw_entry)
-        if not isinstance(entry, Mapping):
-            return None
-        port = coerce_int(entry.get("portNo"))
-        if port is None:
-            continue
-        normalized.append({"portNo": port, "enabled": bool(entry.get("enabled"))})
-
-    return normalized
-
-
 def normalize_port_security(payload: Any) -> dict[str, Any]:
-    """Normalize IoT port-security payloads."""
-
-    seen: set[int] = set()
-
-    def _apply_hint(
-        candidate: dict[str, Any] | None, hint_value: bool | None
-    ) -> dict[str, Any] | None:
-        if candidate is not None and "enabled" not in candidate and isinstance(hint_value, bool):
-            candidate["enabled"] = hint_value
-        return candidate
-
-    def _walk_mapping(obj: Mapping[str, Any], hint: bool | None) -> dict[str, Any] | None:
-        obj_id = id(obj)
-        if obj_id in seen:
-            return None
-        seen.add(obj_id)
-
-        enabled_local = obj.get("enabled")
-        if isinstance(enabled_local, bool):
-            hint = enabled_local
-
-        ports = _normalize_port_list(obj.get("portSecurityList"))
-        if ports is not None:
-            return {
-                "portSecurityList": ports,
-                "enabled": bool(enabled_local)
-                if isinstance(enabled_local, bool)
-                else bool(hint)
-                if isinstance(hint, bool)
-                else True,
-            }
-
-        for key in ("PortSecurity", "value", "data", "NetworkSecurityProtection"):
-            if key in obj:
-                candidate = _apply_hint(_walk(obj[key], hint), hint)
-                if candidate:
-                    return candidate
-
-        for value in obj.values():
-            candidate = _apply_hint(_walk(value, hint), hint)
-            if candidate:
-                return candidate
-
-        return None
-
-    def _walk_iterable(values: Iterable[Any], hint: bool | None) -> dict[str, Any] | None:
-        for item in values:
-            candidate = _walk(item, hint)
-            if candidate:
-                return candidate
-        return None
-
-    def _walk(obj: Any, hint: bool | None = None) -> dict[str, Any] | None:
-        obj = decode_json(obj)
-        if obj is None:
-            return None
-
-        if isinstance(obj, Mapping):
-            return _walk_mapping(obj, hint)
-
-        if isinstance(obj, Iterable) and not isinstance(obj, (str, bytes, bytearray)):
-            return _walk_iterable(obj, hint)
-
-        return None
-
-    normalized = _walk(payload)
-    if isinstance(normalized, dict):
-        normalized.setdefault("enabled", True)
-        return normalized
-    return {}
+    """Normalize IoT port-security payloads using the shared traversal."""
+    return normalized_port_security(payload)
 
 
 def port_security_config(camera_data: Mapping[str, Any]) -> dict[str, Any]:

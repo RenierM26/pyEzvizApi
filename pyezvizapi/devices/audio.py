@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import json
 import math
 from typing import TYPE_CHECKING, Any
 
+from pyezvizapi._shared.coercion import coerce_int, decode_json
 from pyezvizapi.constants import SupportExt
-from pyezvizapi.devices.controls import SupportExtView
+from pyezvizapi.devices.capabilities import SupportExtView
 from pyezvizapi.devices.features import (
-    custom_voice_volume_config,
     optionals_mapping,
     resolve_channel,
 )
@@ -36,12 +35,7 @@ def volume_capability(camera_data: dict[str, Any], key: SupportExt) -> bool:
 
 def volume_config(camera_data: dict[str, Any], key: str) -> dict[str, Any] | None:
     """Decode a complete reported volume object, retaining unrecognized fields."""
-    config = optionals_mapping(camera_data).get(key)
-    if isinstance(config, str):
-        try:
-            config = json.loads(config)
-        except json.JSONDecodeError:
-            return None
+    config = decode_json(optionals_mapping(camera_data).get(key))
     return dict(config) if isinstance(config, Mapping) else None
 
 
@@ -66,11 +60,18 @@ def reported_volume(config: dict[str, Any] | None, maximum: float) -> float | No
     return float(value)
 
 
-def alarm_volume_getter(camera_data: dict[str, Any]) -> float | None:
-    """Require app-backed support as well as a valid observed chime value."""
+def _alarm_volume_from_config(
+    camera_data: dict[str, Any], config: dict[str, Any] | None
+) -> float | None:
+    """Apply chime capability and range policy to an already decoded object."""
     if not volume_capability(camera_data, SupportExt.SupportDeviceRing):
         return None
-    return reported_volume(alarm_volume_config(camera_data), alarm_volume_max(camera_data))
+    return reported_volume(config, alarm_volume_max(camera_data))
+
+
+def alarm_volume_getter(camera_data: dict[str, Any]) -> float | None:
+    """Require app-backed support as well as a valid observed chime value."""
+    return _alarm_volume_from_config(camera_data, alarm_volume_config(camera_data))
 
 
 def set_alarm_volume(
@@ -81,7 +82,7 @@ def set_alarm_volume(
 ) -> Any:
     """Update alarm volume while preserving reported sibling fields."""
     config = alarm_volume_config(camera_data)
-    if config is None or alarm_volume_getter(camera_data) is None:
+    if config is None or _alarm_volume_from_config(camera_data, config) is None:
         raise PyEzvizError("Camera does not report a supported alarm chime volume")
     if isinstance(value, bool) or not math.isfinite(value):
         raise PyEzvizError("Alarm chime volume must be a finite number")
@@ -92,12 +93,19 @@ def set_alarm_volume(
     return client.set_dev_config_kv(serial, resolve_channel(camera_data), "ChimeMusic", payload)
 
 
-def alarm_voice_volume_getter(camera_data: dict[str, Any]) -> float | None:
-    """Report voice volume independently of ChimeMusic and microphone gain."""
+def _voice_volume_from_config(
+    camera_data: dict[str, Any], config: dict[str, Any] | None
+) -> float | None:
+    """Apply voice capability and muted/slider range rules to a decoded object."""
     if not volume_capability(camera_data, SupportExt.SupportChangeVolume):
         return None
-    value = reported_volume(volume_config(camera_data, "CustomVoice_Volume"), 100)
+    value = reported_volume(config, 100)
     return None if value is not None and 0 < value < 10 else value
+
+
+def alarm_voice_volume_getter(camera_data: dict[str, Any]) -> float | None:
+    """Report voice volume independently of ChimeMusic and microphone gain."""
+    return _voice_volume_from_config(camera_data, volume_config(camera_data, "CustomVoice_Volume"))
 
 
 def set_alarm_voice_volume(
@@ -108,7 +116,7 @@ def set_alarm_voice_volume(
 ) -> Any:
     """Update alarm voice volume while preserving reported sibling fields."""
     config = volume_config(camera_data, "CustomVoice_Volume")
-    if config is None or alarm_voice_volume_getter(camera_data) is None:
+    if config is None or _voice_volume_from_config(camera_data, config) is None:
         raise PyEzvizError("Camera does not report a supported alarm voice volume")
     # App voice sliders select 10-100. A reported zero remains a valid muted
     # reading, but changing volume must not silently select a sound mode.
@@ -122,16 +130,15 @@ def set_alarm_voice_volume(
     )
 
 
+def _microphone_volume_from_config(config: dict[str, Any] | None) -> float | None:
+    """Retain the legacy microphone reader's tolerant integer coercion."""
+    value = coerce_int(config.get("microphone_volume")) if config else None
+    return float(value) if value is not None and 0 <= value <= 100 else None
+
+
 def microphone_volume_getter(camera_data: dict[str, Any]) -> float | None:
-    config = custom_voice_volume_config(camera_data)
-    if not config:
-        return None
-    value = config.get("microphone_volume")
-    return (
-        float(value)
-        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100
-        else None
-    )
+    """Return the reported microphone gain using the existing coercion policy."""
+    return _microphone_volume_from_config(volume_config(camera_data, "CustomVoice_Volume"))
 
 
 def set_microphone_volume(
@@ -142,7 +149,7 @@ def set_microphone_volume(
 ) -> Any:
     """Update microphone volume while preserving reported sibling fields."""
     config = volume_config(camera_data, "CustomVoice_Volume")
-    if config is None or microphone_volume_getter(camera_data) is None:
+    if config is None or _microphone_volume_from_config(config) is None:
         raise PyEzvizError("Camera does not report a microphone volume")
     if isinstance(value, bool) or not math.isfinite(value):
         raise PyEzvizError("Microphone volume must be a finite number")

@@ -28,31 +28,47 @@ def process_image_bytes(
     return segments[min(lens_index - 1, len(segments) - 1)]
 
 
+def _jpeg_frame_end(image_data: bytes, start: int) -> int:
+    """Walk marker lengths, treating APP metadata and stuffed scan bytes as opaque."""
+    cursor = start + 2
+    size = len(image_data)
+    while cursor < size:
+        marker_start = image_data.find(b"\xff", cursor)
+        if marker_start == -1:
+            break
+        cursor = marker_start + 1
+        while cursor < size and image_data[cursor] == 0xFF:
+            cursor += 1
+        if cursor == size:
+            break
+        marker = image_data[cursor]
+        cursor += 1
+        if marker == 0xD9:
+            return cursor
+        if marker == 0xD8:
+            # Tolerate a missing EOI before the next top-level frame.
+            return marker_start
+        if marker in (0x00, 0x01) or 0xD0 <= marker <= 0xD7:
+            continue
+        if cursor + 2 > size:
+            break
+        length = int.from_bytes(image_data[cursor : cursor + 2], "big")
+        if length < 2 or cursor + length > size:
+            break
+        # Includes SOS headers; subsequent scan data uses FF00 byte stuffing
+        # and restart markers, handled above. Never search inside APP segments.
+        cursor += length
+    return size
+
+
 def extract_jpeg_segments(image_data: bytes) -> list[bytes]:
-    """Extract individual JPEG segments from a concatenated payload."""
+    """Extract top-level JPEG frames without splitting embedded EXIF thumbnails."""
     segments: list[bytes] = []
     cursor = image_data.find(JPEG_SOI)
-
     while cursor != -1:
-        next_soi = image_data.find(JPEG_SOI, cursor + 2)
-        eoi = image_data.find(JPEG_EOI, cursor + 2)
-
-        if eoi != -1 and (next_soi == -1 or eoi < next_soi):
-            end = eoi + 2
-        elif next_soi != -1:
-            end = next_soi
-        elif eoi != -1:
-            end = eoi + 2
-        else:
-            end = len(image_data)
-
-        segment = image_data[cursor:end]
-        segments.append(segment)
-
-        if next_soi == -1:
-            break
-        cursor = next_soi
-
+        end = _jpeg_frame_end(image_data, cursor)
+        segments.append(image_data[cursor:end])
+        cursor = image_data.find(JPEG_SOI, end)
     return segments
 
 

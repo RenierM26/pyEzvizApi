@@ -324,24 +324,29 @@ def _reported_port_security(payload: Any) -> dict[str, Any]:
     """Find a reported port object without dropping vendor extension fields."""
     seen: set[int] = set()
 
-    def visit(value: Any) -> dict[str, Any]:
+    def visit(value: Any, enabled_hint: bool | None = None) -> dict[str, Any]:
         value = decode_json(value)
         if not isinstance(value, (dict, list)) or id(value) in seen:
             return {}
         seen.add(id(value))
         children: Iterable[Any]
         if isinstance(value, dict):
+            if isinstance(value.get("enabled"), bool):
+                enabled_hint = value["enabled"]
             ports = decode_json(value.get("portSecurityList"))
             if isinstance(ports, list):
                 decoded = [decode_json(entry) for entry in ports]
                 if all(isinstance(entry, dict) for entry in decoded):
-                    return {**deepcopy(value), "portSecurityList": deepcopy(decoded)}
+                    result = {**deepcopy(value), "portSecurityList": deepcopy(decoded)}
+                    if "enabled" not in result and enabled_hint is not None:
+                        result["enabled"] = enabled_hint
+                    return result
                 return {}
             children = value.values()
         else:
             children = value
         for child in children:
-            if result := visit(child):
+            if result := visit(child, enabled_hint):
                 return result
         return {}
 
@@ -358,7 +363,9 @@ def _load_port_security_payload(client: EzvizClient, serial: str) -> dict[str, A
     if not value:
         camera_state = getattr(client, "_cameras", {}).get(serial)
         if isinstance(camera_state, dict):
-            value = deepcopy(port_security_config(camera_state))
+            value = _reported_port_security(camera_state) or deepcopy(
+                port_security_config(camera_state)
+            )
 
     if not value:
         value = {"portSecurityList": []}

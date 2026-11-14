@@ -49,6 +49,7 @@ pyezvizapi = "pyezvizapi.cli.main:main"
 pyezvizapi-capabilities = "pyezvizapi.cli.capabilities:main"
 
 [project.optional-dependencies]
+images = ["Pillow>=11"]
 streaming = ["av>=19.0.0,<20"]
 dev = ["build", "codespell", "mypy", "pip-audit", "pyright", "pytest", "pytest-cov", "ruff", "twine", "types-requests"]
 

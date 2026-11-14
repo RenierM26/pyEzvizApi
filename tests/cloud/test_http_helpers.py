@@ -561,6 +561,47 @@ def test_set_switch_falls_back_to_legacy_and_preserves_first_error(monkeypatch) 
         client.set_switch("CAM123", 7, True)
 
 
+
+@pytest.mark.parametrize(("primary", "fallback"), [(403, 403), (504, 504), (403, 504), (504, 403)])
+def test_switch_fallback_preserves_primary_http_cause(monkeypatch, primary, fallback) -> None:
+    """Exercise real request wrapping and both endpoints, including mixed statuses."""
+    client = _client()
+    responses = [_response(status_code=primary), _response(status_code=fallback)]
+    first = responses[0]
+    methods = []
+    client._cameras["CAM123"] = {"switches": {7: False}}
+
+    def request(**kwargs: Any) -> requests.Response:
+        methods.append(kwargs["method"])
+        return responses.pop(0)
+
+    monkeypatch.setattr(client._session, "request", request)
+    with pytest.raises(HTTPError) as caught:
+        client.switch_status("CAM123", 7, True)
+    assert methods == ["PUT", "POST"]
+    assert isinstance(caught.value.__cause__, requests.HTTPError)
+    assert caught.value.__cause__.response is first
+    assert caught.value.__cause__.response.status_code == primary
+    assert not client._cameras["CAM123"]["switches"][7]
+
+
+@pytest.mark.parametrize("legacy_success", [False, True])
+def test_switch_fallback_retains_api_error_or_success(monkeypatch, legacy_success) -> None:
+    """Unchained API errors and successful legacy fallback keep their old contract."""
+    client = _client()
+    responses = [
+        _response(text='{"meta":{"code":403}}'),
+        _response(text='{"meta":{"code":200}}' if legacy_success else '{"meta":{"code":504}}'),
+    ]
+    monkeypatch.setattr(client._session, "request", lambda **kwargs: responses.pop(0))
+    if legacy_success:
+        assert client.switch_status("CAM123", 7, True)
+    else:
+        with pytest.raises(PyEzvizError, match="response code=403") as caught:
+            client.switch_status("CAM123", 7, True)
+        assert caught.value.__cause__ is None
+        assert caught.value.__suppress_context__
+
 def test_switch_status_updates_cached_camera_switch_state(monkeypatch) -> None:
     client = _client()
     client._cameras["CAM123"] = {"switches": {7: False}}

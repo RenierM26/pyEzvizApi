@@ -1,8 +1,10 @@
-# Persisted installation identities (unreleased)
+# Persisted installation identities (2.1.0+)
 
 `EzvizClient(..., feature_code=...)` lets an application choose a stable identity
 instead of binding a login to the container's current MAC address. This is an
-opt-in API addition; it is not available in the published 2.0.0 release.
+opt-in API addition introduced in 2.1.0; it is not available in 2.0.0.
+See the [2.1.0 release notes](../release-2.1.0.md) and actual published package
+availability before updating a consumer.
 
 ## Application ownership
 
@@ -84,9 +86,9 @@ requirements still apply; a stable identity does not make credentials immortal.
 - SDK-owned MQTT/CAS clients inherit non-default identities. Direct users of
   `MQTTClient` or `EzvizCAS` must pass the matching `feature_code=` too. Legacy
   child-factory call shapes are retained when the selected code is the default.
-- This PR does not opt the CLI or Home Assistant into persisted identities, bump
-  their dependency requirements, publish a release, or change the token format.
-  Those consumers must deliberately adopt this API after a compatible SDK release.
+- The SDK does not opt the CLI or Home Assistant into persisted identities, bump
+  their dependency requirements, or change the token format. Those consumers must
+  deliberately adopt this API after installing a compatible SDK release.
 
 ## Qualification
 

@@ -76,6 +76,7 @@ if TYPE_CHECKING:
         DeviceSnapshot,
         DeviceState,
         LightState,
+        MonitorState,
         PlugState,
     )
     from pyezvizapi.exceptions import (
@@ -826,6 +827,7 @@ _EXPORTS = {
     "ImageKeyMode": "_shared.image_crypto",
     "ImageRecord": "_shared.image_records",
     "CameraState": "devices.snapshot",
+    "MonitorState": "devices.snapshot",
     "DetectorState": "devices.snapshot",
     "DeviceCapabilities": "devices.snapshot",
     "DeviceHealth": "devices.snapshot",

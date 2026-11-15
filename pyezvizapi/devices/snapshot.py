@@ -9,10 +9,11 @@ import math
 from types import MappingProxyType
 from typing import Any, Literal
 
+from pyezvizapi.devices.intercom_events import IntercomEvent
 from pyezvizapi.devices.observation import power_state
 from pyezvizapi.exceptions import PyEzvizError
 
-type DeviceKind = Literal["camera", "detector", "light", "plug"]
+type DeviceKind = Literal["camera", "detector", "light", "plug", "monitor"]
 
 
 class _FrozenList(tuple):
@@ -50,6 +51,7 @@ class DevicePollOptions:
     timeout: float = 20.0
     include_camera_alarms: bool = True
     max_devices: int = 10000
+    include_intercom_events: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -59,6 +61,8 @@ class DevicePollOptions:
             or self.timeout <= 0
         ):
             raise PyEzvizError("Inventory timeout must be positive and finite")
+        if not isinstance(self.include_intercom_events, bool):
+            raise PyEzvizError("Intercom event selection must be a boolean")
         if not isinstance(self.include_camera_alarms, bool):
             raise PyEzvizError("Inventory alarm selection must be a boolean")
         if (
@@ -133,6 +137,11 @@ class CameraState(DeviceState):
 
 
 @dataclass(frozen=True)
+class MonitorState(DeviceState):
+    """An advertised indoor intercom monitor, not a camera."""
+
+
+@dataclass(frozen=True)
 class LightState(DeviceState):
     @property
     def is_on(self) -> bool | None:
@@ -171,10 +180,14 @@ class DeviceSnapshot:
     received_at: datetime
     devices: Mapping[str, DeviceState]
     health: Mapping[str, DeviceHealth]
+    intercom_events: tuple[IntercomEvent, ...] = ()
+    intercom_events_current: bool | None = None
+    intercom_events_error_type: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "devices", MappingProxyType(dict(self.devices)))
         object.__setattr__(self, "health", MappingProxyType(dict(self.health)))
+        object.__setattr__(self, "intercom_events", tuple(self.intercom_events))
 
     def select(self, kind: DeviceKind | None = None) -> dict[str, DeviceState]:
         """A pure in-memory view; selectors never initiate another request."""

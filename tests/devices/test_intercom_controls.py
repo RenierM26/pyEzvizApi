@@ -170,6 +170,7 @@ def test_same_event_normalized_without_image_or_localized_title(kind):
     elif kind == "push":
         base = {"alert": "INVENTED TRANSLATION", "ext": {"device_serial": "TEST", "msgId": "same", "time": "2026-11-15T12:40:00+00:00", "channel_no": 1, "alert_type_code": 10242}}
     event = normalize_intercom_event(base)
+    assert event is not None and event.occurred_at is not None
     assert event.serial == "TEST" and event.event_id == "same"
     assert event.event_type == "lock_unlocked" and event.channel == 1
     assert event.occurred_at.tzinfo == UTC
@@ -186,12 +187,14 @@ def test_missing_event_identity_is_not_invented(field):
 @pytest.mark.parametrize("stamp", [True, "bad", -1, 10**30, "2026-11-15 10:00:00"])
 def test_unknown_time_does_not_become_utc_or_now(stamp):
     event = normalize_intercom_event({"deviceSerial": "TEST", "msgId": "ID", "alarmType": 2701, "time": stamp})
+    assert event is not None
     assert event.occurred_at is None
 
 
 def test_unknown_methods_and_codes_are_not_translated_or_inferred():
     assert normalize_intercom_event({"deviceSerial": "TEST", "msgId": "ID", "alarmType": 99999, "title": "RFID unlock"}) is None
     event = normalize_intercom_event({"deviceSerial": "TEST", "msgId": "ID", "alarmType": 10242, "customerType": "FutureMethod", "cardName": "Do not infer"})
+    assert event is not None
     assert event.method is None
     assert "Do not infer" not in repr(event)
 
@@ -204,7 +207,7 @@ def test_history_filters_foreign_serials_and_validates_shape():
     with pytest.raises(PyEzvizError):
         get_intercom_events(client, ("TEST",))
     with pytest.raises(PyEzvizError):
-        DevicePollOptions(include_intercom_events=1)
+        DevicePollOptions(include_intercom_events=1)  # type: ignore[arg-type]  # invalid runtime input
 
 
 def test_history_permission_failure_does_not_discard_inventory(data, monkeypatch):

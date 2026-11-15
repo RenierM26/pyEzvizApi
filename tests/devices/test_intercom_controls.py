@@ -272,5 +272,5 @@ def test_history_timeout_has_its_own_short_budget(data, monkeypatch):
 @pytest.mark.parametrize("first", ["pyezvizapi.devices.intercom", "pyezvizapi.devices.audio", "pyezvizapi.devices.monitor", "pyezvizapi.cloud.operations.snapshot", "pyezvizapi.client"])
 def test_fresh_process_import_order(first):
     """New monitor rendering cannot close a client/audio/intercom import cycle."""
-    script = "import importlib; importlib.import_module(%r); from pyezvizapi.devices.intercom import chime_value; from pyezvizapi.devices.monitor import monitor_status; from pyezvizapi.client import EzvizClient" % first
+    script = f"import importlib; importlib.import_module({first!r}); from pyezvizapi.devices.intercom import chime_value; from pyezvizapi.devices.monitor import monitor_status; from pyezvizapi.client import EzvizClient"
     subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, timeout=20)

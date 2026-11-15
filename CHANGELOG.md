@@ -5,6 +5,10 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.5.0 - 2026-11-15
+
+See [release notes and compatibility changes](docs/release-2.5.0.md).
+
 ### Added
 
 - Add non-camera `DBScreen` monitor snapshots and capability-qualified intercom

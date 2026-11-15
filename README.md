@@ -12,14 +12,14 @@ may not contain every API described here. Match documentation to your installed
 release tag, or use a source checkout for current development. See the
 [changelog](https://github.com/RenierM26/pyEzvizApi/blob/main/CHANGELOG.md), especially the removed import paths and push migration.
 
-## Release 2.4.0
+## Release 2.5.0
 
-Version 2.4.0 adds app image envelopes, explicit key modes and channel-aware
-image records, and fixes multi-image framing before AES decryption. Existing
-bytes-returning APIs remain compatible. Image cropping uses the optional
-`images` extra (Pillow); non-JPEG images are preserved without transcoding.
-See the [2.4.0 release notes](docs/release-2.4.0.md) and
-[cloud image decoding](docs/image-decryption.md) for scope and support limits.
+Version 2.5.0 adds non-camera monitors, capability-qualified intercom controls and
+normalized ring/unlock events with optional bounded history. Channel-99 decoding
+now preserves alarm metadata and separates call/control layouts. Existing method
+signatures remain compatible; ring/unlock motion classification, raw notification
+fields and monitor inventory have [compatibility notes](docs/release-2.5.0.md).
+See [intercom support](docs/intercom.md) for qualification and hardware limits.
 
 ## Upgrading to 2.0
 

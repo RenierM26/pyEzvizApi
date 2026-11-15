@@ -112,3 +112,9 @@ value when restoring saved credentials; the SDK never silently adopts a token's
 identity or changes process-wide defaults. See
 [persisted installation identities](docs/auth/persisted-client-identity.md) for
 ownership, migration, validation and consumer-release requirements.
+
+### Video intercoms
+
+See [non-streaming intercom support](docs/intercom.md) for monitor inventory,
+capability-qualified relay/settings helpers and normalized ringing/access events.
+Streaming and call/talk control are separate from this API.

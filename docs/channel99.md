@@ -103,7 +103,8 @@ push.stop()
 
 `connect()` starts a background worker; it does not mean the broker has accepted
 the connection. Polling must remain independent of push availability. The
-callback payload and `messages_by_device` cache use the existing decoder.
+callback payload and `messages_by_device` cache use the notification decoder
+described below.
 
 `on_token_updated` is the single persistence callback. Set it on `EzvizClient`;
 `get_mqtt_client()` passes it to the push transport automatically. When constructing
@@ -197,3 +198,40 @@ fresh LBS credentials. Only a matching successful SUBACK marks the session ready
 late callbacks during shutdown cannot restore readiness or deliver messages.
 Numeric broker reasons are retained for diagnostics, and transport cleanup errors
 cannot replace an already-recorded permanent refusal.
+
+## Notification decoding
+
+`push.notifications` is a pure, credential-free decoder. The historical
+`MQTTClient.decode_mqtt_message` method delegates to it; decoding no longer stops
+the connection on a malformed notification. Invalid JSON, UTF-8 and non-object
+roots raise a safe `PyEzvizError`; the payload handler discards that notification
+without shutting down the worker. Framing/broker failures retain their own
+transport recovery policy.
+
+The retained Android 7.4.1 push parser distinguishes these ext layouts:
+
+| ext format | Decoding |
+| --- | --- |
+| CSV family 1 | Existing alarm fields, plus customerType from slot 8 and subType from slot 19 (zero-based) |
+| CSV family 14 | Calling time/serial/channel, calling_type, calling_id, calling_status, image/crypt/checksum and optional analysis/custom fields |
+| JSON object or JSON-encoded object | Retained as an object; control x-type values are not translated into alarms |
+| Other CSV family | channel_type and opaque raw_fields; no invented camera-alarm identity/code |
+
+Existing family-1 field aliases `resource_type` and `sequence_number` and the
+`EXT_FIELD_NAMES` tuple remain available. Their historical names do **not**
+establish their protocol meaning. The new aliases allow
+`normalize_intercom_event` to retain qualified unlock methods and ring subtypes.
+Call IDs are not alarm message IDs, and call type/status are not alarm codes.
+Family-14 notifications reach callbacks/cache but do not automatically produce a
+ring event or imply supported answer/hangup controls. Unknown call status values
+remain numeric and uninterpreted. Unknown CSV layouts intentionally no longer
+receive the incorrect family-1 schema.
+
+Offline synthetic encrypted `/9000/1` frames exercise framing, decryption,
+notification decoding, cache, callback and intercom normalization together. They
+also verify that direct notifications publish no application reply. These tests
+are **not** a live HP7 ring/unlock delivery test. The LBS handshake, feature-code
+identity, credential persistence, subscriptions and acknowledgement policy are
+unchanged. Native binary mobile messages are still framing-only and are not
+exposed by the decoded notification interface; their event semantics require
+separate evidence before implementation.

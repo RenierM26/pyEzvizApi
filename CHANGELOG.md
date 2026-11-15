@@ -5,6 +5,28 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Added
+
+- Add non-camera `DBScreen` monitor snapshots and capability-qualified intercom
+  relay, chime and nameplate-light helpers. Preserve reported resource indices,
+  compound-setting siblings and ordinary doorbell scales; never try a different
+  relay after rejection.
+- Normalize evidenced doorbell/lock-unlock events without translated names or
+  credential identity guesses. Add opt-in, bounded intercom history with isolated
+  non-auth failures and a reserved polling budget. See [intercoms](docs/intercom.md).
+
+### Fixed
+
+- Match the app's unified ring subtype fallback and preserve channel-99 alarm
+  customerType/subType metadata. Decode call and JSON-control notifications with
+  their own layouts; retain historical standard-alarm aliases and keep unknown
+  CSV layouts opaque. Invalid notifications no longer stop the push worker.
+- Reuse the category-based chime range (DBScreen 0–7, BDoorBell 0–100) rather
+  than deriving volume scale from relay capability. Share the strict relay gate
+  across discovery and commands; missing history lists are not successful polls.
+- Do not interpret known ringing/unlock alarm codes as motion. Existing generic
+  alarm behavior is retained for unclassified codes.
+
 ## v2.4.0 - 2026-11-14
 
 See [release notes](docs/release-2.4.0.md).

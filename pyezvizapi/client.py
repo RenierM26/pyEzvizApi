@@ -752,6 +752,7 @@ class EzvizClient:
         DeviceCatagories.CAMERA_DEVICE_CATEGORY.value,
         DeviceCatagories.BATTERY_CAMERA_DEVICE_CATEGORY.value,
         DeviceCatagories.DOORBELL_DEVICE_CATEGORY.value,
+        DeviceCatagories.INTERCOM_MONITOR_CATEGORY.value,
         DeviceCatagories.BASE_STATION_DEVICE_CATEGORY.value,
         DeviceCatagories.CAT_EYE_CATEGORY.value,
         DeviceCatagories.LIGHTING.value,

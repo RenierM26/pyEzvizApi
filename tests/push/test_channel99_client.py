@@ -153,7 +153,7 @@ def test_decoded_callback_and_cache_unchanged():
         on_message_callback=callback,
         on_token_updated=lambda snapshot: None,
     )
-    payload = b'{"alert":"test","ext":"synthetic,1,2,3,4"}'
+    payload = b'{"alert":"test","ext":"1,1,2,3,4"}'
     expected = client.decode_mqtt_message(payload)
     client._handle_payload(payload)
     callback.assert_called_once_with(expected)

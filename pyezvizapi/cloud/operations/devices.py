@@ -49,6 +49,7 @@ def load_devices(
             _owner.DeviceCatagories.LIGHTING.value,
             _owner.DeviceCatagories.SOCKET.value,
             _owner.DeviceCatagories.DETECTOR_DEVICE_CATEGORY.value,
+            _owner.DeviceCatagories.INTERCOM_MONITOR_CATEGORY.value,
         ):
             return False
         return not (
@@ -63,7 +64,11 @@ def load_devices(
         ]
         latest_alarms = self._prefetch_latest_camera_alarms(camera_serials)
     for device, rec in records.items():
-        if rec.device_category in supported_categories:
+        # Monitors are exposed by poll_devices(), never legacy camera maps.
+        if (
+            rec.device_category in supported_categories
+            and rec.device_category != _owner.DeviceCatagories.INTERCOM_MONITOR_CATEGORY.value
+        ):
             if rec.device_category == _owner.DeviceCatagories.COMMON_DEVICE_CATEGORY.value and (
                 not (rec.raw.get("deviceInfos") or {}).get("hik")
             ):

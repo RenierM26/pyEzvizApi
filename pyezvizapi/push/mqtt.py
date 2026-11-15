@@ -10,12 +10,10 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Callable
-from contextlib import suppress
 from copy import deepcopy
-import json
 import logging
 from threading import RLock
-from typing import Any, Final, TypedDict, cast
+from typing import Any, TypedDict, cast
 
 import requests
 
@@ -45,8 +43,16 @@ from pyezvizapi.exceptions import (
 from pyezvizapi.push.longlink.profile import profile_for_token, synchronize_http_headers
 from pyezvizapi.push.longlink.session import Channel99Session
 from pyezvizapi.push.longlink.worker import PushWorker
+from pyezvizapi.push.notifications import EXT_FIELD_NAMES, EXT_INT_FIELDS, decode_notification
 
-__all__ = ["EXT_FIELD_NAMES", "EzvizToken", "MQTTClient", "MqttData", "ServiceUrls"]
+__all__ = [
+    "EXT_FIELD_NAMES",
+    "EXT_INT_FIELDS",
+    "EzvizToken",
+    "MQTTClient",
+    "MqttData",
+    "ServiceUrls",
+]
 
 _LOGGER = logging.getLogger("pyezvizapi.mqtt")
 
@@ -62,49 +68,6 @@ class MqttData(TypedDict):
     mqtt_clientid: str | None
     ticket: str | None
     push_url: str
-
-
-# ---------------------------------------------------------------------------
-# Payload decoding helpers
-# ---------------------------------------------------------------------------
-
-# Field names in the comma-separated ``ext`` payload from EZVIZ.
-EXT_FIELD_NAMES: Final[tuple[str, ...]] = (
-    "channel_type",
-    "time",
-    "device_serial",
-    "channel_no",
-    "alert_type_code",
-    "default_pic_url",
-    "media_url_alt1",
-    "media_url_alt2",
-    "resource_type",
-    "status_flag",
-    "file_id",
-    "is_encrypted",
-    "picChecksum",
-    "is_dev_video",
-    "metadata",
-    "msgId",
-    "image",
-    "device_name",
-    "reserved",
-    "sequence_number",
-)
-
-# Fields that should be converted to ``int`` if present.
-EXT_INT_FIELDS: Final[frozenset[str]] = frozenset(
-    {
-        "channel_type",
-        "channel_no",
-        "alert_type_code",
-        "resource_type",
-        "status_flag",
-        "is_encrypted",
-        "is_dev_video",
-        "sequence_number",
-    }
-)
 
 
 # ---------------------------------------------------------------------------
@@ -425,11 +388,11 @@ class MQTTClient:
             return
 
         ext: dict[str, Any] = decoded.get("ext", {}) if isinstance(decoded.get("ext"), dict) else {}
-        device_serial = ext.get("device_serial")
+        device_serial = ext.get("device_serial") or ext.get("deviceSerial")
         alert_code = ext.get("alert_type_code")
         msg_id = ext.get("msgId")
 
-        if device_serial:
+        if isinstance(device_serial, str) and device_serial:
             self._cache_message(device_serial, decoded)
             _LOGGER.debug(
                 "MQTT msg: serial=%s alert_code=%s msg_id=%s",
@@ -470,40 +433,10 @@ class MQTTClient:
     # ------------------------------------------------------------------
 
     def decode_mqtt_message(self, payload_bytes: bytes) -> dict[str, Any]:
-        """Decode raw MQTT message payload into a structured dictionary.
+        """Decode a notification without changing connection lifecycle.
 
-        The returned dictionary will contain all top-level fields from the message,
-        and the 'ext' field is parsed into named subfields with numeric fields converted to int.
-
-        Parameters:
-            payload_bytes (bytes): Raw payload received from MQTT broker.
-
-        Returns:
-            dict: Decoded message with ``ext`` mapped to named fields; numeric fields
-            converted to ``int`` where appropriate.
-
-        Raises:
-            PyEzvizError: If the payload is not valid JSON.
+        Standard alarm compatibility fields are retained; call/control messages
+        use their own schema. Invalid JSON/UTF-8 or non-object roots raise
+        PyEzvizError so the receiver can discard one message and keep listening.
         """
-        try:
-            payload_str = payload_bytes.decode("utf-8")
-            data: dict[str, Any] = json.loads(payload_str)
-
-            if "ext" in data and isinstance(data["ext"], str):
-                ext_parts = data["ext"].split(",")
-                ext_dict: dict[str, Any] = {}
-                for i, name in enumerate(EXT_FIELD_NAMES):
-                    value: Any = ext_parts[i] if i < len(ext_parts) else None
-                    if value is not None and name in EXT_INT_FIELDS:
-                        with suppress(ValueError):
-                            value = int(value)
-                    ext_dict[name] = value
-                data["ext"] = ext_dict
-
-        except json.JSONDecodeError as err:
-            # Stop the client on malformed payloads as a defensive measure,
-            # mirroring previous behaviour.
-            self.stop()
-            raise PyEzvizError(f"Unable to decode MQTT message: {err}") from err
-
-        return data
+        return decode_notification(payload_bytes)

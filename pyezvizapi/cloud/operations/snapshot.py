@@ -12,6 +12,8 @@ from pyezvizapi.cloud.deadline import remaining_request_budget, request_deadline
 from pyezvizapi.constants import DeviceCatagories, DeviceSwitchType
 from pyezvizapi.devices import factory
 from pyezvizapi.devices.detector import EzvizDetector
+from pyezvizapi.devices.intercom_events import IntercomEvent, get_intercom_events
+from pyezvizapi.devices.monitor import monitor_status
 from pyezvizapi.devices.observation import observed_fields, plug_power, power_state
 from pyezvizapi.devices.snapshot import (
     CameraState,
@@ -23,9 +25,15 @@ from pyezvizapi.devices.snapshot import (
     DeviceSnapshot,
     DeviceState,
     LightState,
+    MonitorState,
     PlugState,
 )
-from pyezvizapi.exceptions import EzvizAuthTokenExpired, EzvizAuthVerificationCode, PyEzvizError
+from pyezvizapi.exceptions import (
+    EzvizAuthTokenExpired,
+    EzvizAuthVerificationCode,
+    HTTPError,
+    PyEzvizError,
+)
 from pyezvizapi.models import EzvizDeviceRecord
 
 
@@ -42,6 +50,7 @@ def _kind(record: EzvizDeviceRecord, supported: list[str]) -> DeviceKind | None:
         DeviceCatagories.LIGHTING.value: "light",
         DeviceCatagories.SOCKET.value: "plug",
         DeviceCatagories.DETECTOR_DEVICE_CATEGORY.value: "detector",
+        DeviceCatagories.INTERCOM_MONITOR_CATEGORY.value: "monitor",
     }
     return categories.get(category, "camera")
 
@@ -76,6 +85,9 @@ def _render(
             ):
                 values[key] = None
         state_type = CameraState
+    elif kind == "monitor":
+        values = monitor_status(serial, raw)
+        state_type = MonitorState
     elif kind == "detector":
         wrapper = EzvizDetector(client, serial, record)
         values = wrapper.status()
@@ -112,6 +124,26 @@ def _render(
             values.setdefault("switches", {})[DeviceSwitchType.PLUG.value] = known_power
     observed = observed_fields(raw, kind)
     return state_type(serial, kind, values, DeviceCapabilities(observed))
+
+
+def _events(
+    client: Any, records: dict[str, EzvizDeviceRecord], options: DevicePollOptions
+) -> tuple[tuple[IntercomEvent, ...], bool | None, str | None]:
+    if not options.include_intercom_events:
+        return (), None, None
+    try:
+        remaining = remaining_request_budget()
+        budget = min(2.0, remaining / 4) if remaining is not None else 2.0
+        # Optional history cannot consume the entire inventory/publication budget.
+        with request_deadline(time.monotonic() + budget, monotonic=time.monotonic):
+            events = get_intercom_events(
+                client, tuple(s for s, r in records.items() if r.device_category == "BDoorBell")
+            )
+    except (EzvizAuthTokenExpired, EzvizAuthVerificationCode):
+        raise
+    except (HTTPError, PyEzvizError, OSError) as error:
+        return (), False, type(error).__name__
+    return events, True, None
 
 
 def poll_devices(client: Any, options: DevicePollOptions) -> DeviceSnapshot:
@@ -175,9 +207,16 @@ def poll_devices(client: Any, options: DevicePollOptions) -> DeviceSnapshot:
                     )
                 else:
                     health[serial] = DeviceHealth(True, True, instant)
+            intercom_events, events_current, events_error = _events(client, records, options)
             remaining_request_budget()
             snapshot = DeviceSnapshot(
-                1 if previous is None else previous.revision + 1, instant, states, health
+                1 if previous is None else previous.revision + 1,
+                instant,
+                states,
+                health,
+                intercom_events,
+                events_current,
+                events_error,
             )
         client._device_snapshot = snapshot
         return snapshot

@@ -14,6 +14,7 @@ from pyezvizapi._shared.utils import (
 )
 from pyezvizapi.constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
 from pyezvizapi.devices.firmware import firmware_status
+from pyezvizapi.devices.intercom_events import intercom_event_type
 from pyezvizapi.devices.payload import local_ip_address, switch_values
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.models import EzvizChimeMusic, EzvizDeviceChimeInfo, EzvizDeviceRecord
@@ -265,6 +266,8 @@ class EzvizCamera:
         """
         tzinfo = self._get_tzinfo()
         active, seconds_out, last_alarm_str = compute_motion_from_alarm(self._last_alarm, tzinfo)
+        if intercom_event_type(self._last_alarm.get("alarmType")) is not None:
+            active = False
 
         self._alarmmotiontrigger = {
             "alarm_trigger_active": active,

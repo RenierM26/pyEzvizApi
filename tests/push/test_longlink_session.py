@@ -1,6 +1,7 @@
 """MQTT wire profile and delivery semantics, with no external services."""
 # ruff: noqa: SLF001
 
+from collections.abc import Callable
 import json
 from threading import Event
 from typing import cast
@@ -9,11 +10,14 @@ from unittest.mock import Mock
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import _ConnectionState
 import pytest
+import requests
 
+from pyezvizapi.devices.intercom_events import normalize_intercom_event
 from pyezvizapi.exceptions import EzvizPushFatalError
 from pyezvizapi.push.longlink import codec as wire
 from pyezvizapi.push.longlink.auth import PushCredentials
 from pyezvizapi.push.longlink.session import Channel99Session
+from pyezvizapi.push.mqtt import MQTTClient
 from pyezvizapi.push.paho import set_keepalive
 
 SERIAL = b"MOBILE:ys7:synthetic-user:synthetic-phone"
@@ -27,7 +31,7 @@ def make_message(topic: str, payload: bytes | bytearray) -> mqtt.MQTTMessage:
     return result
 
 
-def session(callback: Mock) -> Channel99Session:
+def session(callback: Callable[[bytes], None]) -> Channel99Session:
     return Channel99Session(
         ("example.invalid", 8777), SERIAL, lambda: "token", {}, lambda state: None, callback
     )
@@ -203,3 +207,32 @@ def test_oversized_mutable_payload_is_rejected_before_snapshot() -> None:
     message = make_message(f"/{SERIAL.decode()}/9000/1", OversizedPayload(65537))
     session(callback)._receive(Mock(), message, KEY)
     callback.assert_not_called()
+
+
+@pytest.mark.parametrize("family", ["alarm", "call", "control"])
+def test_encrypted_intercom_notification_reaches_decoded_cache_without_reply(family):
+    """Synthetic encrypted broker frame -> SDK callback/cache -> event adapter."""
+    if family == "alarm":
+        ext = ",".join(["1", "2026-11-15 12:00:00", "INTERCOM", "0", "10242", "", "", "", "Card", "0", "", "0", "", "0", "", "event-id", ""])
+    elif family == "call":
+        ext = ",".join(["14", "2026-11-15+12:00:00", "INTERCOM", "0", "1", "call-id", "0", "", "0", "", "0"])
+    else:
+        ext = json.dumps({"x-type": "devStatus", "version": "v4", "deviceSerial": "INTERCOM", "localIndex": "0", "key": "switch_611", "value": False})
+    body = json.dumps({"ext": ext}).encode()
+    metadata = b'{"Seq":42,"CmdVer":"1.0"}'
+    frame = wire.encrypt(KEY, len(metadata).to_bytes(2, "big") + metadata + body)
+    seen = Mock()
+    sdk = MQTTClient({"username": "test"}, requests.Session(), on_message_callback=seen)
+    connection = session(sdk._handle_payload)
+    broker = Mock()
+    connection._receive(broker, make_message(f"/{SERIAL.decode()}/9000/1", frame), KEY)
+    seen.assert_called_once()
+    decoded = seen.call_args.args[0]
+    assert sdk.messages_by_device["INTERCOM"] == decoded
+    event = normalize_intercom_event(decoded)
+    if family == "alarm":
+        assert event is not None and event.method == "rfid"
+        assert event.event_id == "event-id"
+    else:
+        assert event is None
+    broker.publish.assert_not_called()

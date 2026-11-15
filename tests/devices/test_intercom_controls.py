@@ -53,7 +53,7 @@ def test_chime_patch_preserves_siblings_and_input(data, field, value):
     assert data == original
 
 
-@pytest.mark.parametrize(("field", "value"), [("volume", True), ("volume", -1), ("volume", 8), ("volume", 2.5), ("volume", float("nan")), ("pir_enable", 1), ("doorbell", -1), ("unknown", 0)])
+@pytest.mark.parametrize(("field", "value"), [("volume", True), ("volume", -1), ("volume", 101), ("volume", 2.5), ("volume", float("nan")), ("pir_enable", 1), ("doorbell", -1), ("unknown", 0)])
 def test_bad_chime_writes_do_not_send(data, field, value):
     client = Mock()
     with pytest.raises(PyEzvizError):
@@ -61,7 +61,7 @@ def test_bad_chime_writes_do_not_send(data, field, value):
     client.set_dev_config_kv.assert_not_called()
 
 
-@pytest.mark.parametrize("value", [None, "bad", True, -1, 8])
+@pytest.mark.parametrize("value", [None, "bad", True, -1, 101])
 def test_invalid_volume_is_unknown_not_default(data, value):
     data["STATUS"]["optionals"]["ChimeMusic"]["volume"] = value
     assert chime_value(data, "volume") is None
@@ -274,3 +274,44 @@ def test_fresh_process_import_order(first):
     """New monitor rendering cannot close a client/audio/intercom import cycle."""
     script = f"import importlib; importlib.import_module({first!r}); from pyezvizapi.devices.intercom import chime_value; from pyezvizapi.devices.monitor import monitor_status; from pyezvizapi.client import EzvizClient"
     subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, timeout=20)
+
+
+@pytest.mark.parametrize("code", [0, "0", None])
+def test_app_unified_ring_subtype_fallback(code):
+    event = normalize_intercom_event({"deviceSerial": "TEST", "msgId": "ID", "subType": 2701, "ext": {"alarmType": code}})
+    assert event is not None and event.code == 2701
+    assert event.event_type == "ring"
+
+
+@pytest.mark.parametrize("code", [2401, 10242, 99999, True, "bad"])
+def test_ring_subtype_never_overrides_nonzero_alarm_type(code):
+    event = normalize_intercom_event({"deviceSerial": "TEST", "msgId": "ID", "subType": 2701, "ext": {"alarmType": code}})
+    assert (event.code if event is not None else None) == (code if code == 10242 else None)
+
+
+def test_missing_history_list_is_not_reported_as_current():
+    client = Mock()
+    client.get_device_messages_list.return_value = {}
+    with pytest.raises(PyEzvizError, match="no message list"):
+        get_intercom_events(client, ("TEST",))
+
+
+def test_fractional_capability_is_not_an_enabled_integer(data):
+    data["deviceInfos"]["supportExt"]["662"] = 1.0
+    assert intercom_relays(data) == ()
+    assert chime_value(data, "volume") is None
+
+
+@pytest.mark.parametrize(("category", "maximum"), [("DBScreen", 7), ("BDoorBell", 100)])
+def test_app_category_volume_ranges_apply_to_reads_and_writes(data, category, maximum):
+    data["deviceInfos"]["deviceCategory"] = category
+    data["STATUS"]["optionals"]["ChimeMusic"]["volume"] = maximum
+    assert chime_value(data, "volume") == maximum
+    client = Mock()
+    assert set_intercom_chime(client, "TEST", "volume", maximum, data)
+    client.set_dev_config_kv.assert_called_once()
+    with pytest.raises(PyEzvizError):
+        set_intercom_chime(client, "TEST", "volume", maximum + 1, data)
+    assert client.set_dev_config_kv.call_count == 1
+    data["STATUS"]["optionals"]["ChimeMusic"]["volume"] = maximum + 1
+    assert chime_value(data, "volume") is None

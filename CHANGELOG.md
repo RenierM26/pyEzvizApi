@@ -17,6 +17,13 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Fixed
 
+- Match the app's unified ring subtype fallback and preserve channel-99 alarm
+  customerType/subType metadata. Decode call and JSON-control notifications with
+  their own layouts; retain historical standard-alarm aliases and keep unknown
+  CSV layouts opaque. Invalid notifications no longer stop the push worker.
+- Reuse the category-based chime range (DBScreen 0–7, BDoorBell 0–100) rather
+  than deriving volume scale from relay capability. Share the strict relay gate
+  across discovery and commands; missing history lists are not successful polls.
 - Do not interpret known ringing/unlock alarm codes as motion. Existing generic
   alarm behavior is retained for unclassified codes.
 

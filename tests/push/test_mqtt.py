@@ -62,6 +62,8 @@ def test_decode_mqtt_message_expands_ext_fields_and_coerces_ints() -> None:
         "device_name": "Front Door",
         "reserved": "reserved",
         "sequence_number": 42,
+        "customerType": "3",
+        "subType": 42,
     }
 
 
@@ -76,13 +78,13 @@ def test_decode_mqtt_message_fills_missing_ext_fields_with_none() -> None:
     assert decoded["ext"]["sequence_number"] is None
 
 
-def test_decode_mqtt_message_raises_and_stops_on_malformed_json() -> None:
+def test_decode_mqtt_message_rejects_malformed_json_without_stopping() -> None:
     client = _client()
 
     with pytest.raises(PyEzvizError, match="Unable to decode MQTT message"):
         client.decode_mqtt_message(b"not-json")
 
-    assert client.stop_called is True
+    assert client.stop_called is False
 
 
 def test_payload_handler_caches_by_device_and_invokes_callback() -> None:

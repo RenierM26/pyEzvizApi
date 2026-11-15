@@ -20,7 +20,10 @@ def _integer(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, str) and value.isdecimal():
-        return int(value)
+        try:
+            return int(value)
+        except ValueError:
+            return None
     return None
 
 
@@ -76,7 +79,16 @@ def normalize_intercom_event(
     """
     ext = payload.get("ext")
     ext = ext if isinstance(ext, Mapping) else {}
-    code = _integer(ext.get("alert_type_code", ext.get("alarmType", payload.get("alarmType"))))
+    if "channel_type" in ext and _integer(ext["channel_type"]) != 1:
+        return None
+    raw_code = ext.get("alert_type_code", ext.get("alarmType", payload.get("alarmType")))
+    code = _integer(raw_code)
+    # MessageItem.convToAlarmItem explicitly promotes only zero/missing
+    # alarmType + subType 2701. An unknown nonzero type must not become a ring.
+    if (raw_code is None or code == 0) and _integer(
+        payload.get("subType", ext.get("subType"))
+    ) == 2701:
+        code = 2701
     kind = intercom_event_type(code)
     serial = _text(payload.get("deviceSerial") or ext.get("device_serial"))
     event_id = _text(payload.get("msgId") or payload.get("alarmId") or ext.get("msgId"))
@@ -113,7 +125,7 @@ def get_intercom_events(client: Any, serials: tuple[str, ...]) -> tuple[Intercom
     response = client.get_device_messages_list(
         serials=",".join(serials), s_type="92,2701", limit=50, date="", end_time=""
     )
-    messages = response.get("message", response.get("messages", []))
+    messages = response.get("message", response.get("messages"))
     if not isinstance(messages, list):
         raise PyEzvizError("Intercom history response has no message list")
     events = []

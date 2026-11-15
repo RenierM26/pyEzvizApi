@@ -11,9 +11,10 @@ reported metadata/optionals; they never receive camera RTSP defaults or camera
 alarm requests. Legacy `load_cameras()` does not return monitors.
 
 `BDoorBell` remains a camera for compatibility. Intercom chime/relay helpers
-require enabled local lock/gate capability **662 == 1**; ordinary doorbells do
-not acquire the intercom's 0–7 volume scale. A monitor's category is sufficient
-for its observed chime settings. No model-name inference or composite-serial
+require enabled local lock/gate capability **662 == 1**. Chime volume uses the
+existing category policy: **DBScreen 0–7; BDoorBell 0–100**. Relay capability
+must not select a volume scale. A monitor's category is sufficient for its
+observed chime settings. No model-name inference or composite-serial
 splitting creates indoor monitors or topology relationships.
 
 `intercom_relays(data)` returns door/gate targets only when a single advertised
@@ -40,7 +41,7 @@ volume = chime_value(data, "volume")
   relay. API rejection propagates; the other relay is never a fallback.
 - `set_intercom_chime` patches a complete detached `ChimeMusic` object, preserving
   sibling/unknown fields. It refuses missing settings rather than filling default
-  values. Booleans must be booleans; volume is an integer 0–7.
+  values. Booleans must be booleans; volume is an integer within the category range.
 - `doorbell` and `pir` ringtone IDs can be set to caller-known nonnegative integer
   IDs. There is **no universal confirmed ringtone catalogue or maximum** here.
 - Applications must serialize compound writes and preserve accepted siblings when
@@ -70,6 +71,9 @@ qualified. Other methods remain `None`, not text-matched guesses. This does not
 identify a specific person/card, establish a gate event code or distinguish two
 household call buttons. Unknown codes are not classified from translated titles.
 
+The app's unified-message fallback (`alarmType` zero/missing, `subType=2701`)
+is also recognized as ringing. It never overrides an unknown nonzero alarm type.
+
 Unified-message `time` takes precedence over conflicting `ext.alarmStartTime`.
 Naive push time strings require an explicitly supplied timezone; otherwise
 `occurred_at` is unknown. Events without stable message IDs are not invented.
@@ -89,7 +93,8 @@ positional arguments are unchanged.
 
 ## Provenance and remaining acceptance
 
-Protocol findings are corroborated by retained EZVIZ Android 7.4.1.0421
+The audit uses retained EZVIZ Android artifacts, not a newly downloaded or
+latest-store-version claim. Protocol findings are corroborated by Android 7.4.1.0421
 (versionCode 1676), particularly `PlayDataInfo.supportLocalLockGate` and
 `BasePlayerOperationPresenter` local relay actions. Chime field names also occur
 in the app's `ChimeMusic` model. No proprietary app source or credentials are
@@ -106,3 +111,22 @@ unlock routing has a successful HPD7 report in
 New helpers are verified with offline synthetic tests, not new hardware commands.
 Additional firmware/account validation is still needed. Streaming, talkback,
 answer/hangup, arbitrary feature writes and credential management are separate work.
+
+## App contract cross-check
+
+| Contract | App evidence | SDK policy |
+| --- | --- | --- |
+| Local relays | `PlayDataInfo.supportLocalLockGate`; `BasePlayerOperationPresenter` local lock/gate actions | Capability 662 exactly 1; Video resource; door 2, gate 1; selected index, no fallback |
+| Chime writes | RN `RevisionSetting/pages/Audio/audioSettingViewModel`, `screenSoundSetting`, `chimeSoungSetting` | Preserve complete ChimeMusic; DBScreen 0–7, other categories 0–100; do not guess tone IDs |
+| Chime enables | RN chime-rule settings | Observed doorbell_enable/pir_enable fields, cloned sibling-preserving writes |
+| Nameplate light | RN Light settings / functionPoint support check | LightCtrl/NightLightEnable when observed; otherwise observed legacy switch 611; never retry another route after rejection |
+| History | `MessageApi.getUnifiedMsg`, `MessageItem.convToAlarmItem` | GET /v3/unifiedmsg/list/v2; serials/stype/limit/date/endTime; bounded recent window; zero alarmType + ring subtype fallback |
+| Push | `LongLinkPushClient`, `AnalyzePushMessageManager`, `DoorBellPushAlarm` | Separate alarm, call and JSON-control layouts; see [channel-99 decoding](channel99.md#notification-decoding) |
+
+The CSV slot mappings were checked against smali because JADX omits the app's
+large push parser. Unified ring fallback is also present in retained 7.6.1
+`MessageItem`; this is corroboration, not live delivery evidence. Unlock 10242
+and Card/Monitor method values still rely on published HP7 records, not an
+invented app enum. No card/person identity, button number or gate event code is
+inferred. Binary mobile push delivery remains unqualified separately from direct
+JSON notifications.

@@ -12,7 +12,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from pyezvizapi.devices.audio import volume_config
+from pyezvizapi.constants import SupportExt
+from pyezvizapi.devices.audio import alarm_volume_max, volume_config
 from pyezvizapi.devices.capabilities import SupportExtView
 from pyezvizapi.devices.features import resolve_channel
 from pyezvizapi.devices.metadata import coerce_bool
@@ -35,16 +36,18 @@ def device_category(data: Mapping[str, Any]) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _supports_local_relays(data: Mapping[str, Any]) -> bool:
+    support = SupportExtView.from_camera_data(dict(data)).get(
+        str(SupportExt.SupportLocalLockGate.value)
+    )
+    return (
+        device_category(data) == "BDoorBell" and type(support) in (int, str) and support in (1, "1")
+    )
+
+
 def is_intercom(data: Mapping[str, Any]) -> bool:
     """Identify monitors or local-relay intercoms, not every battery doorbell."""
-    if device_category(data) == "DBScreen":
-        return True
-    support = SupportExtView.from_camera_data(dict(data)).get("662")
-    return (
-        device_category(data) == "BDoorBell"
-        and not isinstance(support, bool)
-        and support in (1, "1")
-    )
+    return device_category(data) == "DBScreen" or _supports_local_relays(data)
 
 
 @dataclass(frozen=True)
@@ -80,11 +83,10 @@ def _video_resource(data: Mapping[str, Any]) -> Mapping[str, Any] | None:
 
 def intercom_relays(data: dict[str, Any]) -> tuple[IntercomRelay, ...]:
     """Use app capability 662, not linked-lock flags or DoorLockMgr presence."""
-    if device_category(data) != "BDoorBell":
+    if not _supports_local_relays(data):
         return ()
-    support = SupportExtView.from_camera_data(data).get("662")
     resource = _video_resource(data)
-    if isinstance(support, bool) or support not in (1, "1") or resource is None:
+    if resource is None:
         return ()
     index = str(resource["localIndex"])
     return (IntercomRelay("door", 2, "Video", index), IntercomRelay("gate", 1, "Video", index))
@@ -119,7 +121,7 @@ def chime_value(data: dict[str, Any], field: ChimeField) -> bool | int | None:
         return coerce_bool(value)
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
-    if field == "volume" and value > 7:
+    if field == "volume" and value > alarm_volume_max(data):
         return None
     return value
 
@@ -145,8 +147,10 @@ def set_intercom_chime(
     else:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise PyEzvizError("Chime setting requires a non-negative integer")
-        if field == "volume" and value > 7:
-            raise PyEzvizError("Intercom chime volume must be between 0 and 7")
+        if field == "volume" and value > alarm_volume_max(data):
+            raise PyEzvizError(
+                f"Intercom chime volume must be between 0 and {int(alarm_volume_max(data))}"
+            )
         encoded = value
     config = deepcopy(volume_config(data, "ChimeMusic"))
     assert config is not None

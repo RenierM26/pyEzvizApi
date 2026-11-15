@@ -17,7 +17,6 @@ from pyezvizapi.devices.capabilities import SupportExtView
 from pyezvizapi.devices.features import resolve_channel
 from pyezvizapi.devices.metadata import coerce_bool
 from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.models import EzvizDeviceRecord
 
 if TYPE_CHECKING:
     from pyezvizapi.client import EzvizClient
@@ -205,19 +204,3 @@ def set_label_light(client: EzvizClient, serial: str, enable: bool, data: dict[s
         )
         return True
     return client.switch_status(serial, 611, enable)
-
-
-def monitor_status(serial: str, raw: dict[str, Any]) -> dict[str, Any]:
-    """Render a DBScreen without camera defaults, previews or alarm requests."""
-    record = EzvizDeviceRecord.from_api(serial, raw)
-    return {
-        **deepcopy(raw),
-        "serial": serial,
-        "name": record.name or serial,
-        "version": record.version,
-        "status": record.status,
-        "device_category": record.device_category,
-        "device_sub_category": record.device_sub_category,
-        "supportExt": dict(record.support_ext or {}),
-        "optionals": deepcopy((raw.get("STATUS") or {}).get("optionals")),
-    }

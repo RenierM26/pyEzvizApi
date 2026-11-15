@@ -47,7 +47,8 @@ def _time(value: Any, zone: tzinfo | None) -> datetime | None:
                 stamp = stamp.replace(tzinfo=zone)
             return stamp.astimezone(UTC)
     except (ValueError, OverflowError, OSError):
-        pass
+        # Invalid/out-of-range vendor timestamps remain unknown, never now/UTC.
+        return None
     return None
 
 

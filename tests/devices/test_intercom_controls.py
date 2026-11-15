@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 from datetime import UTC, datetime
+import subprocess
+import sys
 from unittest.mock import Mock
 
 import pytest
@@ -265,3 +267,10 @@ def test_history_timeout_has_its_own_short_budget(data, monkeypatch):
             assert deadline.remaining_request_budget() == 18
     finally:
         client.close_session()
+
+
+@pytest.mark.parametrize("first", ["pyezvizapi.devices.intercom", "pyezvizapi.devices.audio", "pyezvizapi.devices.monitor", "pyezvizapi.cloud.operations.snapshot", "pyezvizapi.client"])
+def test_fresh_process_import_order(first):
+    """New monitor rendering cannot close a client/audio/intercom import cycle."""
+    script = "import importlib; importlib.import_module(%r); from pyezvizapi.devices.intercom import chime_value; from pyezvizapi.devices.monitor import monitor_status; from pyezvizapi.client import EzvizClient" % first
+    subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, timeout=20)

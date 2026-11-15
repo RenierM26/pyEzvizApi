@@ -12,8 +12,8 @@ from pyezvizapi.cloud.deadline import remaining_request_budget, request_deadline
 from pyezvizapi.constants import DeviceCatagories, DeviceSwitchType
 from pyezvizapi.devices import factory
 from pyezvizapi.devices.detector import EzvizDetector
-from pyezvizapi.devices.intercom import monitor_status
 from pyezvizapi.devices.intercom_events import IntercomEvent, get_intercom_events
+from pyezvizapi.devices.monitor import monitor_status
 from pyezvizapi.devices.observation import observed_fields, plug_power, power_state
 from pyezvizapi.devices.snapshot import (
     CameraState,

@@ -6,6 +6,8 @@ See [release availability](releases.md#source-state-is-not-a-published-release).
 
 See the [2.2.0 release notes](release-2.2.0.md) for the switch HTTP diagnostics fix.
 
+See the [2.5.1 release notes](release-2.5.1.md) for the image-position PTZ payload fix.
+
 See the [2.5.0 release notes](release-2.5.0.md) for intercom APIs and compatibility changes.
 
 ## Start by task

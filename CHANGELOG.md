@@ -5,6 +5,10 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.5.1 - 2026-11-16
+
+See [release notes](docs/release-2.5.1.md).
+
 ### Fixed
 
 - Match the retained app's complete point-PTZ payload, including `zoomType=zoomIn`,

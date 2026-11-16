@@ -21,7 +21,7 @@ that a particular camera fails without it or physically reaches a requested poin
 
 Python 3.12+ and dependencies are unchanged. No public APIs are removed and no
 migration is needed for valid numeric calls. Callers that passed boolean or
-non-numeric coordinates now receive `InvalidParameter` without a cloud request.
+non-numeric coordinates now receive `PyEzvizError` without a cloud request.
 The [2.5.0 compatibility notes](release-2.5.0.md) still apply when upgrading from
 an older version. No streaming, authentication or push behavior changes.
 

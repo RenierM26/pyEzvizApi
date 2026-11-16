@@ -6,6 +6,8 @@ The cloud client is synchronous. In async applications, run login, polling,
 controls and cleanup in the application's executor; do not call them directly
 on an event loop. Home Assistant owns its own executor and storage lifecycle.
 
+Point-based camera movement is documented in [point PTZ control](ptz-point-control.md).
+
 ## Authenticate and read status
 
 This example is interactive and contacts EZVIZ. Credentials are read rather than

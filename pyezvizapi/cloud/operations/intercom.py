@@ -191,11 +191,11 @@ def ptz_control_coordinates(
     _owner: _ModuleType,
 ) -> bool:
     """PTZ Coordinate Move."""
-    if not 0 <= x_axis <= 1:
+    if isinstance(x_axis, bool) or not isinstance(x_axis, (int, float)) or not 0 <= x_axis <= 1:
         raise _owner.PyEzvizError(
             f"Invalid X coordinate: {x_axis}: Should be between 0 and 1 inclusive"
         )
-    if not 0 <= y_axis <= 1:
+    if isinstance(y_axis, bool) or not isinstance(y_axis, (int, float)) or not 0 <= y_axis <= 1:
         raise _owner.PyEzvizError(
             f"Invalid Y coordinate: {y_axis}: Should be between 0 and 1 inclusive"
         )
@@ -209,6 +209,7 @@ def ptz_control_coordinates(
         "CtrlPTZ3DPosition",
         payload={
             "positionCtrlType": "point",
+            "zoomType": "zoomIn",
             "positionPoint": {"x": x_axis, "y": y_axis},
             "positionRect": {"height": 1.0, "width": 1.0, "x": 0.0, "y": 0.0},
         },

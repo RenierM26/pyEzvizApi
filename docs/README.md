@@ -24,6 +24,8 @@ See the [2.5.0 release notes](release-2.5.0.md) for intercom APIs and compatibil
 
 ## Current user guides
 
+- [Point-based PTZ control](ptz-point-control.md)
+
 - [Cloud-mediated SD-card playback](cloud-sd-playback.md)
 - [LAN-only SD-card downloads](lan-sd-playback.md)
 

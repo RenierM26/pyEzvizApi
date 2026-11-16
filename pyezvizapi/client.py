@@ -2900,7 +2900,12 @@ class EzvizClient:
         local_index: str = "1",
         max_retries: int = 0,
     ) -> bool:
-        """PTZ Coordinate Move."""
+        """Point PTZ at normalized image coordinates, not absolute motor angles.
+
+        The app's direct-tap route is Video_1/1. For selected-resource point
+        location, pass the device's explicit resource identifier/local index.
+        Model support and permissions are required; no route fallback is tried.
+        """
         return _intercom.ptz_control_coordinates(
             self,
             serial,

@@ -5,6 +5,13 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Fixed
+
+- Match the retained app's complete point-PTZ payload, including `zoomType=zoomIn`,
+  and reject boolean/non-numeric coordinate inputs before transport. Preserve
+  normalized 0–1 bounds, existing route defaults/overrides and error propagation.
+  See [point PTZ contracts](docs/ptz-point-control.md).
+
 ## v2.5.0 - 2026-11-15
 
 See [release notes and compatibility changes](docs/release-2.5.0.md).

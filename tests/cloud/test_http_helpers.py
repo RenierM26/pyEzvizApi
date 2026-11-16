@@ -2691,6 +2691,7 @@ def test_ptz_control_coordinates_formats_payload_and_validates(monkeypatch) -> N
     assert captured["action_id"] == "CtrlPTZ3DPosition"
     assert captured["payload"] == {
         "positionCtrlType": "point",
+        "zoomType": "zoomIn",
         "positionPoint": {
             "x": 0.25,
             "y": 0.75,

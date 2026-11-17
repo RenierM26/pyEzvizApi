@@ -6,14 +6,22 @@ persisted before discovery; storage failures must propagate to the caller.
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
+import time
 from typing import Any
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 import requests
 
 from pyezvizapi.cloud import transport as _http_transport
 from pyezvizapi.cloud.budget import budgeted_http_call
-from pyezvizapi.cloud.endpoints import API_ENDPOINT_REFRESH_SESSION_ID, API_ENDPOINT_SERVER_INFO
+from pyezvizapi.cloud.endpoints import (
+    API_ENDPOINT_LOGIN_PUBLIC_KEY,
+    API_ENDPOINT_REFRESH_SESSION_ID,
+    API_ENDPOINT_SERVER_INFO,
+)
 from pyezvizapi.cloud.identity import resolve_feature_code
 from pyezvizapi.cloud.responses import meta_code, object_section, parse_json, response_summary
 from pyezvizapi.cloud.token import validate_feature_code
@@ -23,6 +31,41 @@ from pyezvizapi.push.longlink.profile import profile_for_token, synchronize_http
 
 # Older callers and MQTT retain this helper import as the same object.
 isolated_session = _http_transport.isolated_session
+
+
+def fetch_login_public_key(session: requests.Session, api_url: str, timeout: float) -> str:
+    """Return the base64 X.509 RSA key the app uses to wrap the login password."""
+    response = budgeted_http_call(
+        session,
+        "get",
+        url=f"https://{api_url}{API_ENDPOINT_LOGIN_PUBLIC_KEY}",
+        allow_redirects=False,
+        timeout=timeout,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as error:
+        raise HTTPError from error
+    result = parse_json(response)
+    key = result.get("publicKey")
+    if meta_code(result) != 200 or not isinstance(key, str) or not key:
+        raise PyEzvizError(f"Login public key unavailable: {response_summary(result)}")
+    return key
+
+
+def encrypt_login_password(
+    public_key: str, password_digest: str, *, now: float | None = None
+) -> str:
+    """Wrap the MD5 password digest like app 7.6.x: RSA/PKCS#1 v1.5 of ``digest,epoch``."""
+    try:
+        key = serialization.load_der_public_key(base64.b64decode(public_key, validate=True))
+    except ValueError as error:
+        raise PyEzvizError("Invalid login public key") from error
+    if not isinstance(key, rsa.RSAPublicKey):
+        raise PyEzvizError("Login public key is not RSA")
+    epoch = int(time.time() if now is None else now)
+    plain = f"{password_digest},{epoch}".encode()
+    return base64.b64encode(key.encrypt(plain, padding.PKCS1v15())).decode()
 
 
 def discover_services(

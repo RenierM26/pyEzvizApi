@@ -5,6 +5,14 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Fixed
+
+- Log in like app 7.6.x: send the MD5 password digest wrapped with the server's RSA key
+  (`GET /v3/users/publickey`, PKCS#1 v1.5 of `digest,epoch`) to `/v3/users/login/v6`.
+  Accounts whose password was set or reset after the app change reject `login/v5` with
+  1226; that code now reports "Incorrect username or password." The v5 request remains
+  a fallback only when the key cannot be fetched. Fixes #401.
+
 ## v2.5.1 - 2026-11-16
 
 See [release notes](docs/release-2.5.1.md).

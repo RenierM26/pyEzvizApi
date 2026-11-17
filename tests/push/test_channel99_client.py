@@ -840,7 +840,7 @@ def test_migration_serializes_token_and_transport_users(monkeypatch, observer):
     ))
 
     def post(**kwargs):
-        if kwargs["url"].endswith("/v3/users/login/v5"):
+        if kwargs["url"].endswith("/v3/users/login/v6"):
             entered.set()
             assert release.wait(3)
             return response({"meta": {"code": 200},
@@ -958,8 +958,8 @@ def test_mfa_migration_keeps_android_profile_across_region_redirect(monkeypatch)
     result = client.enable_channel99(sms_code=123456)
 
     assert [request["url"] for request in posts] == [
-        "https://apiieu.ezvizlife.com/v3/users/login/v5",
-        "https://new.invalid/v3/users/login/v5",
+        "https://apiieu.ezvizlife.com/v3/users/login/v6",
+        "https://new.invalid/v3/users/login/v6",
     ]
     assert all(request["data"]["smsCode"] == 123456 for request in posts)
     assert all(

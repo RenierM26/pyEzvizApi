@@ -12,6 +12,9 @@ may not contain every API described here. Match documentation to your installed
 release tag, or use a source checkout for current development. See the
 [changelog](https://github.com/RenierM26/pyEzvizApi/blob/main/CHANGELOG.md), especially the removed import paths and push migration.
 
+Unreleased multi-lens application APIs are described in
+[camera channels](docs/camera-channels.md); they are not included in PyPI 2.5.1.
+
 ## Release 2.5.0
 
 Version 2.5.0 adds non-camera monitors, capability-qualified intercom controls and

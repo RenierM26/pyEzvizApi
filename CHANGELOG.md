@@ -5,6 +5,12 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+- Add immutable reported camera channels, app-backed point routing, explicit
+  notification-channel normalization and strict batch image-channel selection.
+  Keep routing/framing out of Home Assistant adapters, with no implicit I/O,
+  background consumers, guessed RTSP paths or last-lens image fallback. Existing
+  positional image APIs remain compatible. See [camera channels](docs/camera-channels.md).
+
 ## v2.5.1 - 2026-11-16
 
 See [release notes](docs/release-2.5.1.md).

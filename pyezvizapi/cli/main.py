@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlparse
 from pyezvizapi.cli import arguments as _cli_arguments
 from pyezvizapi.cli.commands.lan import handle_lan
 from pyezvizapi.cli.commands.recording_batch import handle_recordings
-from pyezvizapi.cloud.login import verification_code
+from pyezvizapi.cli.auth import login_with_verification
 from pyezvizapi.cloud.token_store import save_private_token
 from pyezvizapi.devices.camera import EzvizCamera
 from pyezvizapi.cloud.cas import CasDeviceSession, EzvizCAS
@@ -240,26 +240,9 @@ def _login(
     if not (client.account and client.password) and not _token_has_refresh_session(token):
         return
 
-    login_options: dict[str, Any] = {}
-    if mfa_channel is not None:
-        login_options["mfa_channel"] = 1 if mfa_channel == "sms" else 3
-    if mfa_account is not None:
-        login_options["mfa_account"] = mfa_account
-    logged_in = False
     if client.account and client.password:
-        try:
-            client.login(**login_options)
-        except EzvizAuthVerificationCode as error:
-            if error.code == 6002 and not error.code_sent:
-                raise PyEzvizError(
-                    "No MFA code requested; select a bound --mfa-channel/--mfa-account "
-                    "or complete security verification in the EZVIZ app."
-                ) from None
-            mfa_code = input("MFA code required, please input MFA code.\n")
-            client.login(sms_code=verification_code(mfa_code), **login_options)
-        logged_in = True
-
-    if not logged_in:
+        login_with_verification(client.login, mfa_channel=mfa_channel, mfa_account=mfa_account)
+    else:
         client.login()
 
     if require_service_urls:

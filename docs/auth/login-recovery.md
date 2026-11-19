@@ -83,7 +83,13 @@ from repr, errors and exported tokens; they are cleared after successful login.
 The selected channel stays on that client, but is not persisted in tokens.
 When constructing a new client, select it again. `available_channels` on a
 challenge reports available contact fields, not a server guarantee of support.
-`code_sent` means a request succeeded, not that a message was received.
+`code_sent` means a request succeeded for the **currently selected channel and
+contact**, not that a message was received. If the server changes or removes an
+automatically selected contact, a previous request no longer counts as delivery
+for the new contact. An explicit caller-selected recipient remains selected.
+That metadata change does not automatically send another message: callers must
+explicitly request/resend. Invalid channel/recipient selections leave all prior
+selection and successful-request state unchanged.
 
 ## Stable error categories
 

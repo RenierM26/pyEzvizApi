@@ -857,21 +857,70 @@ class EzvizClient:
         )
         return API_ENDPOINT_LOGIN_V6, encrypt_login_password(public_key, self.password)
 
-    def _login(
-        self,
-        smscode: str | int | None = None,
-        *,
-        request_mfa: bool = True,
-        _redirects: int = 0,
-    ) -> JsonDict:
-        """Login without retrying credentials, codes or key failures automatically."""
+    def _login(self, smscode: str | int | None = None, *, request_mfa: bool = True) -> JsonDict:
+        """Try the initial region and at most two regional redirects; never recurse."""
         smscode = verification_code(smscode)
-        # Region code to url.
         if len(self._token["api_url"].split(".")) == 1:
             self._token["api_url"] = "apii" + self._token["api_url"] + ".ezvizlife.com"
 
+        for redirects in range(3):
+            previous_push = dict(self._token)
+            json_result = self._post_login(smscode)
+            code = self._meta_code(json_result)
+            if code == 200:
+                self._login_verification = LoginVerification(
+                    channel=self._login_verification.channel
+                )
+                session_id = str(json_result["loginSession"]["sessionId"])
+                self._token.update(
+                    {
+                        "session_id": session_id,
+                        "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
+                        "username": str(json_result["loginUser"]["username"]),
+                        "api_url": str(json_result["loginArea"]["apiDomain"]),
+                        "feature_code": self.feature_code,
+                    }
+                )
+                synchronize_http_headers(
+                    self._session.headers,
+                    profile_for_token(self._token),
+                    session_id,
+                    scope="session",
+                    feature_code=self.feature_code,
+                )
+                # A fresh login may change profile/region. Never persist old discovery
+                # alongside new credentials: a failed lookup must be retried on resume.
+                self._token.pop("service_urls", None)
+                self._restore_push_login(
+                    cast(dict[str, Any], previous_push), json_result["loginUser"]
+                )
+                self._notify_token_updated()
+
+                self._token["service_urls"] = self.get_service_urls()
+                self._notify_token_updated()
+
+                return cast(dict[Any, Any], self._token)
+
+            if code == 1100:
+                if redirects == 2:
+                    break
+                area = _api_response.object_section(json_result, "loginArea", required=True)
+                domain = area.get("apiDomain")
+                if not isinstance(domain, str) or not domain:
+                    raise PyEzvizError("Invalid login region")
+                self._token["api_url"] = domain
+                continue
+            if code == 6002:
+                self._handle_login_challenge(json_result, smscode, request_mfa=request_mfa)
+            raise self._login_error(json_result)
+
+        raise EzvizLoginError(
+            "Login region redirect limit reached", reason="region_redirect_limit", code=1100
+        )
+
+    def _post_login(self, smscode: str | None) -> JsonDict:
+        """Construct one regional credential request, including a freshly fetched key."""
         push_enabled = self._token.get("push_profile") == PUSH_PROFILE
-        previous_push = dict(self._token)
         endpoint, password = self._login_credentials()
         payload = {
             "account": self.account,
@@ -903,84 +952,37 @@ class EzvizClient:
         except requests.HTTPError as err:
             raise HTTPError from err
 
-        json_result = self._parse_json(req)
+        return self._parse_json(req)
 
-        code = self._meta_code(json_result)
-        if code == 200:
-            self._login_verification = LoginVerification(channel=self._login_verification.channel)
-            session_id = str(json_result["loginSession"]["sessionId"])
-            self._token.update(
-                {
-                    "session_id": session_id,
-                    "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
-                    "username": str(json_result["loginUser"]["username"]),
-                    "api_url": str(json_result["loginArea"]["apiDomain"]),
-                    "feature_code": self.feature_code,
-                }
-            )
-            synchronize_http_headers(
-                self._session.headers,
-                profile_for_token(self._token),
-                session_id,
-                scope="session",
-                feature_code=self.feature_code,
-            )
-            # A fresh login may change profile/region. Never persist old discovery
-            # alongside new credentials: a failed lookup must be retried on resume.
-            self._token.pop("service_urls", None)
-            self._restore_push_login(cast(dict[str, Any], previous_push), json_result["loginUser"])
-            self._notify_token_updated()
-
-            self._token["service_urls"] = self.get_service_urls()
-            self._notify_token_updated()
-
-            return cast(dict[Any, Any], self._token)
-
-        if code == 1100:
-            if _redirects >= 2:
-                raise EzvizLoginError(
-                    "Login region redirect limit reached", reason="region_redirect_limit", code=1100
-                )
-            area = _api_response.object_section(json_result, "loginArea", required=True)
-            domain = area.get("apiDomain")
-            if not isinstance(domain, str) or not domain:
-                raise PyEzvizError("Invalid login region")
-            self._token["api_url"] = domain
-            return self._login(smscode, request_mfa=request_mfa, _redirects=_redirects + 1)
-
-        raise self._login_error(json_result, smscode, request_mfa=request_mfa)
-
-    def _login_error(
+    def _handle_login_challenge(
         self, result: JsonDict, smscode: str | None, *, request_mfa: bool
-    ) -> EzvizLoginError:
-        """Build a sanitized error, requesting a code only for an initial challenge."""
+    ) -> None:
+        """Update challenge state and explicitly perform an eligible initial request."""
+        state = self._login_verification
+        state.update(result)
+        destination = state.destination(self.account)
+        if smscode is None and request_mfa and not state.sent and destination:
+            self.send_mfa_code()
+            state.mark_sent(destination)
+
+    def _login_error(self, result: JsonDict) -> EzvizLoginError:
+        """Classify a response and snapshot MFA diagnostics without any I/O or state changes."""
         code = self._meta_code(result)
+        state = self._login_verification
         if code == 6002:
-            state = self._login_verification
-            state.update(result)
-            # Request and submit are separate: never resend while checking a code.
-            if (
-                smscode is None
-                and request_mfa
-                and not state.sent
-                and state.destination(self.account)
-            ):
-                self.send_mfa_code()
-                state.sent = True
             return EzvizAuthVerificationCode(
                 "MFA verification required. Retry with the code or explicitly request one.",
                 code=6002,
-                code_sent=state.sent,
+                code_sent=state.code_sent(self.account),
                 available_channels=tuple(sorted(state.contacts)),
                 reason="security_verification_required"
                 if state.app_required
                 else "verification_required",
             )
-
         error = login_error(code, result)
         if isinstance(error, EzvizAuthVerificationCode):
-            error.code_sent = self._login_verification.sent
-            error.available_channels = tuple(sorted(self._login_verification.contacts))
+            error.code_sent = state.code_sent(self.account)
+            error.available_channels = tuple(sorted(state.contacts))
         if error is not None:
             return error
         return EzvizLoginError(
@@ -1261,7 +1263,7 @@ class EzvizClient:
                 raise PyEzvizError(
                     f"Could not request MFA code: {self._response_summary(json_output)}"
                 )
-            state.sent = True
+            state.mark_sent(destination)
             return True
 
     def get_service_urls(self) -> Any:

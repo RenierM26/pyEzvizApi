@@ -32,6 +32,8 @@ from pyezvizapi.push.longlink.profile import profile_for_token, synchronize_http
 # Older callers and MQTT retain this helper import as the same object.
 isolated_session = _http_transport.isolated_session
 
+_BASE64_WHITESPACE_TABLE = str.maketrans("", "", " \t\r\n")
+
 
 def fetch_login_public_key(session: requests.Session, api_url: str, timeout: float) -> str:
     """Return the base64 X.509 RSA key the app uses to wrap the login password."""
@@ -59,7 +61,7 @@ def encrypt_login_password(
     """Wrap the MD5 password digest like the retained Android app: RSA/PKCS#1 v1.5 of ``digest,epoch``."""
     try:
         key = serialization.load_der_public_key(
-            base64.b64decode(public_key.translate(str.maketrans("", "", " \t\r\n")), validate=True)
+            base64.b64decode(public_key.translate(_BASE64_WHITESPACE_TABLE), validate=True)
         )
     except ValueError as error:
         raise PyEzvizError("Invalid login public key") from error

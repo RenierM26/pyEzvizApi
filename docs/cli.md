@@ -10,6 +10,22 @@ Use `pyezvizapi --help`, `pyezvizapi camera --help`, and
 `pyezvizapi stream local-sdk-dump --help` for the installed version's full flags.
 `python -m pyezvizapi` is an equivalent entry point.
 
+## Login verification
+
+The CLI keeps verification codes as strings, including leading zeros. Select
+SMS with global `--mfa-channel sms` (or email with `--mfa-channel email`). If the
+server does not return the bound contact, provide `--mfa-account` explicitly.
+The login username is not used to guess the verification channel. Example:
+
+```bash
+pyezvizapi -u YOUR_USERNAME -p YOUR_PASSWORD --mfa-channel sms --save-token devices status
+```
+
+These options also apply to `mqtt` profile migration. A successful code request
+is not proof of delivery. CAPTCHA, terminal management, region selection and
+security-contact flows require recovery in the EZVIZ app; the CLI does not loop
+or send extra codes for them. See [login recovery](auth/login-recovery.md).
+
 ## Command families
 
 | Command | Purpose |

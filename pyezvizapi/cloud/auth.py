@@ -56,9 +56,11 @@ def fetch_login_public_key(session: requests.Session, api_url: str, timeout: flo
 def encrypt_login_password(
     public_key: str, password_digest: str, *, now: float | None = None
 ) -> str:
-    """Wrap the MD5 password digest like app 7.6.x: RSA/PKCS#1 v1.5 of ``digest,epoch``."""
+    """Wrap the MD5 password digest like the retained Android app: RSA/PKCS#1 v1.5 of ``digest,epoch``."""
     try:
-        key = serialization.load_der_public_key(base64.b64decode(public_key, validate=True))
+        key = serialization.load_der_public_key(
+            base64.b64decode(public_key.translate(str.maketrans("", "", " \t\r\n")), validate=True)
+        )
     except ValueError as error:
         raise PyEzvizError("Invalid login public key") from error
     if not isinstance(key, rsa.RSAPublicKey):

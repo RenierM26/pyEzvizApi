@@ -1,0 +1,344 @@
+"""Exercise actual key fetch, RSA envelopes and MFA wire states; no EZVIZ access."""
+
+from __future__ import annotations
+
+import base64
+from hashlib import md5
+import json
+from urllib.parse import parse_qs
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+import pytest
+import requests
+
+from pyezvizapi.client import EzvizClient
+from pyezvizapi.cloud import auth
+from pyezvizapi.cloud.login import LoginVerification
+from pyezvizapi.constants import ANDROID_PROFILE
+from pyezvizapi.exceptions import (
+    EzvizAuthVerificationCode,
+    EzvizLoginError,
+    PyEzvizError,
+)
+from tests.conftest import LOGIN_PUBLIC_KEY, decrypt_login_password
+
+OK = {
+    "meta": {"code": 200},
+    "loginSession": {"sessionId": "synthetic-session", "rfSessionId": "synthetic-refresh"},
+    "loginUser": {"username": "synthetic-user", "userId": "synthetic-id"},
+    "loginArea": {"apiDomain": "region.example.test"},
+}
+
+
+def response(payload, status=200):
+    result = requests.Response()
+    result.status_code = status
+    result._content = json.dumps(payload).encode()  # noqa: SLF001
+    return result
+
+
+@pytest.fixture
+def wire(monkeypatch):
+    """Replace only the HTTP adapter boundary; restore the real public-key helper."""
+    monkeypatch.setattr("pyezvizapi.client.fetch_login_public_key", auth.fetch_login_public_key)
+    clients = []
+
+    def create(results, *, keys=None, **kwargs):
+        client = EzvizClient("synthetic-account", "synthetic-password", url="region.example.test", **kwargs)
+        clients.append(client)
+        calls = []
+        pending = iter(results)
+        key_results = iter(keys) if keys is not None else None
+
+        def send(request, **options):
+            calls.append(request)
+            assert options["allow_redirects"] is False
+            assert options["timeout"] > 0
+            if request.method == "GET" and request.url.endswith("/publickey"):
+                item = next(key_results) if key_results is not None else {"meta": {"code": 200}, "publicKey": LOGIN_PUBLIC_KEY}
+            elif request.method in ("POST", "PUT"):
+                item = next(pending)
+            else:
+                pytest.fail(f"Unexpected request: {request.method}")
+            if isinstance(item, Exception):
+                raise item
+            result = item if isinstance(item, requests.Response) else response(item)
+            result.request = request
+            result.url = request.url
+            return result
+
+        monkeypatch.setattr(client._session, "send", send)  # noqa: SLF001
+        monkeypatch.setattr(client, "get_service_urls", lambda: {})
+        return client, calls
+
+    yield create
+    for client in clients:
+        client._session.close()  # noqa: SLF001
+
+
+def posts(calls):
+    return [parse_qs(call.body, keep_blank_values=True) for call in calls if call.method == "POST"]
+
+
+@pytest.mark.parametrize("failure", [
+    requests.Timeout("offline"), requests.ConnectionError("offline"),
+    response({}, 503), response({}, 404), {"meta": {"code": 500}},
+    {"meta": {"code": 200}, "publicKey": "not a key"},
+])
+def test_key_failure_never_submits_legacy_credentials(wire, failure):
+    client, calls = wire([], keys=[failure])
+    with pytest.raises((requests.RequestException, PyEzvizError)):
+        client.login()
+    assert len(calls) == 1 and calls[0].method == "GET"
+    assert client.export_token()["session_id"] is None
+
+
+def test_bad_key_json_never_submits_password(wire):
+    invalid = response({})
+    invalid._content = b"private-payload-not-json"  # noqa: SLF001
+    client, calls = wire([], keys=[invalid])
+    with pytest.raises(PyEzvizError, match="invalid JSON") as exc:
+        client.login()
+    assert "private-payload" not in str(exc.value)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("separator", ["\r\n", " ", "\t", "\n"])
+def test_key_whitespace_matches_android(wire, separator, monkeypatch):
+    monkeypatch.setattr(auth.time, "time", lambda: 1795000000.9)
+    wrapped = separator.join(LOGIN_PUBLIC_KEY[i:i+64] for i in range(0, len(LOGIN_PUBLIC_KEY), 64))
+    client, calls = wire([OK], keys=[{"meta": {"code": 200}, "publicKey": wrapped}])
+    client.login("001234")
+    form = posts(calls)[0]
+    assert decrypt_login_password(form["password"][0]) == f"{md5(b'synthetic-password').hexdigest()},1795000000"
+    assert form["smsCode"] == ["001234"]
+    assert calls[1].url.endswith("/login/v6")
+
+
+def test_valid_non_rsa_key_is_rejected(wire):
+    key = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    client, calls = wire([], keys=[{"meta": {"code": 200}, "publicKey": base64.b64encode(key).decode()}])
+    with pytest.raises(PyEzvizError, match="not RSA"):
+        client.login()
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(("code", "reason"), [
+    (1011, "verification_incorrect"), (1012, "verification_expired"),
+    (1013, "incorrect_username"), (1014, "incorrect_password"),
+    (1226, "incorrect_credentials"), (1015, "captcha_required"),
+    (1069, "terminal_limit"), (1102, "region_selection_required"),
+    (1407, "clock_incorrect"), (1402, "public_key_refresh_required"),
+    (1400, "account_locked"), (1041, "verification_rate_limited"),
+    (1043, "verification_attempts_exceeded"), (1006, "verification_rate_limited"),
+    (1026, "verification_rate_limited"), (9876, "login_failed"),
+])
+def test_app_error_codes_are_actionable_sanitized_and_not_retried(wire, code, reason):
+    client, calls = wire([{"meta": {"code": code, "message": "private-marker"}, "tempToken": "private-marker"}])
+    with pytest.raises(EzvizLoginError) as caught:
+        client.login("001234")
+    assert caught.value.reason == reason and caught.value.code == code
+    assert "private-marker" not in str(caught.value) + repr(vars(caught.value))
+    assert len(calls) == 2
+    assert isinstance(caught.value, EzvizAuthVerificationCode) == (code in (1011, 1012))
+
+
+@pytest.mark.parametrize(("minutes", "expected"), [(15, 15), (True, None), (-1, None), (0, None), ("15", None), (1.5, None), (None, None), (2**40, None)])
+def test_lock_duration_only_retains_valid_metadata(wire, minutes, expected):
+    client, calls = wire([{"meta": {"code": 1400}, "lockMinutes": minutes}])
+    with pytest.raises(EzvizLoginError) as caught:
+        client.login()
+    assert caught.value.lock_minutes == expected
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("code", ["001234", "000000", 0, 123456])
+@pytest.mark.parametrize("channel", [1, 3])
+def test_mfa_submission_never_automatically_resends(wire, code, channel):
+    client, calls = wire([{"meta": {"code": 6002}}])
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        client.login(code, mfa_channel=channel)
+    assert not caught.value.code_sent
+    assert len(calls) == 2
+    assert posts(calls)[0]["smsCode"] == [str(code)]
+    assert posts(calls)[0]["msgType"] == [str(channel)]
+    assert posts(calls)[0]["bizType"] == ["TERMINAL_BIND"]
+
+
+@pytest.mark.parametrize("code", ["", "   ", "12x", "\uff11\uff12\uff13\uff14\uff15\uff16", True, -1, 1.5])
+def test_invalid_input_stops_before_any_request(wire, code):
+    client, calls = wire([])
+    with pytest.raises(PyEzvizError, match="ASCII"):
+        client.login(code)
+    assert not calls
+
+
+@pytest.mark.parametrize("channel", [0, 2, 4, 5, 6, 7, True, "1"])
+def test_unimplemented_channels_are_not_silently_mapped(wire, channel):
+    client, calls = wire([])
+    with pytest.raises(PyEzvizError, match="channel"):
+        client.login("123456", mfa_channel=channel)
+    assert not calls
+
+
+@pytest.mark.parametrize("channel", [1, 3])
+@pytest.mark.parametrize("field", ["loginUser", "contactExt"])
+def test_request_uses_selected_server_contact_then_preserves_channel(wire, channel, field):
+    info = {"email": "bound@example.test", "phone": "+27000000000"}
+    client, calls = wire([{"meta": {"code": 6002}, field: info}, {"meta": {"code": 200}}, OK])
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        client.login(mfa_channel=channel)
+    assert caught.value.code_sent and caught.value.available_channels == (1, 3)
+    assert posts(calls)[1] == {"from": [info["phone" if channel == 1 else "email"]], "bizType": ["TERMINAL_BIND"]}
+    assert info["phone"] not in repr(caught.value) + repr(vars(caught.value))
+    assert "bound@example.test" not in json.dumps(client.export_token())
+    client.login("000000")
+    assert posts(calls)[2]["msgType"] == [str(channel)]
+    assert posts(calls)[2]["smsCode"] == ["000000"]
+    assert client._login_verification.contacts == {}  # noqa: SLF001
+
+
+def test_challenge_request_submit_and_explicit_resend_are_distinct(wire):
+    challenge = {"meta": {"code": 6002}, "loginUser": {"email": "bound@example.test"}}
+    client, calls = wire([challenge, {"meta": {"code": 200}}, challenge, challenge, {"meta": {"code": 200}}])
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        client.login(request_mfa=False)
+    assert not caught.value.code_sent and len(calls) == 2
+    client.send_mfa_code()
+    with pytest.raises(EzvizAuthVerificationCode):
+        client.login("001234")
+    with pytest.raises(EzvizAuthVerificationCode):
+        client.login()
+    assert len(posts(calls)) == 4  # three logins, one code request
+    client.send_mfa_code()  # only explicit resend causes another request
+    assert len(posts(calls)) == 5
+
+
+@pytest.mark.parametrize("info", [{"phone": "+27000000000"}, {"email": "a***@example.test"}, {}, None, "bad-data"])
+def test_missing_selected_contact_never_uses_unrelated_login_account(wire, info):
+    client, calls = wire([{"meta": {"code": 6002}, "loginUser": info}])
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        client.login()
+    assert not caught.value.code_sent
+    assert len(calls) == 2
+
+
+def test_security_contact_flow_requires_app_not_legacy_sms_endpoint(wire):
+    client, calls = wire([{"meta": {"code": 6002}, "contactExt": {"email": "bound@example.test", "accessToken": "private-marker", "isSecurityBind": True}}])
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        client.login()
+    assert caught.value.reason == "security_verification_required"
+    with pytest.raises(EzvizAuthVerificationCode):
+        client.send_mfa_code(mfa_account="explicit@example.test")
+    assert len(calls) == 2
+    assert "private-marker" not in repr(vars(caught.value)) + json.dumps(client.export_token())
+
+
+@pytest.mark.parametrize("code", [1041, 1043, 1006, 1026])
+def test_send_failure_retains_rate_limit_category_and_does_not_retry(wire, code):
+    client, calls = wire([{"meta": {"code": code}}])
+    with pytest.raises(EzvizLoginError) as caught:
+        client.send_mfa_code()
+    assert caught.value.code == code and len(calls) == 1
+    assert not client._login_verification.sent  # noqa: SLF001
+
+
+def test_explicit_sms_contact_does_not_change_login_account(wire):
+    client, calls = wire([{"meta": {"code": 6002}}, {"meta": {"code": 200}}, OK])
+    with pytest.raises(EzvizAuthVerificationCode):
+        client.login(mfa_channel=1, mfa_account="+27000000000")
+    assert posts(calls)[1]["from"] == ["+27000000000"]
+    client.login("001234")
+    assert posts(calls)[2]["account"] == ["synthetic-account"]
+    assert posts(calls)[2]["msgType"] == ["1"]
+
+
+def test_region_redirect_encrypts_with_new_region_key_and_keeps_mfa(wire):
+    second = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public = base64.b64encode(second.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
+    client, calls = wire([
+        {"meta": {"code": 1100}, "loginArea": {"apiDomain": "other.example.test"}}, OK,
+    ], keys=[{"meta": {"code": 200}, "publicKey": LOGIN_PUBLIC_KEY}, {"meta": {"code": 200}, "publicKey": public}])
+    client.login("001234", mfa_channel=1, request_mfa=False)
+    forms = posts(calls)
+    assert calls[2].url == "https://other.example.test/v3/users/publickey"
+    assert decrypt_login_password(forms[0]["password"][0]).startswith(md5(b"synthetic-password").hexdigest() + ",")
+    assert second.decrypt(base64.b64decode(forms[1]["password"][0]), padding.PKCS1v15()).decode().startswith(md5(b"synthetic-password").hexdigest() + ",")
+    assert all(form["smsCode"] == ["001234"] and form["msgType"] == ["1"] for form in forms)
+
+
+def test_region_loop_has_finite_request_bound(wire):
+    client, calls = wire([{"meta": {"code": 1100}, "loginArea": {"apiDomain": "region.example.test"}}] * 3)
+    with pytest.raises(EzvizLoginError, match="redirect limit"):
+        client.login()
+    assert len(calls) == 6
+
+
+@pytest.mark.parametrize("migrate", [False, True])
+def test_refresh_and_channel99_keep_code_channel_and_request_policy(wire, migrate):
+    token = {"session_id": "old", "rf_session_id": "old-refresh", "api_url": "region.example.test"}
+    if migrate:
+        client, calls = wire([OK], token=token)
+        client.enable_channel99("001234", mfa_channel=1, request_mfa=False)
+    else:
+        client, calls = wire([{"meta": {"code": 403}}, OK], token=token)
+        client.login("001234", mfa_channel=1, request_mfa=False)
+        assert calls[0].method == "PUT"
+    form = posts(calls)[0]
+    assert form["smsCode"] == ["001234"] and form["msgType"] == ["1"]
+    if migrate:
+        assert all(form[key] == [value] for key, value in ANDROID_PROFILE.registration.items())
+        assert client.export_token()["push_profile"] == "android-channel99"
+
+
+def test_key_rejection_requires_explicit_retry_and_fetches_fresh_key(wire):
+    client, calls = wire([{"meta": {"code": 1402}}, OK])
+    with pytest.raises(EzvizLoginError):
+        client.login()
+    assert len(calls) == 2
+    client.login()
+    assert len(calls) == 4 and calls[2].url.endswith("/publickey")
+
+
+def test_mfa_state_repr_does_not_expose_recipients():
+    state = LoginVerification(contacts={1: "+27000000000"}, recipient="private@example.test")
+    assert "+270" not in repr(state) and "private@" not in repr(state)
+
+
+@pytest.mark.parametrize("migrate", [False, True])
+def test_suppressed_initial_request_survives_refresh_or_profile_migration(wire, migrate):
+    token = {"session_id": "old", "rf_session_id": "old-refresh", "api_url": "region.example.test"}
+    responses = [{"meta": {"code": 6002}}]
+    if not migrate:
+        responses.insert(0, {"meta": {"code": 403}})
+    client, calls = wire(responses, token=token)
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        if migrate:
+            client.enable_channel99(mfa_channel=1, mfa_account="+27000000000", request_mfa=False)
+        else:
+            client.login(mfa_channel=1, mfa_account="+27000000000", request_mfa=False)
+    assert not caught.value.code_sent
+    assert len(posts(calls)) == 1
+
+
+@pytest.mark.parametrize("status", [307, 401, 503])
+def test_explicit_mfa_request_does_not_redirect_relogin_or_retry(wire, status):
+    reply = response({"meta": {"code": status}}, status=status)
+    reply.headers["Location"] = "https://other.example.test/code"
+    client, calls = wire([reply])
+    with pytest.raises(PyEzvizError):
+        client.send_mfa_code()
+    assert len(calls) == 1 and calls[0].url.endswith("/sms/nologin/checkcode")
+
+
+def test_explicit_legacy_api_uses_no_key_fetch_or_hidden_fallback(wire):
+    client, calls = wire([{"meta": {"code": 1226}}], login_api="v5")
+    with pytest.raises(EzvizLoginError) as caught:
+        client.login("001234", mfa_channel=1)
+    assert caught.value.reason == "incorrect_credentials"
+    assert len(calls) == 1 and calls[0].url.endswith("/login/v5")
+    assert posts(calls)[0]["password"] == [md5(b"synthetic-password").hexdigest()]
+    assert posts(calls)[0]["smsCode"] == ["001234"]

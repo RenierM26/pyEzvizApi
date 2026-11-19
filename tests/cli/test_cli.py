@@ -398,7 +398,8 @@ def test_main_logs_in_with_credentials_and_saves_token(monkeypatch, tmp_path) ->
     }
 
 
-def test_main_prompts_for_mfa_code_and_retries_login(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("code", ["123456", "001234", "000000"])
+def test_main_prompts_for_mfa_code_and_retries_login(monkeypatch, tmp_path, code) -> None:
     class MfaClient(_FakeClient):
         def login(self, sms_code: int | None = None) -> None:
             self.login_calls.append(sms_code)
@@ -407,7 +408,7 @@ def test_main_prompts_for_mfa_code_and_retries_login(monkeypatch, tmp_path) -> N
 
     MfaClient.instances = []
     monkeypatch.setattr(cli_module, "EzvizClient", MfaClient)
-    monkeypatch.setattr("builtins.input", lambda _prompt: "123456")
+    monkeypatch.setattr("builtins.input", lambda _prompt: code)
     token_file = tmp_path / "unused-token.json"
 
     assert (
@@ -426,7 +427,7 @@ def test_main_prompts_for_mfa_code_and_retries_login(monkeypatch, tmp_path) -> N
     )
 
     client = MfaClient.instances[0]
-    assert client.login_calls == [None, 123456]
+    assert client.login_calls == [None, code]
     assert client.closed is True
 
 

@@ -47,6 +47,7 @@ from pyezvizapi.cloud.auth import (
     fetch_login_public_key,
     refresh_credentials,
 )
+from pyezvizapi.cloud.login import LoginVerification, login_error, verification_code
 from pyezvizapi.cloud.budget import budgeted_http_call
 from pyezvizapi.push.longlink.profile import (
     current_session_header,
@@ -215,6 +216,7 @@ DeviceSwitchType = _compat_module_8.DeviceSwitchType
 from pyezvizapi.exceptions import (
     DeviceException,
     EzvizAuthTokenExpired,
+    EzvizLoginError,
     EzvizAuthVerificationCode,
     EzvizNoMediaError,
     HTTPError,
@@ -776,6 +778,7 @@ class EzvizClient:
         *,
         on_token_updated: Callable[[dict[str, Any]], None] | None = None,
         feature_code: str | None = None,
+        login_api: Literal["v5", "v6"] = "v6",
     ) -> None:
         """Initialize the client, optionally with an application-persisted identity.
 
@@ -784,6 +787,10 @@ class EzvizClient:
         must persist their chosen identity before first login and provide it again
         with saved credentials; tokens never implicitly override this selection.
         """
+        if login_api not in ("v5", "v6"):
+            raise PyEzvizError("login_api must be v5 or v6")
+        self._login_api = login_api
+        self._login_verification = LoginVerification()
         self._feature_code = _resolve_feature_code(feature_code, FEATURE_CODE)
         validate_feature_code(token or {}, feature_code=self._feature_code)
         self._token_lock = RLock()
@@ -842,25 +849,23 @@ class EzvizClient:
             self._token.pop("push_state", None)
 
     def _login_credentials(self) -> tuple[str, str | None]:
-        """Return the login endpoint and password field, preferring the app's v6 form.
-
-        App 7.6.x sends the MD5 digest wrapped with a server RSA key to login/v6;
-        accounts whose password was set after that change reject login/v5 with
-        1226. Keep v5 only as a fallback when the key cannot be obtained.
-        """
-        if not self.password:
+        """Use v6 by default; legacy v5 is explicit, never a network-error fallback."""
+        if self._login_api == "v5" or not self.password:
             return API_ENDPOINT_LOGIN, self.password
-        try:
-            public_key = fetch_login_public_key(
-                self._session, self._token["api_url"], bounded_request_timeout(self._timeout)
-            )
-            return API_ENDPOINT_LOGIN_V6, encrypt_login_password(public_key, self.password)
-        except (requests.RequestException, PyEzvizError) as err:
-            _LOGGER.debug("Login public key unavailable, using legacy login: %s", err)
-            return API_ENDPOINT_LOGIN, self.password
+        public_key = fetch_login_public_key(
+            self._session, self._token["api_url"], bounded_request_timeout(self._timeout)
+        )
+        return API_ENDPOINT_LOGIN_V6, encrypt_login_password(public_key, self.password)
 
-    def _login(self, smscode: int | None = None) -> JsonDict:
-        """Login to Ezviz API."""
+    def _login(
+        self,
+        smscode: str | int | None = None,
+        *,
+        request_mfa: bool = True,
+        _redirects: int = 0,
+    ) -> JsonDict:
+        """Login without retrying credentials, codes or key failures automatically."""
+        smscode = verification_code(smscode)
         # Region code to url.
         if len(self._token["api_url"].split(".")) == 1:
             self._token["api_url"] = "apii" + self._token["api_url"] + ".ezvizlife.com"
@@ -872,8 +877,8 @@ class EzvizClient:
             "account": self.account,
             "password": password,
             "featureCode": self.feature_code,
-            "msgType": "3" if smscode else "0",
-            "bizType": "TERMINAL_BIND" if smscode else "",
+            "msgType": str(self._login_verification.channel) if smscode is not None else "0",
+            "bizType": "TERMINAL_BIND" if smscode is not None else "",
             "cuName": "SGFzc2lv",  # hassio base64 encoded
             "smsCode": smscode,
         }
@@ -900,7 +905,9 @@ class EzvizClient:
 
         json_result = self._parse_json(req)
 
-        if json_result["meta"]["code"] == 200:
+        code = self._meta_code(json_result)
+        if code == 200:
+            self._login_verification = LoginVerification(channel=self._login_verification.channel)
             session_id = str(json_result["loginSession"]["sessionId"])
             self._token.update(
                 {
@@ -929,36 +936,56 @@ class EzvizClient:
 
             return cast(dict[Any, Any], self._token)
 
-        if json_result["meta"]["code"] == 1100:
-            self._token["api_url"] = json_result["loginArea"]["apiDomain"]
-            _LOGGER.warning(
-                "Region_incorrect: serial=%s code=%s msg=%s",
-                "unknown",
-                1100,
-                self._token["api_url"],
+        if code == 1100:
+            if _redirects >= 2:
+                raise EzvizLoginError(
+                    "Login region redirect limit reached", reason="region_redirect_limit", code=1100
+                )
+            area = _api_response.object_section(json_result, "loginArea", required=True)
+            domain = area.get("apiDomain")
+            if not isinstance(domain, str) or not domain:
+                raise PyEzvizError("Invalid login region")
+            self._token["api_url"] = domain
+            return self._login(smscode, request_mfa=request_mfa, _redirects=_redirects + 1)
+
+        raise self._login_error(json_result, smscode, request_mfa=request_mfa)
+
+    def _login_error(
+        self, result: JsonDict, smscode: str | None, *, request_mfa: bool
+    ) -> EzvizLoginError:
+        """Build a sanitized error, requesting a code only for an initial challenge."""
+        code = self._meta_code(result)
+        if code == 6002:
+            state = self._login_verification
+            state.update(result)
+            # Request and submit are separate: never resend while checking a code.
+            if (
+                smscode is None
+                and request_mfa
+                and not state.sent
+                and state.destination(self.account)
+            ):
+                self.send_mfa_code()
+                state.sent = True
+            return EzvizAuthVerificationCode(
+                "MFA verification required. Retry with the code or explicitly request one.",
+                code=6002,
+                code_sent=state.sent,
+                available_channels=tuple(sorted(state.contacts)),
+                reason="security_verification_required"
+                if state.app_required
+                else "verification_required",
             )
-            return self.login(sms_code=smscode)
 
-        if json_result["meta"]["code"] == 1012:
-            raise PyEzvizError("The MFA code is invalid, please try again.")
-
-        if json_result["meta"]["code"] == 1013:
-            raise PyEzvizError("Incorrect Username.")
-
-        if json_result["meta"]["code"] == 1014:
-            raise PyEzvizError("Incorrect Password.")
-
-        if json_result["meta"]["code"] == 1015:
-            raise PyEzvizError("The user is locked.")
-
-        if json_result["meta"]["code"] == 1226:
-            raise PyEzvizError("Incorrect username or password.")
-
-        if json_result["meta"]["code"] == 6002:
-            self.send_mfa_code()
-            raise EzvizAuthVerificationCode("MFA enabled on account. Please retry with code.")
-
-        raise PyEzvizError(f"Login error: {self._response_summary(json_result)}")
+        error = login_error(code, result)
+        if isinstance(error, EzvizAuthVerificationCode):
+            error.code_sent = self._login_verification.sent
+            error.available_channels = tuple(sorted(self._login_verification.contacts))
+        if error is not None:
+            return error
+        return EzvizLoginError(
+            f"Login error: {self._response_summary(result)}", reason="login_failed", code=code
+        )
 
     # ---- Internal HTTP helpers -------------------------------------------------
 
@@ -1198,21 +1225,44 @@ class EzvizClient:
                 )
         raise PyEzvizError(f"{log}: exceeded retries")
 
-    def send_mfa_code(self) -> bool:
-        """Send verification code."""
-        json_output = self._request_json(
-            "POST",
-            API_ENDPOINT_SEND_CODE,
-            data={"from": self.account, "bizType": "TERMINAL_BIND"},
-            retry_401=False,
-        )
-
-        if not self._meta_ok(json_output):
-            raise PyEzvizError(
-                f"Could not request MFA code: Got {self._response_summary(json_output)})"
-            )
-
-        return True
+    def send_mfa_code(
+        self, *, mfa_channel: int | None = None, mfa_account: str | None = None
+    ) -> bool:
+        """Explicit request/resend using selected contact, never a guessed SMS recipient."""
+        with request_budget_lock(self._token_lock):
+            state = self._login_verification
+            state.select(mfa_channel, mfa_account)
+            destination = state.destination(self.account)
+            if not destination:
+                raise EzvizAuthVerificationCode(
+                    "Select an available MFA contact or complete security verification in the EZVIZ app.",
+                    reason="security_verification_required"
+                    if state.app_required
+                    else "verification_contact_required",
+                    available_channels=tuple(sorted(state.contacts)),
+                )
+            try:
+                response = budgeted_http_call(
+                    self._session,
+                    "post",
+                    url=self._url(API_ENDPOINT_SEND_CODE),
+                    data={"from": destination, "bizType": "TERMINAL_BIND"},
+                    allow_redirects=False,
+                    timeout=bounded_request_timeout(self._timeout),
+                )
+                response.raise_for_status()
+            except requests.HTTPError as http_error:
+                raise HTTPError from http_error
+            json_output = self._parse_json(response)
+            if not self._meta_ok(json_output):
+                error = login_error(self._meta_code(json_output), json_output)
+                if error is not None:
+                    raise error
+                raise PyEzvizError(
+                    f"Could not request MFA code: {self._response_summary(json_output)}"
+                )
+            state.sent = True
+            return True
 
     def get_service_urls(self) -> Any:
         """Get Ezviz service urls."""
@@ -3064,7 +3114,14 @@ class EzvizClient:
             self, serial, max_retries=max_retries, _owner=_sys.modules[__name__]
         )
 
-    def enable_channel99(self, sms_code: int | None = None) -> JsonDict:
+    def enable_channel99(
+        self,
+        sms_code: str | int | None = None,
+        *,
+        mfa_channel: int | None = None,
+        mfa_account: str | None = None,
+        request_mfa: bool = True,
+    ) -> JsonDict:
         """Prepare an Android-profile login for channel-99 push.
 
         Legacy web-profile tokens require a fresh credential login (and MFA if
@@ -3072,10 +3129,12 @@ class EzvizClient:
         Persist the returned token before starting push reception.
         """
         with request_budget_lock(self._token_lock):
+            sms_code = verification_code(sms_code)
+            self._login_verification.select(mfa_channel, mfa_account)
             if self.mqtt_client is not None:
                 raise PyEzvizError("Stop and discard the MQTT client before migrating login")
             if self._token.get("push_profile") == PUSH_PROFILE:
-                return self.login(sms_code)
+                return self.login(sms_code, request_mfa=request_mfa)
             if not self.account or not self.password:
                 raise EzvizAuthTokenExpired(
                     "Channel-99 migration requires a fresh credential login"
@@ -3094,14 +3153,25 @@ class EzvizClient:
             # Do not refresh a legacy session while presenting the new profile.
             self._token["session_id"] = None
             self._token["rf_session_id"] = None
-            return self._login(sms_code)
+            return self._login(sms_code, request_mfa=request_mfa)
 
-    def login(self, sms_code: int | None = None) -> JsonDict:
+    def login(
+        self,
+        sms_code: str | int | None = None,
+        *,
+        mfa_channel: int | None = None,
+        mfa_account: str | None = None,
+        request_mfa: bool = True,
+    ) -> JsonDict:
         """Get or refresh credentials, serializing mutation and persistence with push."""
         with request_budget_lock(self._token_lock):
-            return self._login_or_refresh(sms_code)
+            sms_code = verification_code(sms_code)
+            self._login_verification.select(mfa_channel, mfa_account)
+            return self._login_or_refresh(sms_code, request_mfa=request_mfa)
 
-    def _login_or_refresh(self, sms_code: int | None = None) -> JsonDict:
+    def _login_or_refresh(
+        self, sms_code: str | int | None = None, *, request_mfa: bool = True
+    ) -> JsonDict:
         """Login implementation under the shared credential lock."""
         validate_feature_code(cast(dict[str, Any], self._token), feature_code=self.feature_code)
         session_id = self._token.get("session_id")
@@ -3127,11 +3197,11 @@ class EzvizClient:
                         "api_url": self._token["api_url"],
                     }
                 )
-                return self.login(sms_code=sms_code)
+                return self._login(sms_code, request_mfa=request_mfa)
             return cast(dict[Any, Any], self._token)
 
         if self.account and self.password:
-            return self._login(sms_code)
+            return self._login(sms_code, request_mfa=request_mfa)
 
         raise PyEzvizError("Login with account and password required")
 

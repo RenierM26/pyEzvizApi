@@ -961,7 +961,7 @@ def test_mfa_migration_keeps_android_profile_across_region_redirect(monkeypatch)
         "https://apiieu.ezvizlife.com/v3/users/login/v6",
         "https://new.invalid/v3/users/login/v6",
     ]
-    assert all(request["data"]["smsCode"] == 123456 for request in posts)
+    assert all(request["data"]["smsCode"] == "123456" for request in posts)
     assert all(
         json.loads(request["data"]["pushRegisterJson"]) == [{"channel": 99}]
         for request in posts

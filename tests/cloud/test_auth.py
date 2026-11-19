@@ -168,7 +168,7 @@ def test_login_refresh_fallback_keeps_mfa_code(monkeypatch) -> None:
     client.login(sms_code=123456)
 
     assert captured["data"]["msgType"] == "3"
-    assert captured["data"]["smsCode"] == 123456
+    assert captured["data"]["smsCode"] == "123456"
 
 
 def test_login_with_credentials_posts_hashed_password_and_stores_token(monkeypatch) -> None:
@@ -235,7 +235,7 @@ def test_login_with_sms_code_sets_mfa_payload(monkeypatch) -> None:
 
     assert captured["data"]["msgType"] == "3"
     assert captured["data"]["bizType"] == "TERMINAL_BIND"
-    assert captured["data"]["smsCode"] == 123456
+    assert captured["data"]["smsCode"] == "123456"
 
 
 def test_login_with_sms_code_keeps_code_after_region_redirect(monkeypatch) -> None:
@@ -269,7 +269,7 @@ def test_login_with_sms_code_keeps_code_after_region_redirect(monkeypatch) -> No
     assert len(posts) == 2
     assert posts[1]["url"] == "https://apiisgp.ezvizlife.com/v3/users/login/v6"
     assert posts[1]["data"]["msgType"] == "3"
-    assert posts[1]["data"]["smsCode"] == 123456
+    assert posts[1]["data"]["smsCode"] == "123456"
 
 
 def test_login_mfa_required_sends_code_and_raises(monkeypatch) -> None:
@@ -295,17 +295,17 @@ def test_send_mfa_code_success_and_failure(monkeypatch) -> None:
     client = EzvizClient(account="user@example.test", password="secret")
     calls: list[dict[str, Any]] = []
 
-    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        calls.append({"method": method, "path": path, **kwargs})
-        return {"meta": {"code": 200}}
+    def fake_post(**kwargs: Any) -> requests.Response:
+        calls.append(kwargs)
+        return _response({"meta": {"code": 200}})
 
-    monkeypatch.setattr(client, "_request_json", fake_request_json)
+    monkeypatch.setattr(client._session, "post", fake_post)
 
     assert client.send_mfa_code() is True
     assert calls[0]["data"] == {"from": "user@example.test", "bizType": "TERMINAL_BIND"}
-    assert calls[0]["retry_401"] is False
+    assert calls[0]["allow_redirects"] is False
 
-    monkeypatch.setattr(client, "_request_json", lambda *args, **kwargs: {"meta": {"code": 500}})
+    monkeypatch.setattr(client._session, "post", lambda **kwargs: _response({"meta": {"code": 500}}))
 
     with pytest.raises(PyEzvizError, match="Could not request MFA code"):
         client.send_mfa_code()
@@ -454,8 +454,8 @@ def test_fetch_login_public_key_reads_key_and_rejects_errors(monkeypatch) -> Non
         fetch_login_public_key(session, "apiieu.ezvizlife.com", 5)
 
 
-def test_login_falls_back_to_v5_when_public_key_unavailable(monkeypatch) -> None:
-    client = EzvizClient(account="user@example.test", password="secret", url="eu")
+def test_login_explicit_v5_does_not_fetch_public_key(monkeypatch) -> None:
+    client = EzvizClient(account="user@example.test", password="secret", url="eu", login_api="v5")
     captured: dict[str, Any] = {}
 
     def no_key(*args: Any, **kwargs: Any) -> str:

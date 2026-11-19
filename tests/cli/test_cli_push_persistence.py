@@ -9,7 +9,8 @@ import pyezvizapi.cli.main as cli
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, EzvizTokenPersistenceError
 
 
-def test_mqtt_installs_storage_before_login_and_handles_mfa(tmp_path, monkeypatch):
+@pytest.mark.parametrize("code", ["123456", "001234", "000000"])
+def test_mqtt_installs_storage_before_login_and_handles_mfa(tmp_path, monkeypatch, code):
     monkeypatch.chdir(tmp_path)
     client = Mock()
     callback = Mock()
@@ -32,10 +33,10 @@ def test_mqtt_installs_storage_before_login_and_handles_mfa(tmp_path, monkeypatc
     client.enable_channel99.side_effect = enable
     client.get_mqtt_client.return_value.connect.side_effect = connect
     monkeypatch.setattr(cli, "EzvizClient", construct)
-    monkeypatch.setattr("builtins.input", lambda prompt: "123456")
+    monkeypatch.setattr("builtins.input", lambda prompt: code)
     monkeypatch.setattr(cli.time, "sleep", Mock(side_effect=KeyboardInterrupt))
     assert cli.main(["-u", "synthetic", "-p", "synthetic", "mqtt"]) == 0
-    assert attempts == [None, 123456]
+    assert attempts == [None, code]
     client.login.assert_not_called()
     client.get_mqtt_client.return_value.stop.assert_called_once()
     client.close_session.assert_called_once()

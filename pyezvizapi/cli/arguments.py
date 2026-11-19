@@ -1575,6 +1575,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-u", "--username", required=False, help="Ezviz username")
     parser.add_argument("-p", "--password", required=False, help="Ezviz Password")
     parser.add_argument(
+        "--mfa-channel",
+        choices=("email", "sms"),
+        default=None,
+        help="Login verification channel (historical default: email)",
+    )
+    parser.add_argument(
+        "--mfa-account",
+        default=None,
+        help="Explicit bound MFA contact if the login response does not provide it",
+    )
+    parser.add_argument(
         "-r",
         "--region",
         required=False,

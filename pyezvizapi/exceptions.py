@@ -77,8 +77,46 @@ class EzvizAuthTokenExpired(PyEzvizError):
     """Raised when a stored session token is no longer valid (expired/revoked)."""
 
 
-class EzvizAuthVerificationCode(PyEzvizError):
-    """Raised when a login or action requires an MFA (verification) code."""
+class EzvizLoginError(PyEzvizError):
+    """Actionable login failure; no raw response or contact information is retained.
+
+    ``reason`` is stable for callers. ``code`` is the raw cloud meta.code, not
+    Android's code + 100000. Recovery is caller-owned; never blindly retry.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        code: int | None = None,
+        lock_minutes: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.code = code
+        self.lock_minutes = lock_minutes
+
+
+class EzvizAuthVerificationCode(EzvizLoginError):
+    """Login needs a code. Existing catches/zero-argument construction still work.
+
+    ``code_sent`` only confirms a successful request, not actual delivery.
+    ``available_channels`` lists reported SMS (1)/email (3) contacts, not policy.
+    """
+
+    def __init__(
+        self,
+        message: str = "MFA verification required",
+        *,
+        reason: str = "verification_required",
+        code: int | None = None,
+        code_sent: bool = False,
+        available_channels: tuple[int, ...] = (),
+    ) -> None:
+        super().__init__(message, reason=reason, code=code)
+        self.code_sent = code_sent
+        self.available_channels = available_channels
 
 
 class DeviceException(PyEzvizError):

@@ -7,11 +7,16 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Fixed
 
-- Log in like app 7.6.x: send the MD5 password digest wrapped with the server's RSA key
-  (`GET /v3/users/publickey`, PKCS#1 v1.5 of `digest,epoch`) to `/v3/users/login/v6`.
-  Accounts whose password was set or reset after the app change reject `login/v5` with
-  1226; that code now reports "Incorrect username or password." The v5 request remains
-  a fallback only when the key cannot be fetched. Fixes #401.
+- Use the app-compatible RSA-wrapped password on `login/v6`; distinguish
+  incorrect credentials (`1226`) from public-key, system-clock and lockout errors.
+  Key fetch/encryption failures no longer silently downgrade to v5. Explicit
+  `EzvizClient(..., login_api="v5")` remains for known legacy regions. Fixes #401.
+- Preserve MFA codes as strings, including leading zeros and `000000`, and
+  accept explicitly selected SMS/email channels. Separate challenge, request,
+  submission and explicit resend; never automatically resend during submission.
+  Contact metadata stays in memory, not exported tokens. See
+  [authentication and recovery](docs/auth/login-recovery.md) for compatibility
+  changes, stable error reasons and app-required recovery flows.
 
 ## v2.5.1 - 2026-11-16
 

@@ -42,7 +42,11 @@ from pyezvizapi.cloud import responses as _api_response
 from pyezvizapi.devices import factory as device_factory
 from pyezvizapi.devices.snapshot import DevicePollOptions, DeviceSnapshot
 from pyezvizapi.cloud.operations import snapshot as _snapshot_ops
-from pyezvizapi.cloud.auth import refresh_credentials
+from pyezvizapi.cloud.auth import (
+    encrypt_login_password,
+    fetch_login_public_key,
+    refresh_credentials,
+)
 from pyezvizapi.cloud.budget import budgeted_http_call
 from pyezvizapi.push.longlink.profile import (
     current_session_header,
@@ -123,6 +127,7 @@ API_ENDPOINT_IOT_FEATURE_PRODUCT_VOICE_CONFIG = (
 )
 API_ENDPOINT_IOT_VIRTUAL_BIND = _compat_module_4.API_ENDPOINT_IOT_VIRTUAL_BIND
 API_ENDPOINT_LOGIN = _compat_module_4.API_ENDPOINT_LOGIN
+API_ENDPOINT_LOGIN_V6 = _compat_module_4.API_ENDPOINT_LOGIN_V6
 API_ENDPOINT_LOGOUT = _compat_module_4.API_ENDPOINT_LOGOUT
 API_ENDPOINT_MANAGED_DEVICE_BASE = _compat_module_4.API_ENDPOINT_MANAGED_DEVICE_BASE
 API_ENDPOINT_OFFLINE_NOTIFY = _compat_module_4.API_ENDPOINT_OFFLINE_NOTIFY
@@ -836,6 +841,24 @@ class EzvizClient:
         if previous.get("user_id") != self._token["user_id"]:
             self._token.pop("push_state", None)
 
+    def _login_credentials(self) -> tuple[str, str | None]:
+        """Return the login endpoint and password field, preferring the app's v6 form.
+
+        App 7.6.x sends the MD5 digest wrapped with a server RSA key to login/v6;
+        accounts whose password was set after that change reject login/v5 with
+        1226. Keep v5 only as a fallback when the key cannot be obtained.
+        """
+        if not self.password:
+            return API_ENDPOINT_LOGIN, self.password
+        try:
+            public_key = fetch_login_public_key(
+                self._session, self._token["api_url"], bounded_request_timeout(self._timeout)
+            )
+            return API_ENDPOINT_LOGIN_V6, encrypt_login_password(public_key, self.password)
+        except (requests.RequestException, PyEzvizError) as err:
+            _LOGGER.debug("Login public key unavailable, using legacy login: %s", err)
+            return API_ENDPOINT_LOGIN, self.password
+
     def _login(self, smscode: int | None = None) -> JsonDict:
         """Login to Ezviz API."""
         # Region code to url.
@@ -844,9 +867,10 @@ class EzvizClient:
 
         push_enabled = self._token.get("push_profile") == PUSH_PROFILE
         previous_push = dict(self._token)
+        endpoint, password = self._login_credentials()
         payload = {
             "account": self.account,
-            "password": self.password,
+            "password": password,
             "featureCode": self.feature_code,
             "msgType": "3" if smscode else "0",
             "bizType": "TERMINAL_BIND" if smscode else "",
@@ -860,7 +884,7 @@ class EzvizClient:
             req = budgeted_http_call(
                 self._session,
                 "post",
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGIN}",
+                url=f"https://{self._token['api_url']}{endpoint}",
                 allow_redirects=False,
                 data=payload,
                 timeout=bounded_request_timeout(self._timeout),
@@ -926,6 +950,9 @@ class EzvizClient:
 
         if json_result["meta"]["code"] == 1015:
             raise PyEzvizError("The user is locked.")
+
+        if json_result["meta"]["code"] == 1226:
+            raise PyEzvizError("Incorrect username or password.")
 
         if json_result["meta"]["code"] == 6002:
             self.send_mfa_code()
@@ -4238,6 +4265,7 @@ __all__ = [
     "API_ENDPOINT_IOT_FEATURE_PRODUCT_VOICE_CONFIG",
     "API_ENDPOINT_IOT_VIRTUAL_BIND",
     "API_ENDPOINT_LOGIN",
+    "API_ENDPOINT_LOGIN_V6",
     "API_ENDPOINT_LOGOUT",
     "API_ENDPOINT_MANAGED_DEVICE_BASE",
     "API_ENDPOINT_OFFLINE_NOTIFY",

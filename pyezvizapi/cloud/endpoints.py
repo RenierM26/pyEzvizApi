@@ -4,6 +4,9 @@
 API_ENDPOINT_CLOUDDEVICES = "/api/cloud/v2/cloudDevices/getAll"
 
 API_ENDPOINT_LOGIN = "/v3/users/login/v5"
+# App 7.6.x login: RSA-wrapped password digest, key from API_ENDPOINT_LOGIN_PUBLIC_KEY.
+API_ENDPOINT_LOGIN_V6 = "/v3/users/login/v6"
+API_ENDPOINT_LOGIN_PUBLIC_KEY = "/v3/users/publickey"
 API_ENDPOINT_LOGOUT = "/v3/users/logout/v2"
 API_ENDPOINT_REFRESH_SESSION_ID = "/v3/apigateway/login"
 API_ENDPOINT_SERVER_INFO = "/v3/configurations/system/info"

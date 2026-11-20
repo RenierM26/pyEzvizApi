@@ -342,3 +342,103 @@ def test_explicit_legacy_api_uses_no_key_fetch_or_hidden_fallback(wire):
     assert len(calls) == 1 and calls[0].url.endswith("/login/v5")
     assert posts(calls)[0]["password"] == [md5(b"synthetic-password").hexdigest()]
     assert posts(calls)[0]["smsCode"] == ["001234"]
+
+
+@pytest.mark.parametrize("channel, recipient", [(1, ""), (1, "   "), (1, False), (1, 123), (True, "other@example.test"), (2, "other@example.test")])
+def test_invalid_selection_is_atomic_including_successful_request(channel, recipient):
+    from copy import deepcopy  # noqa: PLC0415
+
+    state = LoginVerification(recipient="bound@example.test", contacts={3: "bound@example.test"}, metadata_present=True)
+    state.mark_sent("bound@example.test")
+    before = deepcopy(state)
+    with pytest.raises(PyEzvizError):
+        state.select(channel, recipient)
+    assert state == before
+    assert state.sent and state.code_sent("synthetic-account")
+
+
+def test_unchanged_selection_preserves_request_and_explicit_change_clears_it():
+    state = LoginVerification(recipient="bound@example.test")
+    state.mark_sent("bound@example.test")
+    state.select(3, "bound@example.test")
+    assert state.sent and state.code_sent(None)
+    state.select(1, "+27000000000")
+    assert state.destination(None) == "+27000000000"
+    assert not state.sent and not state.code_sent(None)
+
+
+@pytest.mark.parametrize("changed", [{"email": "other@example.test"}, {"phone": "+27000000000"}, {"email": "a***@example.test"}, {"email": "bound@example.test", "isSecurityBind": True}])
+def test_changed_contact_never_reports_stale_delivery_or_automatically_resends(wire, changed):
+    client, calls = wire([
+        {"meta": {"code": 6002}, "loginUser": {"email": "bound@example.test"}},
+        {"meta": {"code": 200}},
+        {"meta": {"code": 6002}, "loginUser": changed},
+    ])
+    with pytest.raises(EzvizAuthVerificationCode) as first:
+        client.login()
+    assert first.value.code_sent
+    with pytest.raises(EzvizAuthVerificationCode) as second:
+        client.login()
+    assert not second.value.code_sent
+    assert len(calls) == 5  # two key/login pairs and only the original delivery request
+    assert client._login_verification.sent  # noqa: SLF001 - Guard remains against automatic resend.
+
+
+def test_explicit_resend_updates_delivery_diagnostics_for_current_contact(wire):
+    client, calls = wire([
+        {"meta": {"code": 6002}, "loginUser": {"email": "bound@example.test"}},
+        {"meta": {"code": 200}},
+        {"meta": {"code": 6002}, "loginUser": {"email": "other@example.test"}},
+        {"meta": {"code": 200}},
+    ])
+    with pytest.raises(EzvizAuthVerificationCode):
+        client.login()
+    with pytest.raises(EzvizAuthVerificationCode) as changed:
+        client.login()
+    assert not changed.value.code_sent
+    client.send_mfa_code()
+    assert client._login_verification.code_sent(client.account)  # noqa: SLF001
+    assert posts(calls)[-1]["from"] == ["other@example.test"]
+    assert "other@example.test" not in repr(client._login_verification)  # noqa: SLF001
+
+
+@pytest.mark.parametrize("code", [6002, 1011, 1012, 1407, 9876])
+def test_error_classification_has_no_io_or_state_mutation(wire, monkeypatch, code):
+    from copy import deepcopy  # noqa: PLC0415
+
+    client, calls = wire([])
+    state = client._login_verification  # noqa: SLF001
+    state.update({"loginUser": {"email": "bound@example.test"}})
+    state.mark_sent("bound@example.test")
+    before = deepcopy(state)
+    token = client.export_token()
+    monkeypatch.setattr(client, "send_mfa_code", lambda **kw: pytest.fail("classification must not send"))
+    result = {"meta": {"code": code}, "loginUser": {"phone": "+27000000000"}}
+    for _ in range(2):
+        error = client._login_error(result)  # noqa: SLF001
+        assert error.code == code
+    assert state == before and client.export_token() == token
+    assert not calls
+    if code in (6002, 1011, 1012):
+        assert error.code_sent and error.available_channels == (3,)
+
+
+def test_two_regional_hops_keep_code_and_refetch_each_key(wire):
+    client, calls = wire([
+        {"meta": {"code": 1100}, "loginArea": {"apiDomain": "second.example.test"}},
+        {"meta": {"code": 1100}, "loginArea": {"apiDomain": "third.example.test"}}, OK,
+    ])
+    client.login("000000", mfa_channel=1, request_mfa=False)
+    assert [call.url.split('/')[2] for call in calls] == ["region.example.test"] * 2 + ["second.example.test"] * 2 + ["third.example.test"] * 2
+    assert all(form["smsCode"] == ["000000"] and form["msgType"] == ["1"] for form in posts(calls))
+    assert len({form["password"][0] for form in posts(calls)}) == 3  # fresh randomized encryption
+
+
+@pytest.mark.parametrize("failure", [requests.Timeout("offline"), {"meta": {"code": 200}, "publicKey": "bad-key"}])
+def test_second_region_key_failure_never_resubmits_credentials(wire, failure):
+    client, calls = wire([
+        {"meta": {"code": 1100}, "loginArea": {"apiDomain": "second.example.test"}},
+    ], keys=[{"meta": {"code": 200}, "publicKey": LOGIN_PUBLIC_KEY}, failure])
+    with pytest.raises((PyEzvizError, requests.Timeout)):
+        client.login("001234", mfa_channel=1)
+    assert len(calls) == 3 and len(posts(calls)) == 1

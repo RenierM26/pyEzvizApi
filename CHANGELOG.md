@@ -18,6 +18,18 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
   [authentication and recovery](docs/auth/login-recovery.md) for compatibility
   changes, stable error reasons and app-required recovery flows.
 
+- Validate MFA channel/contact selections atomically and report code-request
+  acceptance only for the active contact. Changed server contact metadata does
+  not automatically resend a code.
+
+### Changed
+
+- Share CLI verification handling between account login and push migration,
+  separate challenge actions from side-effect-free login error classification,
+  use a bounded regional redirect loop, and reuse static error/key lookup tables.
+  Request limits, RSA/key refresh behavior and public authentication options remain
+  unchanged; no key caching or automatic retries are added.
+
 ## v2.5.1 - 2026-11-16
 
 See [release notes](docs/release-2.5.1.md).

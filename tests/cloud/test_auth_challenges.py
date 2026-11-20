@@ -11,7 +11,13 @@ import requests
 
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.cloud.challenges import CaptchaState
-from pyezvizapi.exceptions import EzvizAuthVerificationCode, EzvizLoginError, PyEzvizError
+from pyezvizapi.constants import ANDROID_PROFILE
+from pyezvizapi.exceptions import (
+    EzvizAuthTokenExpired,
+    EzvizAuthVerificationCode,
+    EzvizLoginError,
+    PyEzvizError,
+)
 
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=')
 OK = {'meta': {'code': 200}, 'loginSession': {'sessionId': 'session', 'rfSessionId': 'refresh'}, 'loginUser': {'username': 'synthetic', 'userId': 'id'}, 'loginArea': {'apiDomain': 'region.example.test'}}
@@ -21,7 +27,7 @@ CONTACT = {'meta': {'code': 6002}, 'contactExt': {'email': 'bound@example.test',
 @pytest.fixture
 def wire(monkeypatch):
     clients = []
-    def create(items):
+    def create(items, **options):
         pending = iter(items)
         calls = []
         def send(session, request, **kwargs):
@@ -40,7 +46,7 @@ def wire(monkeypatch):
             result.request = request
             return result
         monkeypatch.setattr(requests.Session, 'send', send)
-        client = EzvizClient('synthetic-account', 'synthetic-password', url='region.example.test')
+        client = EzvizClient('synthetic-account', 'synthetic-password', url='region.example.test', **options)
         clients.append(client)
         monkeypatch.setattr(client, 'get_service_urls', lambda: {})
         return client, calls
@@ -205,6 +211,36 @@ def test_image_login_answer_keeps_otp_and_profile(wire, migrate):
     assert form(calls[1])['msgType'] == ['1']
     assert 'aB01' not in repr(challenge) + json.dumps(client.export_token())
     assert client._captcha_state.challenge is None
+
+
+@pytest.mark.parametrize('method', ['login', 'enable_channel99'])
+@pytest.mark.parametrize('identity', ['keep', 'replace', 'remove'])
+def test_captcha_reauthentication_validates_caller_owned_token_identity(wire, method, identity):
+    token = {
+        'api_url': 'region.example.test', 'session_id': 'old-session',
+        'rf_session_id': 'old-refresh', 'feature_code': '1' * 32,
+        'push_profile': ANDROID_PROFILE.name, 'username': 'synthetic',
+        'user_id': 'id', 'push_state': {'counter': 7},
+    }
+    persisted: list[object] = []
+    client, calls = wire([PNG, OK], token=token, feature_code='1' * 32, on_token_updated=persisted.append)
+    image = client.get_captcha()
+    if identity == 'replace':
+        token['feature_code'] = '2' * 32
+    elif identity == 'remove':
+        token.pop('feature_code')
+    before = deepcopy(token)
+    headers = dict(client._session.headers)
+    if identity == 'keep':
+        getattr(client, method)(captcha=image, captcha_code='aB01')
+        assert len(calls) == 2 and form(calls[-1])['imageCode'] == ['aB01']
+        assert token['feature_code'] == '1' * 32 and token['push_state'] == {'counter': 7}
+        assert persisted
+    else:
+        with pytest.raises(EzvizAuthTokenExpired, match='feature code'):
+            getattr(client, method)(captcha=image, captcha_code='aB01')
+        assert len(calls) == 1 and token == before
+        assert dict(client._session.headers) == headers and not persisted
 
 
 def test_request_image_is_bound_to_selected_contact_and_only_requests_once(wire):

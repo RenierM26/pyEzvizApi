@@ -3304,6 +3304,9 @@ class EzvizClient:
                 raise PyEzvizError("Stop and discard the MQTT client before migrating login")
             if self._token.get("push_profile") == PUSH_PROFILE:
                 if image_code is not None:
+                    validate_feature_code(
+                        cast(dict[str, Any], self._token), feature_code=self.feature_code
+                    )
                     return self._login(sms_code, request_mfa=request_mfa, image_code=image_code)
                 return self.login(sms_code, request_mfa=request_mfa)
             if not self.account or not self.password:

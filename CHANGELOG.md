@@ -11,6 +11,8 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
   without sending a message or silently switching to email.
 - Revalidate retained MFA delivery selections after channel discovery refreshes,
   blocking withdrawn methods before login, push migration or message delivery.
+- Reject changed or missing saved channel-99 feature identities during CAPTCHA
+  reauthentication before replacing credentials or persisting push state.
 
 ### Added
 

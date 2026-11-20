@@ -114,6 +114,17 @@ connection options as `lan rtsp`. It sends one start, waits `--duration` seconds
 fails or the command is interrupted, and is retried once after an error or a
 missing acknowledgment. The start is never retried.
 
+The duration counts from the moment the start frame is written, not from its
+acknowledgment, and the wait for that acknowledgment ends at the same deadline.
+If the camera answers late or not at all, the stop still goes out on time. Each
+stop attempt, login included, must finish within `--timeout`, so in the worst
+case the motor runs for `--duration` plus one `--timeout`. A stop attempt that
+fails before its frame is written is retried once, which can add one more
+`--timeout`. A start that gets no acknowledgment is closed with a TCP reset, so
+a start packet lost on the network is not retransmitted after the stop. Each
+frame still uses its own login, the only pattern tested on hardware; reusing
+the start's session for the stop was not verified.
+
 ```bash
 pyezvizapi lan ptz left --host 192.0.2.10 --serial CAMERA_SERIAL \
   --lan-password-file /private/device-password
@@ -124,7 +135,9 @@ pyezvizapi lan ptz up --duration 1 --speed 4 --host 192.0.2.10 --serial CAMERA_S
 Directions are `up`, `down`, `left` and `right`. `--speed` is 1-7 (default 4; only 4 tested) and
 `--channel` defaults to 1. Output is JSON. Success (`verified: "acknowledgment"`)
 means the camera acknowledged both frames, **not** that the motor moved; check the
-picture if it matters. Do not run it while another client is moving the camera.
+picture if it matters. On failure, `start` and `stop` say what happened to each
+frame: `not-sent`, `unacknowledged` (written, no acknowledgment) or
+`acknowledged`. Do not run it while another client is moving the camera.
 
 On the wire this is `NET_DVR_PTZControlWithSpeed_Other` as command-port id
 `0x00030203`. The body tail is channel, command and speed as big-endian 32-bit
@@ -133,6 +146,8 @@ words, with the command signed: a stop has no separate flag and is sent as
 CS-C6N-R101-1G2WF; other models need their own check.
 
 ```python
+import time
+
 from pyezvizapi.streaming.local.hcnetsdk.api import (
     EZVIZ_LAN_PTZ_ACTION_STOP,
     EzvizPtzCommand,
@@ -145,12 +160,24 @@ sdk = HcNetSdkPurePythonClient(
     device_password,
     timeout=10.0,
 )
-sdk.ptz_control(EzvizPtzCommand.LEFT, speed=4)
+sent = []
 try:
-    ...  # bounded wait owned by the caller
+    sdk.ptz_control(
+        EzvizPtzCommand.LEFT,
+        speed=4,
+        ack_timeout=0.5,  # wait for the reply no longer than the move itself
+        on_sent=lambda: sent.append(time.monotonic()),
+    )
+    ...  # sleep until sent[0] + 0.5
 finally:
     sdk.ptz_control(EzvizPtzCommand.LEFT, action=EZVIZ_LAN_PTZ_ACTION_STOP, speed=4)
 ```
+
+`on_sent` runs as soon as the frame is written, which is when the motor can
+start. `ack_timeout` bounds the wait for the reply from that moment and raises
+`EzvizLocalSdkDeadlineExpired` when it runs out. `deadline` (a
+`time.monotonic()` value) bounds the whole call, login included; the CLI passes
+`time.monotonic() + timeout` for each stop attempt.
 
 `hcnetsdk_ptz_control_command_port_template(request)` builds the same frame from
 an `ezviz_lan_ptz_control_request` for callers that run templates themselves.

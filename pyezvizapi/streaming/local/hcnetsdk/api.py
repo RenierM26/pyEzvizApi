@@ -4655,7 +4655,7 @@ def hcnetsdk_stdxml_config_command_port_template(
     )
 
 
-def hcnetsdk_command_port_execute_template(
+def hcnetsdk_command_port_execute_template(  # noqa: PLR0913 -- explicit runtime context plus ack hooks
     endpoint: HcNetSdkLanEndpoint,
     password: str | bytes,
     template: HcNetSdkCommandPortControlTemplate,
@@ -4665,12 +4665,22 @@ def hcnetsdk_command_port_execute_template(
     timeout: float | None = 10.0,
     socket_factory: SocketFactory = socket.create_connection,
     rsa_key: Any | None = None,
+    ack_timeout: float | None = None,
+    on_sent: Callable[[], None] | None = None,
+    monotonic: Callable[[], float] | None = None,
+    deadline: float | None = None,
 ) -> HcNetSdkCommandPortControlResponse:
     """Execute one generated command-port control template in pure Python.
 
     The EZVIZ devices tested so far accept this pattern for local capability
     reads: perform the RSA login on one socket, close it, then send the
     authenticated control command on a fresh command-port socket.
+
+    ``on_sent`` runs once the control frame is written. ``ack_timeout`` bounds
+    the wait for the reply from that moment; when it runs out
+    ``EzvizLocalSdkDeadlineExpired`` is raised and the control socket is
+    closed with a reset. ``deadline`` (on the ``monotonic`` clock) bounds the
+    whole call, login included.
     """
     return _impl_requests.hcnetsdk_command_port_execute_template(
         endpoint,
@@ -4681,6 +4691,10 @@ def hcnetsdk_command_port_execute_template(
         timeout=timeout,
         socket_factory=socket_factory,
         rsa_key=rsa_key,
+        ack_timeout=ack_timeout,
+        on_sent=on_sent,
+        monotonic=monotonic,
+        deadline=deadline,
         _owner=_sys.modules[__name__],
     )
 
@@ -4865,8 +4879,17 @@ class HcNetSdkPurePythonClient:
     def execute_template(
         self,
         template: HcNetSdkCommandPortControlTemplate,
+        *,
+        ack_timeout: float | None = None,
+        on_sent: Callable[[], None] | None = None,
+        monotonic: Callable[[], float] | None = None,
+        deadline: float | None = None,
     ) -> HcNetSdkCommandPortControlResponse:
-        """Execute one generated command-port template."""
+        """Execute one generated command-port template.
+
+        ``on_sent`` runs once the frame is written; ``ack_timeout`` bounds the
+        wait for the reply from that moment. ``deadline`` bounds the whole call.
+        """
         return hcnetsdk_command_port_execute_template(
             self.endpoint,
             self.password,
@@ -4876,6 +4899,10 @@ class HcNetSdkPurePythonClient:
             timeout=self.timeout,
             socket_factory=self.socket_factory,
             rsa_key=self.rsa_key,
+            ack_timeout=ack_timeout,
+            on_sent=on_sent,
+            monotonic=monotonic,
+            deadline=deadline,
         )
 
     def device_ability(self, request: HcNetSdkDeviceAbilityRequest) -> bytes:
@@ -4948,15 +4975,33 @@ class HcNetSdkPurePythonClient:
         action: int = EZVIZ_LAN_PTZ_ACTION_START,
         channel: int = 1,
         speed: int = EZVIZ_LAN_PTZ_SPEED_DEFAULT,
+        ack_timeout: float | None = None,
+        on_sent: Callable[[], None] | None = None,
+        monotonic: Callable[[], float] | None = None,
+        deadline: float | None = None,
     ) -> HcNetSdkCommandPortControlResponse:
         """Send one local PTZ start or stop for an ``EzvizPtzCommand`` direction.
 
         Each call logs in again. The acknowledgment means the frame was accepted,
         not that the motor moved. Callers must send the matching stop
         (``action=EZVIZ_LAN_PTZ_ACTION_STOP``) after every start.
+
+        The motor can start as soon as the frame is written, before any reply.
+        ``on_sent`` runs at that moment, and ``ack_timeout`` limits the wait for
+        the reply from then on (``EzvizLocalSdkDeadlineExpired`` when it runs
+        out), so a caller can send the stop on time even if the reply is late.
+        A start whose reply never arrives is closed with a reset, so a lost
+        start is not retransmitted after the stop. ``deadline`` (on the
+        ``monotonic`` clock) bounds the whole call, login included.
         """
         request = ezviz_lan_ptz_control_request(0, channel, command, action=action, speed=speed)
-        return self.execute_template(hcnetsdk_ptz_control_command_port_template(request))
+        return self.execute_template(
+            hcnetsdk_ptz_control_command_port_template(request),
+            ack_timeout=ack_timeout,
+            on_sent=on_sent,
+            monotonic=monotonic,
+            deadline=deadline,
+        )
 
     def dvr_config(
         self,

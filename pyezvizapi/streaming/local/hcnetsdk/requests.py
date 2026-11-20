@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping as _StaticMapping
 from contextlib import suppress as _suppress
 from datetime import date as _Staticdate, datetime as _Staticdatetime
+import socket as _socket
+import struct as _struct
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
@@ -1725,7 +1727,16 @@ def read_hcnetsdk_command_port_interleaved_frame_after_prefix(
             )
 
 
-def hcnetsdk_command_port_execute_template(
+def _set_reset_on_close(sock: _owner_types.Any, *, reset: bool) -> None:
+    """Make close() send a reset (SO_LINGER 0) instead of a normal shutdown."""
+    setsockopt = getattr(sock, "setsockopt", None)
+    if setsockopt is None:
+        return
+    with _suppress(OSError):
+        setsockopt(_socket.SOL_SOCKET, _socket.SO_LINGER, _struct.pack("ii", int(reset), 0))
+
+
+def hcnetsdk_command_port_execute_template(  # noqa: PLR0913 -- explicit runtime context plus ack hooks
     endpoint: _owner_types.HcNetSdkLanEndpoint,
     password: str | bytes,
     template: _owner_types.HcNetSdkCommandPortControlTemplate,
@@ -1735,6 +1746,10 @@ def hcnetsdk_command_port_execute_template(
     timeout: float | None,
     socket_factory: _owner_types.SocketFactory,
     rsa_key: _owner_types.Any | None,
+    ack_timeout: float | None = None,
+    on_sent: _owner_types.Callable[[], None] | None = None,
+    monotonic: _owner_types.Callable[[], float] | None = None,
+    deadline: float | None = None,
     _owner: _ModuleType,
 ) -> _owner_types.HcNetSdkCommandPortControlResponse:
     """Execute one generated command-port control template in pure Python.
@@ -1742,10 +1757,31 @@ def hcnetsdk_command_port_execute_template(
     The EZVIZ devices tested so far accept this pattern for local capability
     reads: perform the RSA login on one socket, close it, then send the
     authenticated control command on a fresh command-port socket.
+
+    ``on_sent`` runs once the control frame is written. ``ack_timeout`` bounds
+    the wait for the reply from that moment; when it runs out
+    ``EzvizLocalSdkDeadlineExpired`` is raised. If that reply never arrives,
+    the control socket is closed with a reset, so a frame lost on the network
+    is not retransmitted after the caller has moved on.
+
+    ``deadline`` (on the ``monotonic`` clock) bounds the whole call: both
+    connects, the two login round trips, the write and the read.
     """
-    with _owner.HcNetSdkCommandPortClient(
-        endpoint, timeout=timeout, socket_factory=socket_factory
+    if ack_timeout is not None and not ack_timeout > 0:
+        raise _owner.PyEzvizError("HCNetSDK command-port ack_timeout must be positive")
+    clock = _owner.time.monotonic if monotonic is None else monotonic
+    if deadline is not None and rsa_key is None:
+        # A deadline-bound login needs its key up front.
+        rsa_key = _owner.hcnetsdk_command_port_rsa_key()
+    with _owner.closing(
+        _owner.HcNetSdkCommandPortClient(endpoint, timeout=timeout, socket_factory=socket_factory)
     ) as login_client:
+        login_client.connect(
+            timeout=_owner._remaining_timeout(deadline, clock),
+            deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=clock,
+        )
         actual_local_ip = local_ip
         if actual_local_ip is None:
             try:
@@ -1755,7 +1791,12 @@ def hcnetsdk_command_port_execute_template(
                     "HCNetSDK command-port control requires local_ip when the socket does not expose getsockname()"
                 ) from err
         login_session = login_client.login(
-            password=password, username=username, local_ip=actual_local_ip, rsa_key=rsa_key
+            password=password,
+            username=username,
+            local_ip=actual_local_ip,
+            rsa_key=rsa_key,
+            deadline=deadline,
+            monotonic=clock,
         )
     request = template.to_frame(
         session_id=login_session.session_id,
@@ -1763,11 +1804,21 @@ def hcnetsdk_command_port_execute_template(
         key=login_session.challenge,
         local_ip=actual_local_ip,
     )
-    with _owner.HcNetSdkCommandPortClient(
-        endpoint, timeout=timeout, socket_factory=socket_factory
+    with _owner.closing(
+        _owner.HcNetSdkCommandPortClient(endpoint, timeout=timeout, socket_factory=socket_factory)
     ) as control_client:
-        control_client.send_command_frame(request)
-        response = control_client.read_tcp_frame()
+        control_client.send_command_frame(request, deadline=deadline, monotonic=clock)
+        read_deadline = None if ack_timeout is None else clock() + ack_timeout
+        if deadline is not None:
+            read_deadline = deadline if read_deadline is None else min(read_deadline, deadline)
+        control_sock = control_client.sock
+        if ack_timeout is not None:
+            _set_reset_on_close(control_sock, reset=True)
+        if on_sent is not None:
+            on_sent()
+        response = control_client.read_tcp_frame(deadline=read_deadline, monotonic=clock)
+        if ack_timeout is not None:
+            _set_reset_on_close(control_sock, reset=False)
     return _owner.HcNetSdkCommandPortControlResponse(
         login_session=login_session, request=request, response=response
     )

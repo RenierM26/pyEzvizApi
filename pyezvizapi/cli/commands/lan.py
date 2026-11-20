@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
+from functools import partial
 from ipaddress import IPv4Address
 import json
 import math
@@ -119,12 +120,22 @@ def _handle_ptz(args: argparse.Namespace) -> int:
     """Start one direction, wait a bounded time, then always try to stop.
 
     An acknowledgment means the camera accepted the frame, not that it moved.
-    Start is never retried. Stop is retried once, after an error or a missing
-    acknowledgment, since a start without a stop leaves the motor running.
+    The motor can start as soon as the start frame is written, so the duration
+    counts from that moment and the wait for the start acknowledgment never
+    runs past it: at the deadline the stop is sent, acknowledged or not. Only
+    an acknowledged start waits out the duration; any other outcome stops at
+    once. Start is never retried. Stop is retried once, after an error or a
+    missing acknowledgment, since a start without a stop leaves the motor
+    running.
+
+    Each stop attempt, login included, must finish within --timeout. Worst
+    case run time is therefore the duration plus one --timeout, or two when
+    the first stop attempt fails before its frame is written. A start without
+    an acknowledgment is closed with a reset, so a start packet lost on the
+    network is not retransmitted after the stop.
     """
     stage = "arguments"
-    stopped = False
-    acknowledged = False
+    start = stop = "not-sent"
     try:
         if not math.isfinite(args.duration) or not 0 < args.duration <= _PTZ_MAX_DURATION:
             raise PyEzvizError(f"duration must be greater than 0 and at most {_PTZ_MAX_DURATION:g}")
@@ -134,42 +145,54 @@ def _handle_ptz(args: argparse.Namespace) -> int:
             raise PyEzvizError("channel must be non-negative")
         client = _local_client(args)
         command = _PTZ_DIRECTIONS[args.direction]
+        start_sent: list[float] = []
         stage = "start"
         try:
-            acknowledged = _ptz_acknowledged(
-                client.ptz_control(
-                    command,
-                    action=EZVIZ_LAN_PTZ_ACTION_START,
-                    channel=args.channel,
-                    speed=args.speed,
-                )
+            reply = client.ptz_control(
+                command,
+                action=EZVIZ_LAN_PTZ_ACTION_START,
+                channel=args.channel,
+                speed=args.speed,
+                ack_timeout=args.duration,
+                on_sent=lambda: start_sent.append(time.monotonic()),
             )
-            if acknowledged:
-                time.sleep(args.duration)
+            start = "acknowledged" if _ptz_acknowledged(reply) else "unacknowledged"
+            if start == "acknowledged":
+                remaining = start_sent[0] + args.duration - time.monotonic()
+                if remaining > 0:
+                    time.sleep(remaining)
         finally:
+            if start == "not-sent" and start_sent:
+                start = "unacknowledged"
             for attempt in range(_PTZ_STOP_ATTEMPTS):
+                stop_sent: list[bool] = []
                 try:
-                    stop = client.ptz_control(
+                    reply = client.ptz_control(
                         command,
                         action=EZVIZ_LAN_PTZ_ACTION_STOP,
                         channel=args.channel,
                         speed=args.speed,
+                        on_sent=partial(stop_sent.append, True),
+                        deadline=time.monotonic() + args.timeout,
                     )
                 except (PyEzvizError, OSError):
+                    if stop_sent:
+                        stop = "unacknowledged"
                     if attempt + 1 == _PTZ_STOP_ATTEMPTS:
                         raise
                     continue
-                stopped = _ptz_acknowledged(stop)
-                if stopped:
+                if _ptz_acknowledged(reply):
+                    stop = "acknowledged"
                     break
-        if not acknowledged:
+                stop = "unacknowledged"
+        if start != "acknowledged":
             raise PyEzvizError("Device did not acknowledge the PTZ start")
         stage = "stop"
-        if not stopped:
+        if stop != "acknowledged":
             raise PyEzvizError("Device did not acknowledge the PTZ stop")
     except (PyEzvizError, OSError, ValueError) as error:
         message = str(error) if type(error) is PyEzvizError else "LAN operation failed"
-        if stage == "start" and acknowledged:
+        if stage == "start" and start == "acknowledged":
             stage = "stop"
         if stage != "arguments":
             message = "PTZ command unavailable, refused, or not acknowledged"
@@ -179,7 +202,9 @@ def _handle_ptz(args: argparse.Namespace) -> int:
                     "ok": False,
                     "stage": stage,
                     "message": message,
-                    "stopped": stopped,
+                    "start": start,
+                    "stop": stop,
+                    "stopped": stop == "acknowledged",
                 }
             )
         )

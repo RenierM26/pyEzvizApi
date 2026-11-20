@@ -12,7 +12,11 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
   `HcNetSdkPurePythonClient.ptz_control` and `lan ptz up|down|left|right`. The body
   tail is channel, signed command and speed; a stop is sent as `-(command + 1)`.
   Observed on a CS-C6N-R101-1G2WF. The CLI bounds the run time and always sends
-  the stop; an acknowledgment does not establish that the camera moved.
+  the stop; an acknowledgment does not establish that the camera moved. The
+  duration counts from when the start frame is written, and a late or lost start
+  acknowledgment does not delay the stop: `ptz_control` and `execute_template`
+  take `on_sent` and `ack_timeout` for this, plus `deadline` to bound a whole
+  call. Each CLI stop attempt is bounded by `--timeout`.
 
 ### Fixed
 

@@ -8,6 +8,7 @@ import hashlib
 import hmac
 from pathlib import Path
 import socket
+import struct
 from threading import Event, Thread
 import time
 from typing import Any
@@ -8621,3 +8622,185 @@ class _FakeSocket(_FragmentedSocket):
     def settimeout(self, timeout: float | None) -> None:
         self.timeout = timeout
         self.timeout_history.append(timeout)
+
+
+class _AckControlSocket(_FakeSocket):
+    """Control socket that counts reads and records SO_LINGER changes."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        super().__init__(chunks)
+        self.recv_calls = 0
+        self.linger: list[bytes] = []
+
+    def recv(self, length: int) -> bytes:
+        self.recv_calls += 1
+        return super().recv(length)
+
+    def setsockopt(self, level: int, option: int, value: bytes) -> None:
+        assert (level, option) == (socket.SOL_SOCKET, socket.SO_LINGER)
+        self.linger.append(value)
+
+
+class _SilentControlSocket(_AckControlSocket):
+    """Control socket that accepts the frame but never answers."""
+
+    def __init__(self, clock: list[float], events: list[object]) -> None:
+        super().__init__([])
+        self._clock = clock
+        self._events = events
+
+    def sendall(self, data: bytes) -> None:
+        super().sendall(data)
+        self._events.append("sent")
+
+    def recv(self, length: int) -> bytes:
+        self._events.append(("recv", self.timeout))
+        assert self.timeout is not None
+        self._clock[0] += self.timeout
+        raise TimeoutError("timed out")
+
+
+def _ptz_ack_test_client(
+    rsa_key: Any, controls: list[_FakeSocket]
+) -> tuple[HcNetSdkPurePythonClient, list[_FakeSocket]]:
+    challenge = b"0123456789abcdef0123456789abcdef"
+    login = _FakeSocket(
+        [
+            build_hcnetsdk_tcp_frame(
+                PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge) + b"s" * 64
+            ),
+            build_hcnetsdk_tcp_frame(
+                HCNETSDK_COMMAND_PORT_TEST_SESSION_ID + b"CAM123\x00", field_4=0x10A24BF1
+            ),
+        ]
+    )
+    sockets: list[_FakeSocket] = [login, *controls]
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        sock = sockets.pop(0)
+        sock.timeout = timeout
+        return sock
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        local_ip="192.0.2.56",
+        timeout=HCNETSDK_COMMAND_PORT_TEST_TIMEOUT,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+    )
+    return client, sockets
+
+
+def test_hcnetsdk_ptz_control_ack_timeout_counts_from_the_written_frame() -> None:
+    rsa_key = RSA.generate(1024)
+    clock = [50.0]
+    events: list[object] = []
+    control = _SilentControlSocket(clock, events)
+    client, sockets = _ptz_ack_test_client(rsa_key, [control])
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        client.ptz_control(
+            EzvizPtzCommand.RIGHT,
+            speed=4,
+            ack_timeout=0.5,
+            on_sent=lambda: events.append("on_sent"),
+            monotonic=lambda: clock[0],
+        )
+
+    # The read is bounded by ack_timeout, not by the 3 s socket timeout.
+    assert events == ["sent", "on_sent", ("recv", 0.5)]
+    assert clock == [50.5]
+    assert sockets == []
+    assert control.closed is True
+    # Closed with a reset, so a lost start is not retransmitted later.
+    assert control.linger == [struct.pack("ii", 1, 0)]
+
+
+def test_hcnetsdk_ptz_control_reports_written_frame_before_the_ack() -> None:
+    rsa_key = RSA.generate(1024)
+    events: list[object] = []
+    control = _AckControlSocket([PTZ_COMMAND_PORT_ACK])
+    client, _ = _ptz_ack_test_client(rsa_key, [control])
+
+    response = client.ptz_control(
+        EzvizPtzCommand.RIGHT,
+        speed=4,
+        ack_timeout=0.5,
+        on_sent=lambda: events.append((len(control.sent), control.recv_calls)),
+    )
+
+    # One frame written and nothing read yet when on_sent runs.
+    assert events == [(1, 0)]
+    assert control.recv_calls > 0
+    assert response.response.to_bytes() == PTZ_COMMAND_PORT_ACK
+    # An acknowledged frame gets a normal close.
+    assert control.linger == [struct.pack("ii", 1, 0), struct.pack("ii", 0, 0)]
+
+
+class _TrickleLoginSocket(_FakeSocket):
+    """Login socket that returns one byte per read, one clock second apart."""
+
+    def __init__(self, clock: list[float]) -> None:
+        super().__init__([b"\x00" * 4096])
+        self._clock = clock
+
+    def recv(self, length: int) -> bytes:
+        self._clock[0] += 1.0
+        return super().recv(1)
+
+
+def test_hcnetsdk_ptz_control_deadline_bounds_the_whole_login() -> None:
+    clock = [10.0]
+    deadline = 12.5
+    login = _TrickleLoginSocket(clock)
+    sockets: list[_FakeSocket] = [login]
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        sock = sockets.pop(0)
+        sock.timeout = timeout
+        return sock
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        local_ip="192.0.2.56",
+        timeout=HCNETSDK_COMMAND_PORT_TEST_TIMEOUT,
+        socket_factory=socket_factory,
+        rsa_key=RSA.generate(1024),
+    )
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        client.ptz_control(
+            EzvizPtzCommand.RIGHT,
+            action=EZVIZ_LAN_PTZ_ACTION_STOP,
+            deadline=deadline,
+            monotonic=lambda: clock[0],
+        )
+
+    # Each byte arrives inside the socket timeout; only the deadline stops it.
+    assert clock[0] <= deadline + 1.0
+    assert login.closed is True
+
+
+def test_hcnetsdk_ptz_control_without_ack_timeout_keeps_the_normal_close() -> None:
+    rsa_key = RSA.generate(1024)
+    control = _AckControlSocket([PTZ_COMMAND_PORT_ACK])
+    client, _ = _ptz_ack_test_client(rsa_key, [control])
+
+    client.ptz_control(EzvizPtzCommand.RIGHT, action=EZVIZ_LAN_PTZ_ACTION_STOP, speed=4)
+
+    assert control.linger == []
+
+
+@pytest.mark.parametrize("ack_timeout", [0.0, -1.0, float("nan")])
+def test_hcnetsdk_ptz_control_rejects_invalid_ack_timeout(ack_timeout: float) -> None:
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        raise AssertionError("connected despite an invalid ack_timeout")
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        socket_factory=socket_factory,
+    )
+    with pytest.raises(PyEzvizError, match="ack_timeout"):
+        client.ptz_control(EzvizPtzCommand.RIGHT, ack_timeout=ack_timeout)

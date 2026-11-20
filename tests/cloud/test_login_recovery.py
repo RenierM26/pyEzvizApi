@@ -192,7 +192,8 @@ def test_request_uses_selected_server_contact_then_preserves_channel(wire, chann
     with pytest.raises(EzvizAuthVerificationCode) as caught:
         client.login(mfa_channel=channel)
     assert caught.value.code_sent and caught.value.available_channels == (1, 3)
-    assert posts(calls)[1] == {"from": [info["phone" if channel == 1 else "email"]], "bizType": ["TERMINAL_BIND"]}
+    assert posts(calls)[1] == {"from": [info["phone" if channel == 1 else "email"]], "bizType": ["TERMINAL_BIND"], "msgType": [str(channel)], "imageCode": [""]}
+    assert calls[2].url.endswith("/users/checkcode/mt/unlogin/v5")
     assert info["phone"] not in repr(caught.value) + repr(vars(caught.value))
     assert "bound@example.test" not in json.dumps(client.export_token())
     client.login("000000")
@@ -227,7 +228,7 @@ def test_missing_selected_contact_never_uses_unrelated_login_account(wire, info)
 
 
 def test_security_contact_flow_requires_app_not_legacy_sms_endpoint(wire):
-    client, calls = wire([{"meta": {"code": 6002}, "contactExt": {"email": "bound@example.test", "accessToken": "private-marker", "isSecurityBind": True}}])
+    client, calls = wire([{"meta": {"code": 6002}, "contactExt": {"fuzzyEmail": "b***@example.test", "accessToken": "private-marker", "isSecurityBind": True}}])
     with pytest.raises(EzvizAuthVerificationCode) as caught:
         client.login()
     assert caught.value.reason == "security_verification_required"
@@ -367,7 +368,7 @@ def test_unchanged_selection_preserves_request_and_explicit_change_clears_it():
     assert not state.sent and not state.code_sent(None)
 
 
-@pytest.mark.parametrize("changed", [{"email": "other@example.test"}, {"phone": "+27000000000"}, {"email": "a***@example.test"}, {"email": "bound@example.test", "isSecurityBind": True}])
+@pytest.mark.parametrize("changed", [{"email": "other@example.test"}, {"phone": "+27000000000"}, {"email": "a***@example.test"}, {"accessToken": "private-marker", "isSecurityBind": True}])
 def test_changed_contact_never_reports_stale_delivery_or_automatically_resends(wire, changed):
     client, calls = wire([
         {"meta": {"code": 6002}, "loginUser": {"email": "bound@example.test"}},
@@ -442,3 +443,114 @@ def test_second_region_key_failure_never_resubmits_credentials(wire, failure):
     with pytest.raises((PyEzvizError, requests.Timeout)):
         client.login("001234", mfa_channel=1)
     assert len(calls) == 3 and len(posts(calls)) == 1
+
+
+@pytest.mark.parametrize("field, token_field", [("contactExt", "accessToken"), ("loginUser", "verifyAccessToken")])
+@pytest.mark.parametrize("channel, contact", [(1, {"phone": "+27000000000"}), (3, {"email": "bound@example.test"})])
+@pytest.mark.parametrize("security", [{"isSecurityBind": True}, {"token": True}, {"isSecurityBind": True, "token": True}])
+def test_security_alternatives_do_not_disable_reported_contacts(wire, field, token_field, channel, contact, security):
+    info = {**contact, **security}
+    if info.pop("token", False):
+        info[token_field] = "private-marker"
+    client, calls = wire([
+        {"meta": {"code": 6002}, field: info},
+        {"meta": {"code": 200}, "smsToken": "private-marker"},
+        OK,
+    ])
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        client.login(mfa_channel=channel)
+    assert caught.value.reason == "verification_required"
+    assert caught.value.code_sent and caught.value.available_channels == (channel,)
+    assert calls[2].url.endswith("/users/checkcode/mt/unlogin/v5")
+    assert posts(calls)[1] == {
+        "from": [next(iter(contact.values()))], "bizType": ["TERMINAL_BIND"],
+        "msgType": [str(channel)], "imageCode": [""],
+    }
+    assert "private-marker" not in repr(vars(caught.value)) + repr(client._login_verification) + json.dumps(client.export_token())  # noqa: SLF001
+    assert not any("private-marker" in str(form) for form in posts(calls))
+    client.login("001234")
+    assert posts(calls)[2]["smsCode"] == ["001234"]
+    assert posts(calls)[2]["msgType"] == [str(channel)]
+    assert client._login_verification.contacts == {}  # noqa: SLF001
+
+
+@pytest.mark.parametrize("info", [
+    {"accessToken": "private-marker"}, {"isSecurityBind": True},
+    {"verifyAccessToken": "private-marker", "email": "b***@example.test"},
+])
+def test_token_only_challenge_cannot_be_bypassed_with_explicit_contact(wire, info):
+    client, calls = wire([{"meta": {"code": 6002}, "contactExt": info}])
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        client.login(mfa_account="explicit@example.test")
+    assert caught.value.reason == "security_verification_required"
+    assert not caught.value.code_sent and not caught.value.available_channels
+    with pytest.raises(EzvizAuthVerificationCode):
+        client.send_mfa_code()
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("code", [1101, 1141, 1041, 1043, 1011, 1012, 9876])
+def test_channel_request_errors_stop_before_prompt_or_credential_resubmission(wire, monkeypatch, code):
+    from pyezvizapi.cli.auth import login_with_verification  # noqa: PLC0415
+
+    client, calls = wire([
+        {"meta": {"code": 6002}, "contactExt": {"email": "bound@example.test", "accessToken": "private-marker"}},
+        {"meta": {"code": code, "message": "private-marker"}, "smsToken": "private-marker"},
+    ])
+    monkeypatch.setattr("builtins.input", lambda _: pytest.fail("No accepted delivery request"))
+    with pytest.raises(PyEzvizError) as caught:
+        login_with_verification(client.login, mfa_channel="email")
+    if code in (1101, 1141):
+        assert isinstance(caught.value, EzvizLoginError)
+        assert caught.value.reason == "captcha_required"
+    assert "private-marker" not in str(caught.value) + repr(vars(caught.value))
+    assert len(calls) == 3
+    assert not client._login_verification.sent  # noqa: SLF001
+
+
+@pytest.mark.parametrize("failure", [requests.Timeout("offline"), response({}, 401), response({}, 503), response({}, 307)])
+def test_channel_delivery_transport_failure_never_retries_or_falls_back(wire, failure):
+    client, calls = wire([
+        {"meta": {"code": 6002}, "contactExt": {"email": "bound@example.test", "isSecurityBind": True}}, failure,
+    ])
+    with pytest.raises((PyEzvizError, requests.RequestException)):
+        client.login()
+    assert len(calls) == 3 and calls[-1].url.endswith("/users/checkcode/mt/unlogin/v5")
+    assert not client._login_verification.sent  # noqa: SLF001
+
+
+def test_cli_real_client_security_alternatives_request_and_submit_once(wire, monkeypatch):
+    from pyezvizapi.cli.auth import login_with_verification  # noqa: PLC0415
+
+    client, calls = wire([
+        {"meta": {"code": 6002}, "contactExt": {"email": "bound@example.test", "accessToken": "private-marker", "isSecurityBind": True}},
+        {"meta": {"code": 200}}, OK,
+    ])
+    prompts = []
+    def enter_code(prompt):
+        prompts.append(prompt)
+        return "000000"
+    monkeypatch.setattr("builtins.input", enter_code)
+    login_with_verification(client.login, mfa_channel="email")
+    assert len(prompts) == 1 and len(calls) == 5
+    assert posts(calls)[2]["smsCode"] == ["000000"]
+    assert len([call for call in calls if call.url.endswith("/checkcode/mt/unlogin/v5")]) == 1
+
+
+def test_unsupported_selected_channel_does_not_switch_to_reported_phone(wire):
+    client, calls = wire([{"meta": {"code": 6002}, "contactExt": {"phone": "+27000000000", "accessToken": "private-marker"}}])
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        client.login(mfa_channel=3)
+    assert not caught.value.code_sent and caught.value.available_channels == (1,)
+    assert len(calls) == 2
+
+
+def test_login_user_takes_precedence_over_contact_ext(wire):
+    client, calls = wire([{
+        "meta": {"code": 6002}, "loginUser": {},
+        "contactExt": {"email": "unselected@example.test", "accessToken": "private-marker"},
+    }])
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        client.login()
+    assert not caught.value.code_sent and not caught.value.available_channels
+    assert len(calls) == 2

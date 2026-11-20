@@ -42,8 +42,9 @@ incorrect account/password; it does not identify why a server rejected them.
 but lost zeros cannot be reconstructed; no padding is guessed. `"000000"` and
 integer `0` are submitted, not mistaken for an absent code. Empty, non-ASCII,
 boolean and non-digit codes fail before network access. SMS/email are the only
-implemented channels; voice, third-party and security-contact flows are not
-silently mapped to email/SMS.
+implemented delivery channels; voice, third-party, terminal approval and security-
+question flows are not silently mapped to email/SMS. A reported email/phone stays
+usable when the same challenge also advertises security alternatives.
 
 A `6002` challenge raises `EzvizAuthVerificationCode`. Without a supplied code,
 the default behavior requests one **once** when a usable contact is available.
@@ -67,14 +68,20 @@ except EzvizAuthVerificationCode as challenge:
 ```
 
 The example performs real authentication/delivery if run with real credentials.
-It is not a validation script or an automatic retry recipe. Security verification
-must instead be completed in the app.
+It is not a validation script or an automatic retry recipe. Challenges with only
+terminal/security alternatives (no usable email/phone) still require the app.
 
 `send_mfa_code(...)` is an **explicit request/resend**, even if one was already
-requested. It uses `from=selected_contact`, `bizType=TERMINAL_BIND`, without
-401 re-login recursion. A successful response confirms request acceptance, not
-physical delivery. When a legacy challenge includes **no** contact metadata,
-the old default-email `from=login_account` request remains for compatibility;
+requested. For metadata-backed contacts it uses the retained app's
+`POST /v3/users/checkcode/mt/unlogin/v5` with `from=selected_contact`,
+`bizType=TERMINAL_BIND`, selected `msgType` (1/3) and empty `imageCode`.
+This is the code-request API's v5 suffix, not a downgrade from password login/v6.
+It does not send contactExt access tokens as email addresses or session headers.
+There is no 401 re-login recursion, redirect following, endpoint fallback or retry.
+A successful response confirms request acceptance, not physical delivery.
+When a legacy challenge includes **no** contact metadata, the old
+`POST /v3/sms/nologin/checkcode` default-email `from=login_account` request
+remains for compatibility;
 SMS needs a returned phone or an explicit `mfa_account`. No timers, backoff
 values or supported-channel policy are invented from the presence of contacts.
 
@@ -114,9 +121,16 @@ expired code errors now also use this verification subtype. Callers must inspect
 | `1069` | `terminal_limit` | Manage registered terminals in the app |
 | `1102` | `region_selection_required` | Complete account-region selection in the app |
 
-A security-bound/verification-token contact challenge is surfaced as
-`security_verification_required`; the legacy checkcode endpoint is not used for
-that unsupported flow. Missing selected contacts produce an unsent challenge
+`contactExt.accessToken` (normalized by the app as `verifyAccessToken`) and
+`isSecurityBind` advertise alternative terminal/security verification choices.
+They do **not** veto email/SMS when usable contacts are present. Earlier main
+incorrectly blocked these ordinary channels. No temporary access token is stored
+or needed for their request/submission. A challenge with security alternatives
+but **no** usable email/phone is still `security_verification_required` and never
+falls back to the login account, even with an explicit recipient override.
+Request-side `1101`/`1141` mean image/CAPTCHA recovery is required; they are
+`captcha_required`, not incorrect SMS/email codes. No CAPTCHA bypass is attempted.
+Missing selected contacts produce an unsent challenge
 or `verification_contact_required` from an explicit request. Unknown codes use
 `login_failed`. Server messages, temporary/access tokens and contact values are
 not copied into exceptions. Lock minutes must be a positive signed-32-bit JSON
@@ -146,7 +160,16 @@ Relevant Java owners/methods:
 - `com.ezviz.verify.VerifyDialogHelper`: incorrect/expired code and request limits.
 - `com.ezviz.verify.channel.VerifyChannelType`: SMS 1/email 3.
 - `com.videogo.pre.http.bean.user.LoginV3Resp.getLoginUser`: contactExt fallback.
-- `com.videogo.pre.http.api.v3.UserApi.getServiceCheckCode`: `from`/`bizType`.
+- `com.ezviz.verify.VerifyUtils.getSupportFlow`: email/phone eligibility is
+  independent of the terminal/security alternatives.
+- `com.ezviz.accountmgt.view.BaseVerifyCodeView`: email/SMS choose contact values;
+  only terminal verification uses `verifyAccessToken`. `isIdentify` excludes
+  `TERMINAL_BIND`, so it follows `VerifyAccountImgDialogUtil.getVerifyCodeOld`.
+- `com.ezviz.verify.VerifyAccountImgDialogUtil.getUnLoginVerifyCode` and
+  `com.videogo.pre.http.api.v3.UserApi.getUnLoginCheckCodeV5`: channel-aware
+  unlogin endpoint/form, request-side image challenge codes `1101`/`1141`.
+- `com.videogo.pre.http.api.v3.UserApi.getServiceCheckCode`: deprecated legacy
+  `from`/`bizType` endpoint retained for metadata-free backwards compatibility.
 
 The Android callback maps these raw codes to app codes by adding 100000.
 SDK errors use the **raw** code. Offline tests use synthetic RSA keys and block

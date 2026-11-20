@@ -7,6 +7,12 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Fixed
 
+- Do not block reported MFA email/SMS contacts merely because a login challenge
+  also advertises terminal/security verification alternatives. Use the app's
+  channel-aware unlogin code-request API for metadata-backed contacts, preserve
+  the metadata-free legacy path, and stop on request-side CAPTCHA challenges.
+  Keep token-only recovery app-required; no temporary token is persisted.
+
 - Use the app-compatible RSA-wrapped password on `login/v6`; distinguish
   incorrect credentials (`1226`) from public-key, system-clock and lockout errors.
   Key fetch/encryption failures no longer silently downgrade to v5. Explicit

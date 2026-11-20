@@ -7,6 +7,20 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Fixed
 
+- Explain when no usable bound phone is reported for SMS/phone verification,
+  without sending a message or silently switching to email.
+
+### Added
+
+- Human-completed image CAPTCHA recovery for login and MFA delivery requests,
+  with ephemeral context-bound handles, explicit cancellation, bounded image
+  fetches and CLI prompts. No automatic solving or replay after failure.
+- Explicit regional/business MFA channel discovery. Server-advertised voice,
+  WhatsApp and Zalo require a usable phone and current-region policy before
+  selection; preserve the app's separate delivery/login channel mapping.
+
+### Fixed
+
 - Do not block reported MFA email/SMS contacts merely because a login challenge
   also advertises terminal/security verification alternatives. Use the app's
   channel-aware unlogin code-request API for metadata-backed contacts, preserve

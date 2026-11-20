@@ -17,10 +17,16 @@ def _handle_mqtt(
     args: _owner_types.argparse.Namespace, client: _owner_types.EzvizClient, *, _owner: _ModuleType
 ) -> int:
     """Migrate the login and listen with durable channel-99 token storage."""
+    country = getattr(args, "mfa_country_code", None)
+    if country is not None:
+        client.get_mfa_channels(country)
     login_with_verification(
         client.enable_channel99,
         mfa_channel=getattr(args, "mfa_channel", None),
         mfa_account=getattr(args, "mfa_account", None),
+        fetch_captcha=client.get_captcha,
+        send_mfa=client.send_mfa_code,
+        cancel_captcha=client.cancel_captcha,
     )
     mqtt = client.get_mqtt_client(on_message_callback=_owner._write_json)
     mqtt.connect()

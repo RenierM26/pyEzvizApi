@@ -228,6 +228,7 @@ def _login(
     require_service_urls: bool = False,
     mfa_channel: str | None = None,
     mfa_account: str | None = None,
+    mfa_country_code: str | None = None,
 ) -> None:
     """Login only when the saved token cannot satisfy the selected action."""
     if (
@@ -241,7 +242,16 @@ def _login(
         return
 
     if client.account and client.password:
-        login_with_verification(client.login, mfa_channel=mfa_channel, mfa_account=mfa_account)
+        if mfa_country_code is not None:
+            client.get_mfa_channels(mfa_country_code)
+        login_with_verification(
+            client.login,
+            mfa_channel=mfa_channel,
+            mfa_account=mfa_account,
+            fetch_captcha=client.get_captcha,
+            send_mfa=client.send_mfa_code,
+            cancel_captcha=client.cancel_captcha,
+        )
     else:
         client.login()
 
@@ -1597,6 +1607,7 @@ def main(argv: list[str] | None = None) -> int:
             require_service_urls=_action_requires_service_urls(args),
             mfa_channel=args.mfa_channel,
             mfa_account=args.mfa_account,
+            mfa_country_code=args.mfa_country_code,
         )
         if args.save_token:
             save(client.export_token())

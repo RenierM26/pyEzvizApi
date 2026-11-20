@@ -102,7 +102,8 @@ class EzvizAuthVerificationCode(EzvizLoginError):
     """Login needs a code. Existing catches/zero-argument construction still work.
 
     ``code_sent`` only confirms a successful request, not actual delivery.
-    ``available_channels`` lists reported SMS (1)/email (3) contacts, not policy.
+    ``available_channels`` lists usable contacts and explicitly discovered phone
+    delivery options; regional advertising alone does not prove account availability.
     """
 
     def __init__(

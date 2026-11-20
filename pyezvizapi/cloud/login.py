@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Final
 
+from pyezvizapi.cloud.challenges import CHANNEL_NAMES, PHONE_CHANNELS
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, EzvizLoginError, PyEzvizError
 
 _LOGIN_ERRORS: Final[Mapping[int, tuple[str, str]]] = MappingProxyType(
@@ -14,7 +15,11 @@ _LOGIN_ERRORS: Final[Mapping[int, tuple[str, str]]] = MappingProxyType(
         1013: ("incorrect_username", "Incorrect Username."),
         1014: ("incorrect_password", "Incorrect Password."),
         1226: ("incorrect_credentials", "Incorrect username or password."),
-        1015: ("captcha_required", "Image verification required; recover login in the EZVIZ app."),
+        1101: ("captcha_incorrect", "Incorrect image code; fetch a fresh CAPTCHA before retrying."),
+        1015: (
+            "captcha_required",
+            "Image verification required; fetch a CAPTCHA and submit the human answer.",
+        ),
         1069: (
             "terminal_limit",
             "Terminal limit reached; manage registered terminals in the EZVIZ app.",
@@ -88,7 +93,7 @@ def verification_request_error(code: int | None, result: dict[str, Any]) -> Ezvi
     """Request-side image challenges are not incorrect SMS/email codes."""
     if code in (1101, 1141):
         return EzvizLoginError(
-            "Image verification required; request a code in the EZVIZ app.",
+            "Image verification required before requesting an MFA code.",
             reason="captcha_required",
             code=code,
         )
@@ -105,6 +110,33 @@ class LoginVerification:
     recipient: str | None = field(default=None, repr=False)
     metadata_present: bool = False
     app_required: bool = False
+    configured_channels: tuple[int, ...] = (1, 3)
+    config_region: str | None = field(default=None, repr=False)
+
+    def contact_error(self) -> tuple[str, str]:
+        if self.channel in PHONE_CHANNELS:
+            return (
+                "verification_phone_unavailable",
+                "No usable bound phone was reported for this verification method. "
+                "Link and verify a phone in the EZVIZ app, then retry login, or choose email.",
+            )
+        return (
+            "security_verification_required"
+            if self.app_required
+            else "verification_contact_required",
+            "No usable bound email was reported; select a contact or verify in the EZVIZ app.",
+        )
+
+    @property
+    def login_channel(self) -> int:
+        # The app requests WhatsApp/Zalo delivery with 6/7, then logs in with 1.
+        return 1 if self.channel in (6, 7) else self.channel
+
+    def available_channels(self, region: str) -> tuple[int, ...]:
+        reported = set(self.contacts)
+        if 1 in self.contacts and self.config_region == region:
+            reported.update(code for code in self.configured_channels if code in PHONE_CHANNELS)
+        return tuple(sorted(reported))
 
     @property
     def sent(self) -> bool:
@@ -125,8 +157,14 @@ class LoginVerification:
 
     def select(self, channel: int | None, recipient: str | None) -> None:
         # Validate every supplied field before changing any part of the selection.
-        if channel is not None and (type(channel) is not int or channel not in (1, 3)):
-            raise PyEzvizError("MFA channel must be SMS 1 or email 3")
+        if channel is not None and (
+            type(channel) is not int
+            or channel not in self.configured_channels
+            or channel not in CHANNEL_NAMES
+        ):
+            raise PyEzvizError(
+                "MFA channel must be SMS 1 or email 3, or an explicitly discovered supported channel"
+            )
         if recipient is not None and (not isinstance(recipient, str) or not recipient.strip()):
             raise PyEzvizError("MFA recipient must be nonempty text")
         selected_channel = self.channel if channel is None else channel
@@ -163,6 +201,6 @@ class LoginVerification:
         if self.recipient:
             return self.recipient
         if self.metadata_present:
-            return self.contacts.get(self.channel)
+            return self.contacts.get(1 if self.channel in PHONE_CHANNELS else 3)
         # Preserve the old email-only API when no contact metadata was returned.
         return account if self.channel == 3 else None

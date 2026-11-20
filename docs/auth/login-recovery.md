@@ -29,7 +29,9 @@ incorrect account/password; it does not identify why a server rejected them.
 
 `login` and `enable_channel99` accept these keyword-only options:
 
-- `mfa_channel=1` for SMS or `3` for email. Omission uses the selected channel
+- `mfa_channel=1` for SMS or `3` for email. Voice `2`, WhatsApp `6` and Zalo `7`
+  require an explicit successful `get_mfa_channels(country_code)` call advertising
+  that method for `TERMINAL_BIND` in the current API region. Omission uses the selected channel
   on this client, initially email for backwards compatibility. No inference
   from whether the login username looks like an email or phone number.
 - `mfa_account="BOUND_CONTACT"` explicitly selects a bound delivery contact,
@@ -41,9 +43,9 @@ incorrect account/password; it does not identify why a server rejected them.
 `login(sms_code="001234")` preserves zeros. Legacy integer callers still work,
 but lost zeros cannot be reconstructed; no padding is guessed. `"000000"` and
 integer `0` are submitted, not mistaken for an absent code. Empty, non-ASCII,
-boolean and non-digit codes fail before network access. SMS/email are the only
-implemented delivery channels; voice, third-party, terminal approval and security-
-question flows are not silently mapped to email/SMS. A reported email/phone stays
+boolean and non-digit codes fail before network access. SMS/email remain the backwards-compatible
+methods. Other supported phone delivery methods are explicitly server-gated;
+terminal approval and security-question flows remain app-required. A reported email/phone stays
 usable when the same challenge also advertises security alternatives.
 
 A `6002` challenge raises `EzvizAuthVerificationCode`. Without a supplied code,
@@ -74,7 +76,7 @@ terminal/security alternatives (no usable email/phone) still require the app.
 `send_mfa_code(...)` is an **explicit request/resend**, even if one was already
 requested. For metadata-backed contacts it uses the retained app's
 `POST /v3/users/checkcode/mt/unlogin/v5` with `from=selected_contact`,
-`bizType=TERMINAL_BIND`, selected `msgType` (1/3) and empty `imageCode`.
+`bizType=TERMINAL_BIND`, selected delivery `msgType` and empty `imageCode` unless the human answered a CAPTCHA.
 This is the code-request API's v5 suffix, not a downgrade from password login/v6.
 It does not send contactExt access tokens as email addresses or session headers.
 There is no 401 re-login recursion, redirect following, endpoint fallback or retry.
@@ -82,8 +84,13 @@ A successful response confirms request acceptance, not physical delivery.
 When a legacy challenge includes **no** contact metadata, the old
 `POST /v3/sms/nologin/checkcode` default-email `from=login_account` request
 remains for compatibility;
-SMS needs a returned phone or an explicit `mfa_account`. No timers, backoff
-values or supported-channel policy are invented from the presence of contacts.
+SMS needs a returned phone or an explicit `mfa_account`. SMS and other phone
+methods without a usable destination raise `verification_phone_unavailable` with
+instructions to link/verify a phone in the app or choose email. A missing or
+masked phone is not proof that no phone is linked; already-linked users should
+retry login to refresh the reported contacts. No email fallback or message is
+sent on that error. No timers, backoff values or channel policy are invented
+from the presence of contacts.
 
 Contacts and caller-selected recipients are ephemeral client state, omitted
 from repr, errors and exported tokens; they are cleared after successful login.
@@ -117,7 +124,10 @@ expired code errors now also use this verification subtype. Callers must inspect
 | `1407` | `clock_incorrect` | Correct host system time |
 | `1402` | `public_key_refresh_required` | Explicit retry fetches a fresh key |
 | `1400` | `account_locked` | Wait; use validated `lock_minutes` when present |
-| `1015` | `captcha_required` | Complete image/CAPTCHA recovery in the app |
+| `1015` | `captcha_required` | Fetch an image and submit the human answer |
+| login `1101` | `captcha_incorrect` | Fetch a new image; no automatic retry |
+| request `1101` / `1141` | `captcha_required` | Fetch a contact-bound image before explicitly requesting delivery |
+| missing phone | `verification_phone_unavailable` | Link/verify a phone, refresh login contacts or select email |
 | `1069` | `terminal_limit` | Manage registered terminals in the app |
 | `1102` | `region_selection_required` | Complete account-region selection in the app |
 
@@ -126,15 +136,92 @@ expired code errors now also use this verification subtype. Callers must inspect
 They do **not** veto email/SMS when usable contacts are present. Earlier main
 incorrectly blocked these ordinary channels. No temporary access token is stored
 or needed for their request/submission. A challenge with security alternatives
-but **no** usable email/phone is still `security_verification_required` and never
+but **no** usable email/phone remains app-required (`security_verification_required`,
+or `verification_phone_unavailable` when a phone method was selected) and never
 falls back to the login account, even with an explicit recipient override.
 Request-side `1101`/`1141` mean image/CAPTCHA recovery is required; they are
-`captcha_required`, not incorrect SMS/email codes. No CAPTCHA bypass is attempted.
+`captcha_required`, not incorrect SMS/email codes. Login-side `1101` is
+`captcha_incorrect` and requires a freshly fetched image. No automatic solving,
+blind retries or CAPTCHA bypass is attempted.
 Missing selected contacts produce an unsent challenge
 or `verification_contact_required` from an explicit request. Unknown codes use
 `login_failed`. Server messages, temporary/access tokens and contact values are
 not copied into exceptions. Lock minutes must be a positive signed-32-bit JSON
 integer; malformed/string/boolean values are ignored, not guessed.
+
+## Human-completed image CAPTCHA
+
+Login `1015` and MFA-request `1101`/`1141` can be resumed with an image answer:
+
+```python
+challenge = client.get_captcha()  # Login account + persistent feature identity
+# Display challenge.image using challenge.content_type; ask the human to read it.
+client.login(captcha=challenge, captcha_code="aB01")
+```
+
+For a CAPTCHA raised while requesting a delivery code, use the selected contact:
+
+```python
+challenge = client.get_captcha(for_mfa=True)
+client.send_mfa_code(captcha=challenge, captcha_code="aB01")
+# Only after the request is accepted, ask for the received SMS/email/etc. code.
+client.login(sms_code="001234")
+```
+
+The four-character image answer is distinct from the MFA code. It preserves case
+and leading zeros. Challenge handles are ephemeral and client-owned; neither
+images, answers nor contact context go into exported tokens or repr. A new fetch,
+local `cancel_captcha()`, session replacement, or successful login invalidates
+the previous handle. Submission checks region, feature identity, account/contact
+and login-vs-delivery purpose. Switching a delivery channel also invalidates its
+context. The handle is consumed before transport, including on a timeout; retry
+requires an explicit new image. A regional redirect while submitting an image
+stops with `captcha_region_changed` instead of replaying the answer elsewhere.
+Expiry is server-owned; no undocumented lifetime is invented.
+
+Image fetch uses `GET /v3/captcha` with the app's `account`/`featureCode` binding,
+no redirects, bounded HTTP deadline/body and a 1MiB supported-image limit. PNG,
+JPEG and GIF signatures are accepted, not HTML or arbitrary URLs. A non-image
+response stops with app-recovery guidance; it is not treated as a browser token.
+
+Both CLI login and MQTT migration show a private temporary image file path and
+accept a human answer. The file is removed on answer/cancellation. There is at
+most one login image, one delivery image and one OTP submission per invocation;
+wrong/expired submitted codes or repeated image requirements stop. Ctrl-C cancels.
+For a headless machine, display the returned image through the consumer UI instead.
+The SDK does not open a browser, run remote JavaScript, OCR or solve the image.
+
+The retained app restricts its browser/token human-verification v2 choice to
+registration/password recovery (`RegistLineAuthManager.getRemoteCaptcha2Enable`).
+Those account-recovery businesses are not implemented here; they must not be
+substituted for this image-based login/`TERMINAL_BIND` contract.
+
+## Explicit regional delivery discovery
+
+```python
+channels = client.get_mfa_channels("27")  # Telephone country prefix, not "ZA"
+# Inspect each channel.channel, channel.title, channel.order and channel.supported.
+# Choose a server-advertised method with a usable bound contact, never the first blindly.
+client.login(mfa_channel=6)  # WhatsApp, only if advertised in this region
+```
+
+Discovery performs one read-only `GET /v3/ezsms/channel/config?countryCode=27`,
+selects only `data.TERMINAL_BIND`, and preserves the app's ascending `order`.
+Unknown channel codes are returned as unsupported and cannot be selected. Null or
+absent policy does not enable alternate methods. An explicit failed refresh
+revokes the prior alternate-method selection grant. Policy is in-memory and
+region-bound, not automatically fetched per command or persisted in tokens.
+Phone contacts and policy are independent requirements; a region offering
+WhatsApp does not prove that the account has a usable phone. SMS/email retain
+the app-compatible legacy availability path when no policy is available.
+
+Requests use selected delivery `msgType` 1/2/3/6/7. Matching the app's login
+callback, WhatsApp/Zalo code submission uses login `msgType=1`; voice stays `2`.
+Changing methods is explicit, with no fallback or automatic resend. The CLI
+accepts `--mfa-channel sms|email|voice|whatsapp|zalo`; alternate methods additionally
+need `--mfa-country-code 27` for discovery. No country is guessed from a username.
+`available_channels` reports ordinary usable contacts plus discovered phone
+methods for the current region, rather than every enum value in the app.
 
 ### Home Assistant boundary
 
@@ -168,6 +255,14 @@ Relevant Java owners/methods:
 - `com.ezviz.verify.VerifyAccountImgDialogUtil.getUnLoginVerifyCode` and
   `com.videogo.pre.http.api.v3.UserApi.getUnLoginCheckCodeV5`: channel-aware
   unlogin endpoint/form, request-side image challenge codes `1101`/`1141`.
+- `com.ezviz.task.LoginCtrl.loadImageCode` / `VerifyAccountPresenter`: CAPTCHA bytes
+  fetched with account and featureCode; `UserRemoteDataSource.login` carries imageCode.
+- `com.ezviz.humanmachine.RegistLineAuthManager.getRemoteCaptcha2Enable`: browser
+  v2 selection restricted to registration/password recovery, not TERMINAL_BIND.
+- `com.ezviz.verify.channel.VerifyChannelConfigManager` / `ChannelItemBean`:
+  telephone countryCode, data keyed by business, channel/title/order and sorting.
+- `LoginTaskHelper.showCheckVerifyCode`: third-party delivery normalizes to SMS
+  msgType for login; this is not a request to send another SMS.
 - `com.videogo.pre.http.api.v3.UserApi.getServiceCheckCode`: deprecated legacy
   `from`/`bizType` endpoint retained for metadata-free backwards compatibility.
 

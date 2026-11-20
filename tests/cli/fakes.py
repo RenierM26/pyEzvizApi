@@ -42,6 +42,15 @@ class FakeClient:
     def login(self, sms_code: int | None = None) -> None:
         self.login_calls.append(sms_code)
 
+    def get_captcha(self, *, for_mfa: bool = False) -> Any:
+        raise AssertionError("Unexpected image request in a non-CAPTCHA CLI test")
+
+    def send_mfa_code(self, **kwargs: Any) -> bool:
+        raise AssertionError("Unexpected delivery request in this CLI test")
+
+    def cancel_captcha(self) -> None:
+        pass
+
     def get_device_infos(self, serial: str | None = None) -> dict[str, Any]:
         if serial:
             return self.device_infos.get(serial, {})

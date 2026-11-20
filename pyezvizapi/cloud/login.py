@@ -156,18 +156,18 @@ class LoginVerification:
         return self._requested_contact == (self.channel, self.destination(account))
 
     def select(self, channel: int | None, recipient: str | None) -> None:
-        # Validate every supplied field before changing any part of the selection.
-        if channel is not None and (
-            type(channel) is not int
-            or channel not in self.configured_channels
-            or channel not in CHANNEL_NAMES
+        # Revalidate retained selections too: an explicit refresh may revoke them.
+        selected_channel = self.channel if channel is None else channel
+        if (
+            type(selected_channel) is not int
+            or selected_channel not in self.configured_channels
+            or selected_channel not in CHANNEL_NAMES
         ):
             raise PyEzvizError(
                 "MFA channel must be SMS 1 or email 3, or an explicitly discovered supported channel"
             )
         if recipient is not None and (not isinstance(recipient, str) or not recipient.strip()):
             raise PyEzvizError("MFA recipient must be nonempty text")
-        selected_channel = self.channel if channel is None else channel
         selected_recipient = self.recipient if selected_channel == self.channel else None
         if recipient is not None:
             selected_recipient = recipient

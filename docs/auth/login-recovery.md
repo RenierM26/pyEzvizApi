@@ -208,8 +208,12 @@ client.login(mfa_channel=6)  # WhatsApp, only if advertised in this region
 Discovery performs one read-only `GET /v3/ezsms/channel/config?countryCode=27`,
 selects only `data.TERMINAL_BIND`, and preserves the app's ascending `order`.
 Unknown channel codes are returned as unsupported and cannot be selected. Null or
-absent policy does not enable alternate methods. An explicit failed refresh
-revokes the prior alternate-method selection grant. Policy is in-memory and
+absent policy does not enable alternate methods. Refreshing discovery revokes
+grants for methods no longer advertised; a failed refresh revokes all prior
+alternate-method grants. A retained selection is revalidated even when
+`mfa_channel` is omitted, before login, push migration or a delivery request
+makes a network call. Choose an available method explicitly or rediscover
+support; no fallback is selected automatically. Policy is in-memory and
 region-bound, not automatically fetched per command or persisted in tokens.
 Phone contacts and policy are independent requirements; a region offering
 WhatsApp does not prove that the account has a usable phone. SMS/email retain

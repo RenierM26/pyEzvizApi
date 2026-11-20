@@ -139,6 +139,60 @@ def test_discovery_failure_revokes_prior_extra_channel_and_region_change_require
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize('channel', [2, 6, 7])
+@pytest.mark.parametrize('operation', ['send_mfa_code', 'login', 'enable_channel99'])
+def test_successful_policy_refresh_revokes_retained_channel_before_transport(wire, channel, operation):
+    client, calls = wire([
+        {'meta': {'code': 200}, 'data': {'TERMINAL_BIND': [{'channel': channel, 'title': 'phone method', 'order': 0}]}},
+        CONTACT,
+        {'meta': {'code': 200}},
+        {'meta': {'code': 200}, 'data': {'TERMINAL_BIND': []}},
+    ])
+    client.get_mfa_channels('27')
+    with pytest.raises(EzvizAuthVerificationCode) as challenge:
+        client.login(mfa_channel=channel)
+    assert challenge.value.code_sent
+    client.get_mfa_channels('27')
+    state = client._login_verification
+    before = deepcopy(state)
+    assert channel not in state.available_channels('region.example.test')
+    with pytest.raises(PyEzvizError, match='MFA channel'):
+        getattr(client, operation)()
+    assert len(calls) == 4
+    assert state == before and state.code_sent(client.account)
+
+
+@pytest.mark.parametrize('channel', [2, 6, 7])
+def test_refresh_retaining_selected_channel_allows_explicit_resend(wire, channel):
+    policy = {'meta': {'code': 200}, 'data': {'TERMINAL_BIND': [{'channel': channel, 'title': 'phone method', 'order': 0}]}}
+    client, calls = wire([policy, CONTACT, {'meta': {'code': 200}}, policy, {'meta': {'code': 200}}])
+    client.get_mfa_channels('27')
+    with pytest.raises(EzvizAuthVerificationCode):
+        client.login(mfa_channel=channel)
+    client.get_mfa_channels('27')
+    assert client.send_mfa_code()
+    assert len(calls) == 5
+    assert form(calls[-1])['msgType'] == [str(channel)]
+
+
+@pytest.mark.parametrize('channel', [1, 3])
+def test_withdrawn_selected_channel_can_be_explicitly_changed_to_legacy_method(wire, channel):
+    client, calls = wire([
+        {'meta': {'code': 200}, 'data': {'TERMINAL_BIND': [{'channel': 6, 'title': 'WhatsApp', 'order': 0}]}},
+        CONTACT,
+        {'meta': {'code': 200}, 'data': {'TERMINAL_BIND': []}},
+        {'meta': {'code': 200}},
+    ])
+    client.get_mfa_channels('27')
+    with pytest.raises(EzvizAuthVerificationCode):
+        client.login(mfa_channel=6, request_mfa=False)
+    client.get_mfa_channels('27')
+    assert client.send_mfa_code(mfa_channel=channel)
+    assert len(calls) == 4
+    assert form(calls[-1])['msgType'] == [str(channel)]
+    assert form(calls[-1])['from'] == ['+27000000000' if channel == 1 else 'bound@example.test']
+
+
 @pytest.mark.parametrize('migrate', [False, True])
 def test_image_login_answer_keeps_otp_and_profile(wire, migrate):
     client, calls = wire([PNG, OK])

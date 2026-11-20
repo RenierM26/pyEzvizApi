@@ -8,17 +8,31 @@ from ipaddress import IPv4Address
 import json
 import math
 from pathlib import Path
+import time
 from typing import Any
 
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.streaming.local.hcnetsdk.api import (
+    EZVIZ_LAN_PTZ_ACTION_START,
+    EZVIZ_LAN_PTZ_ACTION_STOP,
     EzvizLanServicesSwitchState,
+    EzvizPtzCommand,
+    HcNetSdkCommandPortControlResponse,
     HcNetSdkLanEndpoint,
     HcNetSdkPurePythonClient,
 )
 
 _MAX_PASSWORD_BYTES = 1024
 _NUL = b"\0"
+_PTZ_DIRECTIONS = {
+    "up": EzvizPtzCommand.UP,
+    "down": EzvizPtzCommand.DOWN,
+    "left": EzvizPtzCommand.LEFT,
+    "right": EzvizPtzCommand.RIGHT,
+}
+_PTZ_MAX_DURATION = 5.0
+_PTZ_STOP_ATTEMPTS = 2
+_PTZ_SPEED_RANGE = range(1, 8)
 
 
 def add_lan_arguments(subparsers: Any) -> None:
@@ -27,13 +41,29 @@ def add_lan_arguments(subparsers: Any) -> None:
     commands = parser.add_subparsers(dest="lan_action", required=True)
     rtsp = commands.add_parser("rtsp", help="Read or change the local RTSP service switch")
     rtsp.add_argument("rtsp_action", choices=("status", "enable", "disable"))
-    rtsp.add_argument("--host", required=True, help="Camera IPv4 address")
-    rtsp.add_argument("--serial", required=True, help="Camera serial")
-    rtsp.add_argument("--lan-password-file", required=True, help="Private device password file")
-    rtsp.add_argument("--lan-username", default="admin", help="Local SDK user (default: admin)")
-    rtsp.add_argument("--command-port", type=int, default=8000)
-    rtsp.add_argument("--local-ip", help="Optional local IPv4 address used in SDK login")
-    rtsp.add_argument(
+    _add_endpoint_arguments(rtsp)
+    ptz = commands.add_parser("ptz", help="Move the camera for a bounded time, then stop")
+    ptz.add_argument("direction", choices=tuple(_PTZ_DIRECTIONS))
+    ptz.add_argument(
+        "--duration",
+        type=float,
+        default=0.5,
+        help=f"Seconds between start and stop (default: 0.5, max: {_PTZ_MAX_DURATION:g})",
+    )
+    ptz.add_argument("--speed", type=int, default=4, help="PTZ speed 1-7 (default: 4)")
+    ptz.add_argument("--channel", type=int, default=1, help="Camera channel (default: 1)")
+    _add_endpoint_arguments(ptz)
+
+
+def _add_endpoint_arguments(parser: Any) -> None:
+    """Add the shared explicit local credential and socket options."""
+    parser.add_argument("--host", required=True, help="Camera IPv4 address")
+    parser.add_argument("--serial", required=True, help="Camera serial")
+    parser.add_argument("--lan-password-file", required=True, help="Private device password file")
+    parser.add_argument("--lan-username", default="admin", help="Local SDK user (default: admin)")
+    parser.add_argument("--command-port", type=int, default=8000)
+    parser.add_argument("--local-ip", help="Optional local IPv4 address used in SDK login")
+    parser.add_argument(
         "--timeout", type=float, default=10.0, help="Finite socket timeout in seconds"
     )
 
@@ -73,6 +103,102 @@ def _local_client(args: argparse.Namespace) -> HcNetSdkPurePythonClient:
 
 
 def handle_lan(args: argparse.Namespace) -> int:
+    """Dispatch one explicit LAN-only action."""
+    if args.lan_action == "ptz":
+        return _handle_ptz(args)
+    return _handle_rtsp(args)
+
+
+def _ptz_acknowledged(response: HcNetSdkCommandPortControlResponse) -> bool:
+    """Match the 16-byte acknowledgment observed for accepted PTZ frames."""
+    header = response.response.header
+    return (header.total_length, header.field_4, header.field_8, header.field_12) == (16, 1, 1, 0)
+
+
+def _handle_ptz(args: argparse.Namespace) -> int:
+    """Start one direction, wait a bounded time, then always try to stop.
+
+    An acknowledgment means the camera accepted the frame, not that it moved.
+    Start is never retried. Stop is retried once, after an error or a missing
+    acknowledgment, since a start without a stop leaves the motor running.
+    """
+    stage = "arguments"
+    stopped = False
+    acknowledged = False
+    try:
+        if not math.isfinite(args.duration) or not 0 < args.duration <= _PTZ_MAX_DURATION:
+            raise PyEzvizError(f"duration must be greater than 0 and at most {_PTZ_MAX_DURATION:g}")
+        if args.speed not in _PTZ_SPEED_RANGE:
+            raise PyEzvizError("speed must be between 1 and 7")
+        if args.channel < 0:
+            raise PyEzvizError("channel must be non-negative")
+        client = _local_client(args)
+        command = _PTZ_DIRECTIONS[args.direction]
+        stage = "start"
+        try:
+            acknowledged = _ptz_acknowledged(
+                client.ptz_control(
+                    command,
+                    action=EZVIZ_LAN_PTZ_ACTION_START,
+                    channel=args.channel,
+                    speed=args.speed,
+                )
+            )
+            if acknowledged:
+                time.sleep(args.duration)
+        finally:
+            for attempt in range(_PTZ_STOP_ATTEMPTS):
+                try:
+                    stop = client.ptz_control(
+                        command,
+                        action=EZVIZ_LAN_PTZ_ACTION_STOP,
+                        channel=args.channel,
+                        speed=args.speed,
+                    )
+                except (PyEzvizError, OSError):
+                    if attempt + 1 == _PTZ_STOP_ATTEMPTS:
+                        raise
+                    continue
+                stopped = _ptz_acknowledged(stop)
+                if stopped:
+                    break
+        if not acknowledged:
+            raise PyEzvizError("Device did not acknowledge the PTZ start")
+        stage = "stop"
+        if not stopped:
+            raise PyEzvizError("Device did not acknowledge the PTZ stop")
+    except (PyEzvizError, OSError, ValueError) as error:
+        message = str(error) if type(error) is PyEzvizError else "LAN operation failed"
+        if stage == "start" and acknowledged:
+            stage = "stop"
+        if stage != "arguments":
+            message = "PTZ command unavailable, refused, or not acknowledged"
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "stage": stage,
+                    "message": message,
+                    "stopped": stopped,
+                }
+            )
+        )
+        return 1
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "direction": args.direction,
+                "duration": args.duration,
+                "stopped": True,
+                "verified": "acknowledgment",
+            }
+        )
+    )
+    return 0
+
+
+def _handle_rtsp(args: argparse.Namespace) -> int:
     """Read, optionally update RTSP alone, then verify device configuration.
 
     No automatic write retry: firmware can restart services before acknowledging

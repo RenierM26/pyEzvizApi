@@ -57,6 +57,7 @@ from pyezvizapi.streaming.local.hcnetsdk.api import (
     HCNETSDK_CLOSE_FORMAT_HANDLE,
     HCNETSDK_COMMAND_CANDIDATE_CONTROL,
     HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN,
+    HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID,
     HCNETSDK_DEFAULT_RTSP_PORT,
     HCNETSDK_DEFAULT_SERVER_PORT,
     HCNETSDK_DEFAULT_TLS_PORT,
@@ -444,6 +445,8 @@ from pyezvizapi.streaming.local.hcnetsdk.api import (
     hcnetsdk_playback_capture_file_request,
     hcnetsdk_playback_condition,
     hcnetsdk_playback_control_v40_request,
+    hcnetsdk_ptz_control_command_port_body_tail,
+    hcnetsdk_ptz_control_command_port_template,
     hcnetsdk_real_data_type_is_media,
     hcnetsdk_real_play_request,
     hcnetsdk_set_connect_time_request,
@@ -8007,6 +8010,118 @@ def test_ezviz_lan_ptz_rejects_unsupported_or_invalid_values() -> None:
         HcNetSdkPtzControlRequest(42, 1, 21, 2).to_native_args_hint()
     with pytest.raises(PyEzvizError, match="preset index"):
         HcNetSdkPtzPresetRequest(42, 1, 39, -1).to_native_args_hint()
+
+
+# PTZ command-port body tails for channel 1, speed 4. Left and right match the
+# frames NET_DVR_PTZControlWithSpeed_Other sent to a CS-C6N-R101-1G2WF; up and
+# down use the same layout and were checked by the camera moving. Stop is
+# -(command + 1).
+PTZ_COMMAND_PORT_OBSERVED_TAILS = [
+    (EzvizPtzCommand.UP, EzvizPtzCommand.ACTION_START, "000000010000001500000004"),
+    (EzvizPtzCommand.UP, EzvizPtzCommand.ACTION_STOP, "00000001ffffffea00000004"),
+    (EzvizPtzCommand.DOWN, EzvizPtzCommand.ACTION_START, "000000010000001600000004"),
+    (EzvizPtzCommand.DOWN, EzvizPtzCommand.ACTION_STOP, "00000001ffffffe900000004"),
+    (EzvizPtzCommand.LEFT, EzvizPtzCommand.ACTION_START, "000000010000001700000004"),
+    (EzvizPtzCommand.LEFT, EzvizPtzCommand.ACTION_STOP, "00000001ffffffe800000004"),
+    (EzvizPtzCommand.RIGHT, EzvizPtzCommand.ACTION_START, "000000010000001800000004"),
+    (EzvizPtzCommand.RIGHT, EzvizPtzCommand.ACTION_STOP, "00000001ffffffe700000004"),
+]
+PTZ_COMMAND_PORT_ACK = bytes.fromhex("00000010000000010000000100000000")
+
+
+@pytest.mark.parametrize(("command", "action", "tail"), PTZ_COMMAND_PORT_OBSERVED_TAILS)
+def test_hcnetsdk_ptz_control_command_port_template_matches_observed_tail(
+    command: int, action: int, tail: str
+) -> None:
+    request = ezviz_lan_ptz_control_request(42, 1, command, action=action, speed=4)
+    template = hcnetsdk_ptz_control_command_port_template(request)
+
+    assert HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID == 0x00030203
+    assert hcnetsdk_ptz_control_command_port_body_tail(request) == bytes.fromhex(tail)
+    assert template.command_id == HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID
+    assert template.body_tail == bytes.fromhex(tail)
+    assert template.addend is None
+    assert template.addend_delta is None
+    assert template.name == HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER
+
+
+def test_hcnetsdk_ptz_control_command_port_rejects_invalid_values() -> None:
+    with pytest.raises(PyEzvizError, match="stop flag"):
+        hcnetsdk_ptz_control_command_port_body_tail(HcNetSdkPtzControlRequest(0, 1, 23, 2))
+    with pytest.raises(PyEzvizError, match="command must be non-negative"):
+        hcnetsdk_ptz_control_command_port_body_tail(HcNetSdkPtzControlRequest(0, 1, -24, 0))
+    with pytest.raises(PyEzvizError, match="speed must be non-negative"):
+        hcnetsdk_ptz_control_command_port_body_tail(
+            HcNetSdkPtzControlRequest(0, 1, 23, 0, speed=-1)
+        )
+    with pytest.raises(PyEzvizError, match="out of range"):
+        hcnetsdk_ptz_control_command_port_body_tail(
+            HcNetSdkPtzControlRequest(0, 1, 23, 0, speed=2**32)
+        )
+    with pytest.raises(PyEzvizError, match="out of range"):
+        hcnetsdk_ptz_control_command_port_body_tail(HcNetSdkPtzControlRequest(0, 1, 2**31, 1))
+
+
+def test_hcnetsdk_pure_python_client_ptz_control_sends_start_then_stop() -> None:
+    rsa_key = RSA.generate(1024)
+    challenge = b"0123456789abcdef0123456789abcdef"
+    seed = b"s" * 64
+
+    def login_socket() -> _FakeSocket:
+        return _FakeSocket(
+            [
+                build_hcnetsdk_tcp_frame(
+                    PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge) + seed
+                ),
+                build_hcnetsdk_tcp_frame(
+                    HCNETSDK_COMMAND_PORT_TEST_SESSION_ID + b"CAM123\x00",
+                    field_4=0x10A24BF1,
+                ),
+            ]
+        )
+
+    controls = [_FakeSocket([PTZ_COMMAND_PORT_ACK]), _FakeSocket([PTZ_COMMAND_PORT_ACK])]
+    sockets = [login_socket(), controls[0], login_socket(), controls[1]]
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        assert address == ("192.0.2.10", 8000)
+        assert timeout == HCNETSDK_COMMAND_PORT_TEST_TIMEOUT
+        return sockets.pop(0)
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        local_ip="192.0.2.56",
+        timeout=HCNETSDK_COMMAND_PORT_TEST_TIMEOUT,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+    )
+
+    responses = [
+        client.ptz_control(EzvizPtzCommand.RIGHT, speed=4),
+        client.ptz_control(EzvizPtzCommand.RIGHT, action=EzvizPtzCommand.ACTION_STOP, speed=4),
+    ]
+
+    assert sockets == []
+    for response, control, tail in zip(
+        responses,
+        controls,
+        ("000000010000001800000004", "00000001ffffffe700000004"),
+        strict=True,
+    ):
+        sent = parse_hcnetsdk_tcp_frame(control.sent[0])
+        assert len(control.sent) == 1
+        assert control.closed is True
+        assert sent.header.total_length == 44
+        assert sent.header.field_4 == 0x63000000
+        assert sent.header.field_12 == HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID
+        assert sent.body == (
+            bytes([56, 2, 0, 192])
+            + HCNETSDK_COMMAND_PORT_TEST_SESSION_ID
+            + b"\x00" * 8
+            + bytes.fromhex(tail)
+        )
+        assert response.response.to_bytes() == PTZ_COMMAND_PORT_ACK
 
 
 def test_ezviz_lan_settings_error_code_matches_presenter_offset() -> None:

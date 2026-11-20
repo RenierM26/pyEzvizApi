@@ -542,6 +542,9 @@ EZVIZ_LAN_PTZ_COMMAND_MAP = {
     11: 1,
 }
 EZVIZ_LAN_PTZ_PRESET_COMMANDS = frozenset({7, 8, 9})
+# Command-port id that NET_DVR_PTZControlWithSpeed_Other sends, observed on the
+# wire from a CS-C6N-R101-1G2WF. See hcnetsdk_ptz_control_command_port_body_tail.
+HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID: int = 0x00030203
 EZVIZ_LAN_PLAYBACK_VIDEO_TYPE_MAP = {
     0x00: 1,
     0x1D: 8,
@@ -2645,6 +2648,22 @@ def ezviz_lan_ptz_request(
         speed=speed,
         preset_index=preset_index,
         _owner=_sys.modules[__name__],
+    )
+
+
+def hcnetsdk_ptz_control_command_port_body_tail(request: HcNetSdkPtzControlRequest) -> bytes:
+    """Return the command-port tail for ``NET_DVR_PTZControlWithSpeed_Other``."""
+    return _impl_configuration.hcnetsdk_ptz_control_command_port_body_tail(
+        request, _owner=_sys.modules[__name__]
+    )
+
+
+def hcnetsdk_ptz_control_command_port_template(
+    request: HcNetSdkPtzControlRequest,
+) -> HcNetSdkCommandPortControlTemplate:
+    """Return a generated command-port template for one PTZ start or stop."""
+    return _impl_configuration.hcnetsdk_ptz_control_command_port_template(
+        request, _owner=_sys.modules[__name__]
     )
 
 
@@ -4921,6 +4940,23 @@ class HcNetSdkPurePythonClient:
     def ptz_ability(self, channel: int = 1) -> EzvizLanPtzAbility:
         """Read and parse local PTZ ability output."""
         return ezviz_lan_ptz_ability(self.device_ability(ezviz_lan_ptz_ability_request(1, channel)))
+
+    def ptz_control(
+        self,
+        command: int,
+        *,
+        action: int = EZVIZ_LAN_PTZ_ACTION_START,
+        channel: int = 1,
+        speed: int = EZVIZ_LAN_PTZ_SPEED_DEFAULT,
+    ) -> HcNetSdkCommandPortControlResponse:
+        """Send one local PTZ start or stop for an ``EzvizPtzCommand`` direction.
+
+        Each call logs in again. The acknowledgment means the frame was accepted,
+        not that the motor moved. Callers must send the matching stop
+        (``action=EZVIZ_LAN_PTZ_ACTION_STOP``) after every start.
+        """
+        request = ezviz_lan_ptz_control_request(0, channel, command, action=action, speed=speed)
+        return self.execute_template(hcnetsdk_ptz_control_command_port_template(request))
 
     def dvr_config(
         self,

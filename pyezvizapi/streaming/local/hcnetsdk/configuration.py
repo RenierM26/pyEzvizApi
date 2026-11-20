@@ -1989,6 +1989,38 @@ def hcnetsdk_device_ability_command_port_template(
     )
 
 
+def hcnetsdk_ptz_control_command_port_body_tail(
+    request: _owner_types.HcNetSdkPtzControlRequest, *, _owner: _ModuleType
+) -> bytes:
+    """Return the command-port tail for ``NET_DVR_PTZControlWithSpeed_Other``.
+
+    Observed tail: channel, command and speed as big-endian 32-bit words. The
+    native ``dwStop`` flag has no word of its own: a stop is sent as the signed
+    command ``-(command + 1)``, so left (23) stops with -24 (``0xffffffe8``).
+    """
+    request.to_native_args_hint()
+    command = -(request.command + 1) if request.stop else request.command
+    try:
+        return (
+            int(request.channel).to_bytes(4, "big")
+            + int(command).to_bytes(4, "big", signed=True)
+            + int(request.speed).to_bytes(4, "big")
+        )
+    except OverflowError as err:
+        raise _owner.PyEzvizError("HCNetSDK PTZ control value out of range") from err
+
+
+def hcnetsdk_ptz_control_command_port_template(
+    request: _owner_types.HcNetSdkPtzControlRequest, *, _owner: _ModuleType
+) -> _owner_types.HcNetSdkCommandPortControlTemplate:
+    """Return a generated command-port template for one PTZ start or stop."""
+    return _owner.HcNetSdkCommandPortControlTemplate(
+        command_id=_owner.HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID,
+        body_tail=_owner.hcnetsdk_ptz_control_command_port_body_tail(request),
+        name=_owner.HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER,
+    )
+
+
 def hcnetsdk_dvr_config_command_port_template(
     request: _owner_types.HcNetSdkDvrConfigRequest,
     *,

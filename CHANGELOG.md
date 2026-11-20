@@ -5,6 +5,15 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Added
+
+- Local PTZ over the command port: `HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID`
+  (`0x00030203`), `hcnetsdk_ptz_control_command_port_template`,
+  `HcNetSdkPurePythonClient.ptz_control` and `lan ptz up|down|left|right`. The body
+  tail is channel, signed command and speed; a stop is sent as `-(command + 1)`.
+  Observed on a CS-C6N-R101-1G2WF. The CLI bounds the run time and always sends
+  the stop; an acknowledgment does not establish that the camera moved.
+
 ### Fixed
 
 - Explain when no usable bound phone is reported for SMS/phone verification,

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 import sys
 import tempfile
 from typing import Any
 
-from pyezvizapi.cloud.challenges import CHANNEL_NAMES, CaptchaChallenge
+from pyezvizapi.cloud.challenges import CHANNEL_NAMES, CaptchaChallenge, _CaptchaPurpose
 from pyezvizapi.cloud.login import verification_code
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, EzvizLoginError, PyEzvizError
 
@@ -53,6 +55,28 @@ def _channel_options(channel: str | None, account: str | None) -> dict[str, Any]
     return options
 
 
+class _AuthStep(Enum):
+    INITIAL = "initial"
+    LOGIN_IMAGE = "login_image"
+    OTP = "otp"
+
+
+@dataclass
+class _AuthAttempt:
+    step: _AuthStep = _AuthStep.INITIAL
+    challenge: CaptchaChallenge | None = field(default=None, repr=False)
+    answer: str | None = field(default=None, repr=False)
+    sms_code: str | None = field(default=None, repr=False)
+
+    def submit(self, authenticate: Callable[..., object], options: dict[str, Any]) -> None:
+        if self.step is _AuthStep.INITIAL:
+            authenticate(**options)
+        elif self.step is _AuthStep.LOGIN_IMAGE:
+            authenticate(captcha=self.challenge, captcha_code=self.answer, **options)
+        else:
+            authenticate(sms_code=self.sms_code, **options)
+
+
 def login_with_verification(
     authenticate: Callable[..., object],
     *,
@@ -65,38 +89,47 @@ def login_with_verification(
 ) -> None:
     """At most one image per purpose and one OTP; no retries of submitted OTP errors."""
     options = _channel_options(mfa_channel, mfa_account)
-    pending = dict(options)
-    solved: set[bool] = set()
+    attempt = _AuthAttempt()
     try:
-        for _ in range(3):
+        # Only forward transitions: INITIAL -> LOGIN_IMAGE -> OTP -> done.
+        # Delivery CAPTCHA goes directly to OTP, so neither purpose can repeat.
+        while True:
             try:
-                authenticate(**pending)
+                attempt.submit(authenticate, options)
                 return
             except EzvizAuthVerificationCode as error:
-                if "sms_code" in pending:
+                if attempt.step is _AuthStep.OTP:
                     raise
-                pending = {**options, "sms_code": _otp(error)}
+                attempt.sms_code = _otp(error)
+                attempt.step = _AuthStep.OTP
             except EzvizLoginError as error:
                 if (
                     error.reason != "captcha_required"
-                    or "sms_code" in pending
+                    or attempt.step is _AuthStep.OTP
                     or fetch_captcha is None
                 ):
                     raise
-                for_mfa = error.code in (1101, 1141)
-                if for_mfa in solved or (for_mfa and send_mfa is None):
+                purpose = (
+                    _CaptchaPurpose.MFA_DELIVERY
+                    if error.code in (1101, 1141)
+                    else _CaptchaPurpose.LOGIN
+                )
+                if purpose is _CaptchaPurpose.LOGIN and attempt.step is _AuthStep.LOGIN_IMAGE:
                     raise
-                solved.add(for_mfa)
-                challenge = fetch_captcha(for_mfa=for_mfa)
+                if purpose is _CaptchaPurpose.MFA_DELIVERY and send_mfa is None:
+                    raise
+                challenge = fetch_captcha(for_mfa=purpose is _CaptchaPurpose.MFA_DELIVERY)
                 answer = answer_captcha(challenge)
-                if for_mfa:
+                if purpose is _CaptchaPurpose.MFA_DELIVERY:
                     assert send_mfa is not None
                     if not send_mfa(captcha=challenge, captcha_code=answer, **options):
                         raise PyEzvizError("MFA code request was not accepted") from None
-                    pending = {**options, "sms_code": _otp()}
+                    attempt.sms_code = _otp()
+                    attempt.step = _AuthStep.OTP
                 else:
-                    pending = {**options, "captcha": challenge, "captcha_code": answer}
-        raise PyEzvizError("Authentication challenge limit reached")
+                    attempt.challenge = challenge
+                    attempt.answer = answer
+                    attempt.step = _AuthStep.LOGIN_IMAGE
     finally:
         if cancel_captcha is not None:
             cancel_captcha()

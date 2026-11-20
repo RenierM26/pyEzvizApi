@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from pyezvizapi.exceptions import EzvizLoginError, PyEzvizError
@@ -33,18 +34,32 @@ class CaptchaChallenge:
     content_type: str
 
 
+class _CaptchaPurpose(Enum):
+    LOGIN = "login"
+    MFA_DELIVERY = "mfa_delivery"
+
+
+@dataclass(frozen=True, repr=False)
+class _CaptchaContext:
+    region: str
+    feature_code: str
+    account: str | None
+    purpose: _CaptchaPurpose
+    channel: int | None = None
+
+
 @dataclass
 class CaptchaState:
     """Bind one answer to its client, region, feature identity, account and purpose."""
 
     challenge: CaptchaChallenge | None = field(default=None, repr=False)
-    context: tuple[Any, ...] | None = field(default=None, repr=False)
+    context: _CaptchaContext | None = field(default=None, repr=False)
 
     def clear(self) -> None:
         self.challenge = None
         self.context = None
 
-    def issue(self, image: bytes, context: tuple[Any, ...]) -> CaptchaChallenge:
+    def issue(self, image: bytes, context: _CaptchaContext) -> CaptchaChallenge:
         if image.startswith(b"\x89PNG\r\n\x1a\n"):
             content_type = "image/png"
         elif image.startswith(b"\xff\xd8\xff"):
@@ -61,7 +76,7 @@ class CaptchaState:
         return self.challenge
 
     def consume(
-        self, challenge: CaptchaChallenge | None, answer: str | None, context: tuple[Any, ...]
+        self, challenge: CaptchaChallenge | None, answer: str | None, context: _CaptchaContext
     ) -> str | None:
         if challenge is None and answer is None:
             return None

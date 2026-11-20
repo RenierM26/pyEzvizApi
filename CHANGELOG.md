@@ -52,6 +52,16 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Changed
 
+- Share login/push-migration authentication preflight while preserving intentional
+  web-to-Android identity replacement. Keep immutable regional channel grants
+  separate from ephemeral contacts/request receipts; use typed CAPTCHA contexts
+  and named forward-only CLI challenge stages with the same image/OTP limits.
+- Harden channel discovery, CAPTCHA and code requests with one-attempt HTTP
+  cleanup/redaction and total deadlines including token-lock wait and response
+  processing. Reject HTTP redirects without following them; no new retries or
+  message delivery are introduced. See the authentication guide for exception
+  compatibility and deadline semantics.
+
 - Share CLI verification handling between account login and push migration,
   separate challenge actions from side-effect-free login error classification,
   use a bounded regional redirect loop, and reuse static error/key lookup tables.

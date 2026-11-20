@@ -35,6 +35,7 @@ def response(payload, status=200):
     result = requests.Response()
     result.status_code = status
     result._content = json.dumps(payload).encode()  # noqa: SLF001
+    result.__dict__["_content_consumed"] = True
     return result
 
 
@@ -54,7 +55,7 @@ def wire(monkeypatch):
         def send(request, **options):
             calls.append(request)
             assert options["allow_redirects"] is False
-            assert options["timeout"] > 0
+            assert (options["timeout"].total if hasattr(options["timeout"], "total") else options["timeout"]) > 0
             if request.method == "GET" and request.url.endswith("/publickey"):
                 item = next(key_results) if key_results is not None else {"meta": {"code": 200}, "publicKey": LOGIN_PUBLIC_KEY}
             elif request.method in ("POST", "PUT"):
@@ -68,7 +69,7 @@ def wire(monkeypatch):
             result.url = request.url
             return result
 
-        monkeypatch.setattr(client._session, "send", send)  # noqa: SLF001
+        monkeypatch.setattr(requests.Session, "send", lambda _session, request, **options: send(request, **options))
         monkeypatch.setattr(client, "get_service_urls", lambda: {})
         return client, calls
 

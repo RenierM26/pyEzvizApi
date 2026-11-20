@@ -212,3 +212,32 @@ def test_captcha_file_is_private_and_removed_after_answer(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda _: "aB01")
     assert auth._answer_captcha(CaptchaChallenge(b"image", "image/png")) == "aB01"  # noqa: SLF001
     assert len(paths) == 1 and not paths[0].exists()
+
+
+@pytest.mark.parametrize('terminal_code', [1015, 1141, 1011, 1012])
+@pytest.mark.parametrize('login_image_first', [False, True])
+def test_named_otp_transition_is_terminal_for_every_challenge(monkeypatch, terminal_code, login_image_first):
+    from pyezvizapi.cli.auth import login_with_verification  # noqa: PLC0415
+    from pyezvizapi.cloud.challenges import CaptchaChallenge  # noqa: PLC0415
+    from pyezvizapi.exceptions import EzvizLoginError  # noqa: PLC0415
+
+    first = [EzvizLoginError('image', reason='captcha_required', code=1015)] if login_image_first else []
+    first.append(EzvizAuthVerificationCode(code=6002, code_sent=True))
+    terminal = (EzvizAuthVerificationCode(code=terminal_code) if terminal_code in (1011, 1012)
+                else EzvizLoginError('image', reason='captcha_required', code=terminal_code))
+    authenticate = Mock(side_effect=[*first, terminal])
+    fetch = Mock(return_value=CaptchaChallenge(b'image', 'image/png'))
+    send = Mock()
+    prompt = Mock(return_value='000000')
+    cancel = Mock()
+    monkeypatch.setattr('builtins.input', prompt)
+    with pytest.raises(EzvizLoginError) as caught:
+        login_with_verification(authenticate, fetch_captcha=fetch, send_mfa=send,
+                                answer_captcha=lambda _: 'aB01', cancel_captcha=cancel)
+    assert caught.value is terminal
+    assert authenticate.call_count == (3 if login_image_first else 2)
+    assert fetch.call_count == int(login_image_first)
+    send.assert_not_called()
+    prompt.assert_called_once()
+    cancel.assert_called_once()
+    assert authenticate.call_args.kwargs == {'sms_code': '000000'}

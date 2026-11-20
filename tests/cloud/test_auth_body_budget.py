@@ -14,6 +14,7 @@ import requests
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.cloud import budget as http_budget
 from pyezvizapi.cloud.budget import MAX_BOOTSTRAP_BODY_BYTES, budgeted_http_call
+from pyezvizapi.cloud.challenges import _CaptchaContext, _CaptchaPurpose
 from pyezvizapi.cloud.deadline import request_deadline
 from pyezvizapi.exceptions import PyEzvizError
 
@@ -98,7 +99,7 @@ def test_captcha_rejects_during_decoded_stream_and_keeps_session_owned(
         client._session.trust_env = False
         monkeypatch.setattr(client, "_url", lambda _: url)
         # A rejected replacement must also revoke the previous answer context.
-        previous = client._captcha_state.issue(PNG_HEADER, ("old",))
+        previous = client._captcha_state.issue(PNG_HEADER, _CaptchaContext("old", "feature", "synthetic-account", _CaptchaPurpose.LOGIN))
         original_headers = dict(client._session.headers)
         closed_sessions = []
         original_close = requests.Session.close

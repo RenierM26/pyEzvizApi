@@ -114,3 +114,101 @@ def test_both_cli_flows_do_not_prompt_for_non_mfa_errors(authentication_flow, mo
     with pytest.raises(PyEzvizError, match="synthetic failure"):
         run()
     assert authenticate.call_count == 1
+
+
+@pytest.mark.parametrize("for_mfa, code", [(False, 1015), (True, 1101), (True, 1141)])
+def test_human_captcha_resumes_correct_purpose_then_submits_one_otp(monkeypatch, for_mfa, code):
+    from pyezvizapi.cli.auth import login_with_verification  # noqa: PLC0415
+    from pyezvizapi.cloud.challenges import CaptchaChallenge  # noqa: PLC0415
+    from pyezvizapi.exceptions import EzvizLoginError  # noqa: PLC0415
+
+    image = CaptchaChallenge(b"synthetic", "image/png")
+    first = EzvizLoginError("image needed", reason="captcha_required", code=code)
+    authenticate = Mock(side_effect=[first, None] if for_mfa else [first, EzvizAuthVerificationCode(code=6002, code_sent=True), None])
+    fetch = Mock(return_value=image)
+    request = Mock(return_value=True)
+    answer = Mock(return_value="aB01")
+    cancel = Mock()
+    monkeypatch.setattr("builtins.input", lambda _: "001234")
+    login_with_verification(authenticate, mfa_channel="sms", fetch_captcha=fetch, send_mfa=request, answer_captcha=answer, cancel_captcha=cancel)
+    fetch.assert_called_once_with(for_mfa=for_mfa)
+    answer.assert_called_once_with(image)
+    cancel.assert_called_once()
+    assert authenticate.call_args_list[-1].kwargs == {"mfa_channel": 1, "sms_code": "001234"}
+    if for_mfa:
+        request.assert_called_once_with(captcha=image, captcha_code="aB01", mfa_channel=1)
+    else:
+        request.assert_not_called()
+        assert authenticate.call_args_list[1].kwargs["captcha_code"] == "aB01"
+
+
+def test_login_captcha_then_request_captcha_has_finite_human_stages(monkeypatch):
+    from pyezvizapi.cli.auth import login_with_verification  # noqa: PLC0415
+    from pyezvizapi.cloud.challenges import CaptchaChallenge  # noqa: PLC0415
+    from pyezvizapi.exceptions import EzvizLoginError  # noqa: PLC0415
+
+    authenticate = Mock(side_effect=[EzvizLoginError("image", reason="captcha_required", code=1015), EzvizLoginError("image", reason="captcha_required", code=1141), None])
+    fetch = Mock(return_value=CaptchaChallenge(b"image", "image/png"))
+    request = Mock(return_value=True)
+    monkeypatch.setattr("builtins.input", lambda _: "000000")
+    login_with_verification(authenticate, fetch_captcha=fetch, send_mfa=request, answer_captcha=lambda _: "aB01")
+    assert authenticate.call_count == 3 and fetch.call_count == 2 and request.call_count == 1
+    assert authenticate.call_args_list[-1].kwargs == {"sms_code": "000000"}
+
+
+@pytest.mark.parametrize("failure", [KeyboardInterrupt(), ValueError("cancelled")])
+def test_captcha_cancellation_never_retries_or_requests_otp(failure, monkeypatch):
+    from pyezvizapi.cli.auth import login_with_verification  # noqa: PLC0415
+    from pyezvizapi.cloud.challenges import CaptchaChallenge  # noqa: PLC0415
+    from pyezvizapi.exceptions import EzvizLoginError  # noqa: PLC0415
+
+    authenticate = Mock(side_effect=EzvizLoginError("image", reason="captcha_required", code=1015))
+    cancel = Mock()
+    monkeypatch.setattr("builtins.input", lambda _: pytest.fail("no OTP"))
+    with pytest.raises(type(failure)):
+        login_with_verification(authenticate, fetch_captcha=Mock(return_value=CaptchaChallenge(b"image", "image/png")), answer_captcha=Mock(side_effect=failure), cancel_captcha=cancel)
+    cancel.assert_called_once()
+    assert authenticate.call_count == 1
+
+
+def test_repeated_captcha_error_stops_without_more_images(monkeypatch):
+    from pyezvizapi.cli.auth import login_with_verification  # noqa: PLC0415
+    from pyezvizapi.cloud.challenges import CaptchaChallenge  # noqa: PLC0415
+    from pyezvizapi.exceptions import EzvizLoginError  # noqa: PLC0415
+
+    authenticate = Mock(side_effect=EzvizLoginError("image", reason="captcha_required", code=1015))
+    fetch = Mock(return_value=CaptchaChallenge(b"image", "image/png"))
+    monkeypatch.setattr("builtins.input", lambda _: pytest.fail("no OTP"))
+    with pytest.raises(EzvizLoginError):
+        login_with_verification(authenticate, fetch_captcha=fetch, answer_captcha=lambda _: "aB01")
+    assert authenticate.call_count == 2 and fetch.call_count == 1
+
+
+def test_missing_phone_notice_is_not_replaced_by_generic_unsent_message(authentication_flow, monkeypatch):
+    run, authenticate = authentication_flow
+    problem = EzvizAuthVerificationCode("No usable bound phone was reported", reason="verification_phone_unavailable", code=6002)
+    authenticate.side_effect = problem
+    monkeypatch.setattr("builtins.input", lambda _: pytest.fail("no code requested"))
+    with pytest.raises(EzvizAuthVerificationCode) as caught:
+        run("sms")
+    assert caught.value is problem and authenticate.call_count == 1
+
+
+def test_captcha_file_is_private_and_removed_after_answer(monkeypatch):
+    import os  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+    import re  # noqa: PLC0415
+
+    from pyezvizapi.cli import auth  # noqa: PLC0415
+    from pyezvizapi.cloud.challenges import CaptchaChallenge  # noqa: PLC0415
+
+    paths = []
+    image_bytes = b"image"
+    def report(message, **kwargs):
+        path = Path(re.sub(r"^Open this CAPTCHA image: ", "", message))
+        assert path.read_bytes() == image_bytes and os.stat(path).st_mode & 0o777 == 0o600
+        paths.append(path)
+    monkeypatch.setattr("builtins.print", report)
+    monkeypatch.setattr("builtins.input", lambda _: "aB01")
+    assert auth._answer_captcha(CaptchaChallenge(b"image", "image/png")) == "aB01"  # noqa: SLF001
+    assert len(paths) == 1 and not paths[0].exists()

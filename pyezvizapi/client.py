@@ -47,7 +47,13 @@ from pyezvizapi.cloud.auth import (
     fetch_login_public_key,
     refresh_credentials,
 )
-from pyezvizapi.cloud.login import LoginVerification, login_error, verification_code
+from pyezvizapi.cloud.endpoints import API_ENDPOINT_SEND_CODE_CHANNEL
+from pyezvizapi.cloud.login import (
+    LoginVerification,
+    login_error,
+    verification_code,
+    verification_request_error,
+)
 from pyezvizapi.cloud.budget import budgeted_http_call
 from pyezvizapi.push.longlink.profile import (
     current_session_header,
@@ -1243,12 +1249,19 @@ class EzvizClient:
                     else "verification_contact_required",
                     available_channels=tuple(sorted(state.contacts)),
                 )
+            # Metadata-backed contacts use the app's channel-aware unlogin API.
+            # Preserve the historical endpoint only for metadata-free callers.
+            endpoint = API_ENDPOINT_SEND_CODE
+            payload: JsonDict = {"from": destination, "bizType": "TERMINAL_BIND"}
+            if state.metadata_present:
+                endpoint = API_ENDPOINT_SEND_CODE_CHANNEL
+                payload.update(msgType=state.channel, imageCode="")
             try:
                 response = budgeted_http_call(
                     self._session,
                     "post",
-                    url=self._url(API_ENDPOINT_SEND_CODE),
-                    data={"from": destination, "bizType": "TERMINAL_BIND"},
+                    url=self._url(endpoint),
+                    data=payload,
                     allow_redirects=False,
                     timeout=bounded_request_timeout(self._timeout),
                 )
@@ -1257,7 +1270,7 @@ class EzvizClient:
                 raise HTTPError from http_error
             json_output = self._parse_json(response)
             if not self._meta_ok(json_output):
-                error = login_error(self._meta_code(json_output), json_output)
+                error = verification_request_error(self._meta_code(json_output), json_output)
                 if error is not None:
                     raise error
                 raise PyEzvizError(

@@ -84,6 +84,17 @@ def login_error(code: int | None, result: dict[str, Any]) -> EzvizLoginError | N
     return None
 
 
+def verification_request_error(code: int | None, result: dict[str, Any]) -> EzvizLoginError | None:
+    """Request-side image challenges are not incorrect SMS/email codes."""
+    if code in (1101, 1141):
+        return EzvizLoginError(
+            "Image verification required; request a code in the EZVIZ app.",
+            reason="captcha_required",
+            code=code,
+        )
+    return login_error(code, result)
+
+
 @dataclass
 class LoginVerification:
     """Do not persist contacts, expose them in repr/errors, or infer channel from username."""
@@ -128,19 +139,23 @@ class LoginVerification:
         self.recipient = selected_recipient
 
     def update(self, result: dict[str, Any]) -> None:
-        info = result.get("loginUser") or result.get("contactExt")
+        info = result.get("loginUser")
+        if info is None:
+            info = result.get("contactExt")
         self.contacts.clear()
         self.metadata_present = "loginUser" in result or "contactExt" in result
         self.app_required = False
         if not isinstance(info, dict):
             return
-        self.app_required = bool(
-            info.get("isSecurityBind") or info.get("verifyAccessToken") or info.get("accessToken")
-        )
         for channel, name in ((1, "phone"), (3, "email")):
             value = info.get(name)
             if isinstance(value, str) and value.strip() and "*" not in value:
                 self.contacts[channel] = value
+        # VerifyUtils.getSupportFlow treats these as alternatives, not a veto
+        # on the ordinary email/phone choices. Never retain the temporary token.
+        self.app_required = not self.contacts and bool(
+            info.get("isSecurityBind") or info.get("verifyAccessToken") or info.get("accessToken")
+        )
 
     def destination(self, account: str | None) -> str | None:
         if self.app_required:

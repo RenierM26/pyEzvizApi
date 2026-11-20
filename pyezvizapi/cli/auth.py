@@ -24,7 +24,7 @@ def login_with_verification(
     try:
         authenticate(**options)
     except EzvizAuthVerificationCode as error:
-        if error.code == 6002 and not error.code_sent:
+        if error.code in (6002, 1011, 1012) and not error.code_sent:
             raise PyEzvizError(
                 "No MFA code requested; select a bound --mfa-channel/--mfa-account "
                 "or complete security verification in the EZVIZ app."

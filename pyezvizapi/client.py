@@ -56,6 +56,7 @@ from pyezvizapi.cloud.challenges import (
     CaptchaChallenge,
     CaptchaState,
     MfaChannel,
+    MAX_CAPTCHA_IMAGE_BYTES,
     PHONE_CHANNELS,
     parse_channels,
 )
@@ -1353,6 +1354,7 @@ class EzvizClient:
                         self._session,
                         "get",
                         url=self._url(API_ENDPOINT_CAPTCHA),
+                        max_body_bytes=MAX_CAPTCHA_IMAGE_BYTES,
                         params={"account": context[2], "featureCode": self.feature_code},
                         allow_redirects=False,
                         timeout=bounded_request_timeout(self._timeout),
@@ -1362,7 +1364,7 @@ class EzvizClient:
                 try:
                     response.raise_for_status()
                     image = response.content
-                    if not 8 <= len(image) <= 1024 * 1024:
+                    if not 8 <= len(image) <= MAX_CAPTCHA_IMAGE_BYTES:
                         raise PyEzvizError("CAPTCHA image size is outside the supported limit")
                     return self._captcha_state.issue(image, context)
                 except requests.RequestException:

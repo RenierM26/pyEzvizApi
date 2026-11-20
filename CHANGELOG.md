@@ -7,6 +7,10 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Fixed
 
+- Enforce the 1 MiB CAPTCHA decoded-body limit during HTTP streaming, stopping
+  on the first excess chunk instead of buffering against the shared 8 MiB
+  bootstrap cap. Other scoped requests keep their 8 MiB limit. This is response
+  limit hardening, not behavior-neutral cleanup; no retries or delivery are added.
 - Explain when no usable bound phone is reported for SMS/phone verification,
   without sending a message or silently switching to email.
 - Revalidate retained MFA delivery selections after channel discovery refreshes,

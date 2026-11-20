@@ -180,7 +180,14 @@ stops with `captcha_region_changed` instead of replaying the answer elsewhere.
 Expiry is server-owned; no undocumented lifetime is invented.
 
 Image fetch uses `GET /v3/captcha` with the app's `account`/`featureCode` binding,
-no redirects, bounded HTTP deadline/body and a 1MiB supported-image limit. PNG,
+no redirects, a bounded HTTP deadline and a 1 MiB decoded supported-image limit.
+The worker enforces this per request while streaming, including gzip/chunked
+responses: it stops at the first excess chunk (at most one 16 KiB chunk is read
+past the limit and is not retained). Exactly 1 MiB remains accepted. This is
+limit hardening compared with buffering up to the shared 8 MiB bootstrap cap
+before rejection; other scoped HTTP calls keep that 8 MiB cap. Rejection closes
+the response without retrying, accepting its cookies or creating an answer handle;
+it does not close the caller-owned session. PNG,
 JPEG and GIF signatures are accepted, not HTML or arbitrary URLs. A non-image
 response stops with app-recovery guidance; it is not treated as a browser token.
 

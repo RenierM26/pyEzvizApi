@@ -9,6 +9,7 @@ from pyezvizapi.exceptions import EzvizLoginError, PyEzvizError
 
 CHANNEL_NAMES = {1: "sms", 2: "voice", 3: "email", 6: "whatsapp", 7: "zalo"}
 PHONE_CHANNELS = (1, 2, 6, 7)
+MAX_CAPTCHA_IMAGE_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)

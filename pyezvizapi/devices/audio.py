@@ -171,6 +171,27 @@ def set_doorbell_ringtone_volume(
     if type(value) is not int or not 0 <= value <= 7:
         raise PyEzvizError("Doorbell ringtone volume must be an integer from 0 to 7")
     support = SupportExtView.from_camera_data(camera_data)
+    config = _doorbell_ringtone_config(camera_data, support)
+    config["Volume"] = value
+    _write_doorbell_ringtone(client, serial, camera_data, config)
+
+
+def set_doorbell_ringtone_tone(
+    client: EzvizClient, serial: str, tone: int, camera_data: dict[str, Any]
+) -> None:
+    """Select a built-in standard-picker tone; callers must verify model/UI eligibility."""
+    support = SupportExtView.from_camera_data(camera_data)
+    maximum = 5 if str(support.get("241")).strip() == "2" else 3
+    if type(tone) is not int or not 1 <= tone <= maximum:
+        raise PyEzvizError(f"Doorbell ringtone tone must be an integer from 1 to {maximum}")
+    config = _doorbell_ringtone_config(camera_data, support)
+    config["Type"] = tone
+    _write_doorbell_ringtone(client, serial, camera_data, config)
+
+
+def _doorbell_ringtone_config(
+    camera_data: dict[str, Any], support: SupportExtView
+) -> dict[str, Any]:
     config = volume_config(camera_data, "device_bell")
     if (
         not support.has("241", ("1", "2"))
@@ -181,7 +202,12 @@ def set_doorbell_ringtone_volume(
         )
     ):
         raise PyEzvizError("Doorbell does not report a usable ringtone configuration")
-    config["Volume"] = value
+    return config
+
+
+def _write_doorbell_ringtone(
+    client: EzvizClient, serial: str, camera_data: dict[str, Any], config: dict[str, Any]
+) -> None:
     client.set_device_key_value(
         serial, resolve_channel(camera_data), "device_bell", json.dumps(config)
     )

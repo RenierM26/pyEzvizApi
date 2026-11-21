@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlparse
 from pyezvizapi.cli import arguments as _cli_arguments
 from pyezvizapi.cli.commands.lan import handle_lan
 from pyezvizapi.cli.commands.recording_batch import handle_recordings
+from pyezvizapi.cli.auth import login_with_verification
 from pyezvizapi.cloud.token_store import save_private_token
 from pyezvizapi.devices.camera import EzvizCamera
 from pyezvizapi.cloud.cas import CasDeviceSession, EzvizCAS
@@ -225,6 +226,9 @@ def _login(
     token: dict[str, Any] | None = None,
     *,
     require_service_urls: bool = False,
+    mfa_channel: str | None = None,
+    mfa_account: str | None = None,
+    mfa_country_code: str | None = None,
 ) -> None:
     """Login only when the saved token cannot satisfy the selected action."""
     if (
@@ -237,20 +241,18 @@ def _login(
     if not (client.account and client.password) and not _token_has_refresh_session(token):
         return
 
-    logged_in = False
     if client.account and client.password:
-        try:
-            client.login()
-        except EzvizAuthVerificationCode:
-            mfa_code = input("MFA code required, please input MFA code.\n")
-            try:
-                code_int = int(mfa_code.strip())
-            except ValueError:
-                code_int = None
-            client.login(sms_code=code_int)
-        logged_in = True
-
-    if not logged_in:
+        if mfa_country_code is not None:
+            client.get_mfa_channels(mfa_country_code)
+        login_with_verification(
+            client.login,
+            mfa_channel=mfa_channel,
+            mfa_account=mfa_account,
+            fetch_captcha=client.get_captcha,
+            send_mfa=client.send_mfa_code,
+            cancel_captcha=client.cancel_captcha,
+        )
+    else:
         client.login()
 
     if require_service_urls:
@@ -1603,6 +1605,9 @@ def main(argv: list[str] | None = None) -> int:
             client,
             token,
             require_service_urls=_action_requires_service_urls(args),
+            mfa_channel=args.mfa_channel,
+            mfa_account=args.mfa_account,
+            mfa_country_code=args.mfa_country_code,
         )
         if args.save_token:
             save(client.export_token())

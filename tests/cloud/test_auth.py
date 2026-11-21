@@ -7,8 +7,10 @@ import pytest
 import requests
 
 from pyezvizapi.client import EzvizClient
+from pyezvizapi.cloud.auth import encrypt_login_password, fetch_login_public_key
 from pyezvizapi.constants import FEATURE_CODE, REQUEST_HEADER
 from pyezvizapi.exceptions import EzvizAuthTokenExpired, EzvizAuthVerificationCode, PyEzvizError
+from tests.conftest import LOGIN_PUBLIC_KEY, decrypt_login_password
 
 
 def _response(payload: dict[str, Any], *, status_code: int = 200) -> requests.Response:
@@ -166,7 +168,7 @@ def test_login_refresh_fallback_keeps_mfa_code(monkeypatch) -> None:
     client.login(sms_code=123456)
 
     assert captured["data"]["msgType"] == "3"
-    assert captured["data"]["smsCode"] == 123456
+    assert captured["data"]["smsCode"] == "123456"
 
 
 def test_login_with_credentials_posts_hashed_password_and_stores_token(monkeypatch) -> None:
@@ -192,9 +194,11 @@ def test_login_with_credentials_posts_hashed_password_and_stores_token(monkeypat
 
     token = client.login()
 
-    assert captured["url"] == "https://apiieu.ezvizlife.com/v3/users/login/v5"
+    assert captured["url"] == "https://apiieu.ezvizlife.com/v3/users/login/v6"
     assert captured["data"]["account"] == "user@example.test"
-    assert captured["data"]["password"] == md5(b"secret").hexdigest()
+    digest, epoch = decrypt_login_password(captured["data"]["password"]).split(",")
+    assert digest == md5(b"secret").hexdigest()
+    assert epoch.isdigit()
     assert captured["data"]["msgType"] == "0"
     assert token == {
         "session_id": "session-id",
@@ -231,7 +235,7 @@ def test_login_with_sms_code_sets_mfa_payload(monkeypatch) -> None:
 
     assert captured["data"]["msgType"] == "3"
     assert captured["data"]["bizType"] == "TERMINAL_BIND"
-    assert captured["data"]["smsCode"] == 123456
+    assert captured["data"]["smsCode"] == "123456"
 
 
 def test_login_with_sms_code_keeps_code_after_region_redirect(monkeypatch) -> None:
@@ -263,9 +267,9 @@ def test_login_with_sms_code_keeps_code_after_region_redirect(monkeypatch) -> No
     client.login(sms_code=123456)
 
     assert len(posts) == 2
-    assert posts[1]["url"] == "https://apiisgp.ezvizlife.com/v3/users/login/v5"
+    assert posts[1]["url"] == "https://apiisgp.ezvizlife.com/v3/users/login/v6"
     assert posts[1]["data"]["msgType"] == "3"
-    assert posts[1]["data"]["smsCode"] == 123456
+    assert posts[1]["data"]["smsCode"] == "123456"
 
 
 def test_login_mfa_required_sends_code_and_raises(monkeypatch) -> None:
@@ -291,17 +295,17 @@ def test_send_mfa_code_success_and_failure(monkeypatch) -> None:
     client = EzvizClient(account="user@example.test", password="secret")
     calls: list[dict[str, Any]] = []
 
-    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        calls.append({"method": method, "path": path, **kwargs})
-        return {"meta": {"code": 200}}
+    def fake_post(**kwargs: Any) -> requests.Response:
+        calls.append(kwargs)
+        return _response({"meta": {"code": 200}})
 
-    monkeypatch.setattr(client, "_request_json", fake_request_json)
+    monkeypatch.setattr(requests.Session, "post", lambda _session, **kwargs: fake_post(**kwargs))
 
     assert client.send_mfa_code() is True
     assert calls[0]["data"] == {"from": "user@example.test", "bizType": "TERMINAL_BIND"}
-    assert calls[0]["retry_401"] is False
+    assert calls[0]["allow_redirects"] is False
 
-    monkeypatch.setattr(client, "_request_json", lambda *args, **kwargs: {"meta": {"code": 500}})
+    monkeypatch.setattr(requests.Session, "post", lambda _session, **kwargs: _response({"meta": {"code": 500}}))
 
     with pytest.raises(PyEzvizError, match="Could not request MFA code"):
         client.send_mfa_code()
@@ -408,3 +412,76 @@ def test_polling_retry_uses_refreshed_region_and_headers(monkeypatch):
     client._request_json("GET", "/path?raw=%2F")
     assert sent == [("https://old.invalid/path?raw=%2F", "old"),
                     ("https://new.invalid/path?raw=%2F", "rotated")]
+
+
+def _login_ok() -> requests.Response:
+    return _response(
+        {
+            "meta": {"code": 200},
+            "loginSession": {"sessionId": "session-id", "rfSessionId": "refresh-id"},
+            "loginUser": {"username": "internal-user"},
+            "loginArea": {"apiDomain": "apiieu.ezvizlife.com"},
+        }
+    )
+
+
+def test_encrypt_login_password_wraps_digest_and_epoch() -> None:
+    wrapped = encrypt_login_password(LOGIN_PUBLIC_KEY, "0123abcd", now=1_794_937_000.9)
+
+    assert decrypt_login_password(wrapped) == "0123abcd,1794937000"
+    assert "\n" not in wrapped
+
+
+def test_encrypt_login_password_rejects_invalid_key() -> None:
+    with pytest.raises(PyEzvizError, match="Invalid login public key"):
+        encrypt_login_password("not-a-key", "0123abcd")
+
+
+def test_fetch_login_public_key_reads_key_and_rejects_errors(monkeypatch) -> None:
+    session = requests.Session()
+    calls: list[dict[str, Any]] = []
+
+    def fake_get(**kwargs: Any) -> requests.Response:
+        calls.append(kwargs)
+        return _response({"meta": {"code": 200}, "publicKey": "a2V5"})
+
+    monkeypatch.setattr(session, "get", fake_get)
+    assert fetch_login_public_key(session, "apiieu.ezvizlife.com", 5) == "a2V5"
+    assert calls[0]["url"] == "https://apiieu.ezvizlife.com/v3/users/publickey"
+
+    monkeypatch.setattr(session, "get", lambda **kwargs: _response({"meta": {"code": 500}}))
+    with pytest.raises(PyEzvizError, match="Login public key unavailable"):
+        fetch_login_public_key(session, "apiieu.ezvizlife.com", 5)
+
+
+def test_login_explicit_v5_does_not_fetch_public_key(monkeypatch) -> None:
+    client = EzvizClient(account="user@example.test", password="secret", url="eu", login_api="v5")
+    captured: dict[str, Any] = {}
+
+    def no_key(*args: Any, **kwargs: Any) -> str:
+        raise requests.ConnectionError("offline")
+
+    def fake_post(**kwargs: Any) -> requests.Response:
+        captured.update(kwargs)
+        return _login_ok()
+
+    monkeypatch.setattr("pyezvizapi.client.fetch_login_public_key", no_key)
+    monkeypatch.setattr(client._session, "post", fake_post)
+    monkeypatch.setattr(client, "get_service_urls", lambda: {})
+
+    client.login()
+
+    assert captured["url"] == "https://apiieu.ezvizlife.com/v3/users/login/v5"
+    assert captured["data"]["password"] == md5(b"secret").hexdigest()
+
+
+def test_login_reports_v6_credential_rejection(monkeypatch) -> None:
+    client = EzvizClient(account="user@example.test", password="secret")
+    monkeypatch.setattr(
+        client._session,
+        "post",
+        lambda **kwargs: _response({"meta": {"code": 1226, "message": "rejected"}}),
+    )
+
+    with pytest.raises(PyEzvizError, match="Incorrect username or password"):
+        client.login()

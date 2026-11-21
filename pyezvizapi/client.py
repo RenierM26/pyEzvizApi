@@ -42,7 +42,35 @@ from pyezvizapi.cloud import responses as _api_response
 from pyezvizapi.devices import factory as device_factory
 from pyezvizapi.devices.snapshot import DevicePollOptions, DeviceSnapshot
 from pyezvizapi.cloud.operations import snapshot as _snapshot_ops
-from pyezvizapi.cloud.auth import refresh_credentials
+from pyezvizapi.cloud.auth_http import auth_http_response
+from pyezvizapi.cloud.auth import (
+    encrypt_login_password,
+    fetch_login_public_key,
+    refresh_credentials,
+)
+from pyezvizapi.cloud.endpoints import (
+    API_ENDPOINT_CAPTCHA,
+    API_ENDPOINT_MFA_CHANNELS,
+    API_ENDPOINT_SEND_CODE_CHANNEL,
+)
+from pyezvizapi.cloud.challenges import (
+    CaptchaChallenge,
+    CaptchaState,
+    MfaChannel,
+    MAX_CAPTCHA_IMAGE_BYTES,
+    _CaptchaContext,
+    _CaptchaPurpose,
+    PHONE_CHANNELS,
+    parse_channels,
+)
+from pyezvizapi.cloud.deadline import request_deadline
+from pyezvizapi.cloud.login import (
+    LoginVerification,
+    _MfaChannelPolicy,
+    login_error,
+    verification_code,
+    verification_request_error,
+)
 from pyezvizapi.cloud.budget import budgeted_http_call
 from pyezvizapi.push.longlink.profile import (
     current_session_header,
@@ -123,6 +151,7 @@ API_ENDPOINT_IOT_FEATURE_PRODUCT_VOICE_CONFIG = (
 )
 API_ENDPOINT_IOT_VIRTUAL_BIND = _compat_module_4.API_ENDPOINT_IOT_VIRTUAL_BIND
 API_ENDPOINT_LOGIN = _compat_module_4.API_ENDPOINT_LOGIN
+API_ENDPOINT_LOGIN_V6 = _compat_module_4.API_ENDPOINT_LOGIN_V6
 API_ENDPOINT_LOGOUT = _compat_module_4.API_ENDPOINT_LOGOUT
 API_ENDPOINT_MANAGED_DEVICE_BASE = _compat_module_4.API_ENDPOINT_MANAGED_DEVICE_BASE
 API_ENDPOINT_OFFLINE_NOTIFY = _compat_module_4.API_ENDPOINT_OFFLINE_NOTIFY
@@ -210,6 +239,7 @@ DeviceSwitchType = _compat_module_8.DeviceSwitchType
 from pyezvizapi.exceptions import (
     DeviceException,
     EzvizAuthTokenExpired,
+    EzvizLoginError,
     EzvizAuthVerificationCode,
     EzvizNoMediaError,
     HTTPError,
@@ -771,6 +801,7 @@ class EzvizClient:
         *,
         on_token_updated: Callable[[dict[str, Any]], None] | None = None,
         feature_code: str | None = None,
+        login_api: Literal["v5", "v6"] = "v6",
     ) -> None:
         """Initialize the client, optionally with an application-persisted identity.
 
@@ -779,6 +810,12 @@ class EzvizClient:
         must persist their chosen identity before first login and provide it again
         with saved credentials; tokens never implicitly override this selection.
         """
+        if login_api not in ("v5", "v6"):
+            raise PyEzvizError("login_api must be v5 or v6")
+        self._login_api = login_api
+        self._login_verification = LoginVerification()
+        self._captcha_state = CaptchaState()
+        self._mfa_channel_policy = _MfaChannelPolicy()
         self._feature_code = _resolve_feature_code(feature_code, FEATURE_CODE)
         validate_feature_code(token or {}, feature_code=self._feature_code)
         self._token_lock = RLock()
@@ -836,31 +873,116 @@ class EzvizClient:
         if previous.get("user_id") != self._token["user_id"]:
             self._token.pop("push_state", None)
 
-    def _login(self, smscode: int | None = None) -> JsonDict:
-        """Login to Ezviz API."""
-        # Region code to url.
-        if len(self._token["api_url"].split(".")) == 1:
-            self._token["api_url"] = "apii" + self._token["api_url"] + ".ezvizlife.com"
+    def _login_credentials(self) -> tuple[str, str | None]:
+        """Use v6 by default; legacy v5 is explicit, never a network-error fallback."""
+        if self._login_api == "v5" or not self.password:
+            return API_ENDPOINT_LOGIN, self.password
+        public_key = fetch_login_public_key(
+            self._session, self._token["api_url"], bounded_request_timeout(self._timeout)
+        )
+        return API_ENDPOINT_LOGIN_V6, encrypt_login_password(public_key, self.password)
 
+    def _login(
+        self,
+        smscode: str | int | None = None,
+        *,
+        request_mfa: bool = True,
+        image_code: str | None = None,
+    ) -> JsonDict:
+        """Try the initial region and at most two regional redirects; never recurse."""
+        smscode = verification_code(smscode)
+        self._normalize_auth_region()
+
+        for redirects in range(3):
+            previous_push = dict(self._token)
+            json_result = (
+                self._post_login(smscode)
+                if image_code is None
+                else self._post_login(smscode, image_code=image_code)
+            )
+            code = self._meta_code(json_result)
+            if code == 200:
+                self._login_verification = LoginVerification(
+                    channel=self._login_verification.channel,
+                )
+                self._captcha_state.clear()
+                session_id = str(json_result["loginSession"]["sessionId"])
+                self._token.update(
+                    {
+                        "session_id": session_id,
+                        "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
+                        "username": str(json_result["loginUser"]["username"]),
+                        "api_url": str(json_result["loginArea"]["apiDomain"]),
+                        "feature_code": self.feature_code,
+                    }
+                )
+                synchronize_http_headers(
+                    self._session.headers,
+                    profile_for_token(self._token),
+                    session_id,
+                    scope="session",
+                    feature_code=self.feature_code,
+                )
+                # A fresh login may change profile/region. Never persist old discovery
+                # alongside new credentials: a failed lookup must be retried on resume.
+                self._token.pop("service_urls", None)
+                self._restore_push_login(
+                    cast(dict[str, Any], previous_push), json_result["loginUser"]
+                )
+                self._notify_token_updated()
+
+                self._token["service_urls"] = self.get_service_urls()
+                self._notify_token_updated()
+
+                return cast(dict[Any, Any], self._token)
+
+            if code == 1100:
+                if redirects == 2:
+                    break
+                area = _api_response.object_section(json_result, "loginArea", required=True)
+                domain = area.get("apiDomain")
+                if not isinstance(domain, str) or not domain:
+                    raise PyEzvizError("Invalid login region")
+                self._token["api_url"] = domain
+                self._captcha_state.clear()
+                if image_code is not None:
+                    raise EzvizLoginError(
+                        "Login region changed; fetch a new CAPTCHA in this region.",
+                        reason="captcha_region_changed",
+                        code=1100,
+                    )
+                continue
+            if code == 6002:
+                self._handle_login_challenge(json_result, smscode, request_mfa=request_mfa)
+            raise self._login_error(json_result)
+
+        raise EzvizLoginError(
+            "Login region redirect limit reached", reason="region_redirect_limit", code=1100
+        )
+
+    def _post_login(self, smscode: str | None, *, image_code: str | None = None) -> JsonDict:
+        """Construct one regional credential request, including a freshly fetched key."""
         push_enabled = self._token.get("push_profile") == PUSH_PROFILE
-        previous_push = dict(self._token)
+        endpoint, password = self._login_credentials()
         payload = {
             "account": self.account,
-            "password": self.password,
+            "password": password,
             "featureCode": self.feature_code,
-            "msgType": "3" if smscode else "0",
-            "bizType": "TERMINAL_BIND" if smscode else "",
+            "msgType": str(self._login_verification.login_channel) if smscode is not None else "0",
+            "bizType": "TERMINAL_BIND" if smscode is not None else "",
             "cuName": "SGFzc2lv",  # hassio base64 encoded
             "smsCode": smscode,
         }
 
+        if image_code is not None:
+            payload["imageCode"] = image_code
         if push_enabled:
             payload.update(ANDROID_PROFILE.registration)
         try:
             req = budgeted_http_call(
                 self._session,
                 "post",
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGIN}",
+                url=f"https://{self._token['api_url']}{endpoint}",
                 allow_redirects=False,
                 data=payload,
                 timeout=bounded_request_timeout(self._timeout),
@@ -874,64 +996,56 @@ class EzvizClient:
         except requests.HTTPError as err:
             raise HTTPError from err
 
-        json_result = self._parse_json(req)
+        return self._parse_json(req)
 
-        if json_result["meta"]["code"] == 200:
-            session_id = str(json_result["loginSession"]["sessionId"])
-            self._token.update(
-                {
-                    "session_id": session_id,
-                    "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
-                    "username": str(json_result["loginUser"]["username"]),
-                    "api_url": str(json_result["loginArea"]["apiDomain"]),
-                    "feature_code": self.feature_code,
-                }
-            )
-            synchronize_http_headers(
-                self._session.headers,
-                profile_for_token(self._token),
-                session_id,
-                scope="session",
-                feature_code=self.feature_code,
-            )
-            # A fresh login may change profile/region. Never persist old discovery
-            # alongside new credentials: a failed lookup must be retried on resume.
-            self._token.pop("service_urls", None)
-            self._restore_push_login(cast(dict[str, Any], previous_push), json_result["loginUser"])
-            self._notify_token_updated()
-
-            self._token["service_urls"] = self.get_service_urls()
-            self._notify_token_updated()
-
-            return cast(dict[Any, Any], self._token)
-
-        if json_result["meta"]["code"] == 1100:
-            self._token["api_url"] = json_result["loginArea"]["apiDomain"]
-            _LOGGER.warning(
-                "Region_incorrect: serial=%s code=%s msg=%s",
-                "unknown",
-                1100,
-                self._token["api_url"],
-            )
-            return self.login(sms_code=smscode)
-
-        if json_result["meta"]["code"] == 1012:
-            raise PyEzvizError("The MFA code is invalid, please try again.")
-
-        if json_result["meta"]["code"] == 1013:
-            raise PyEzvizError("Incorrect Username.")
-
-        if json_result["meta"]["code"] == 1014:
-            raise PyEzvizError("Incorrect Password.")
-
-        if json_result["meta"]["code"] == 1015:
-            raise PyEzvizError("The user is locked.")
-
-        if json_result["meta"]["code"] == 6002:
+    def _handle_login_challenge(
+        self, result: JsonDict, smscode: str | None, *, request_mfa: bool
+    ) -> None:
+        """Update challenge state and explicitly perform an eligible initial request."""
+        state = self._login_verification
+        state.update(result)
+        destination = state.destination(self.account)
+        if smscode is None and request_mfa and not state.sent and destination:
             self.send_mfa_code()
-            raise EzvizAuthVerificationCode("MFA enabled on account. Please retry with code.")
+            state.mark_sent(destination)
 
-        raise PyEzvizError(f"Login error: {self._response_summary(json_result)}")
+    def _login_error(self, result: JsonDict) -> EzvizLoginError:
+        """Classify a response and snapshot MFA diagnostics without any I/O or state changes."""
+        code = self._meta_code(result)
+        state = self._login_verification
+        if code == 6002:
+            if state.channel in PHONE_CHANNELS and not state.destination(self.account):
+                reason, message = state.contact_error()
+                return EzvizAuthVerificationCode(
+                    message,
+                    reason=reason,
+                    code=6002,
+                    available_channels=state.available_channels(
+                        self._token["api_url"], self._mfa_channel_policy
+                    ),
+                )
+            return EzvizAuthVerificationCode(
+                "MFA verification required. Retry with the code or explicitly request one.",
+                code=6002,
+                code_sent=state.code_sent(self.account),
+                available_channels=state.available_channels(
+                    self._token["api_url"], self._mfa_channel_policy
+                ),
+                reason="security_verification_required"
+                if state.app_required
+                else "verification_required",
+            )
+        error = login_error(code, result)
+        if isinstance(error, EzvizAuthVerificationCode):
+            error.code_sent = state.code_sent(self.account)
+            error.available_channels = state.available_channels(
+                self._token["api_url"], self._mfa_channel_policy
+            )
+        if error is not None:
+            return error
+        return EzvizLoginError(
+            f"Login error: {self._response_summary(result)}", reason="login_failed", code=code
+        )
 
     # ---- Internal HTTP helpers -------------------------------------------------
 
@@ -1171,21 +1285,174 @@ class EzvizClient:
                 )
         raise PyEzvizError(f"{log}: exceeded retries")
 
-    def send_mfa_code(self) -> bool:
-        """Send verification code."""
-        json_output = self._request_json(
-            "POST",
-            API_ENDPOINT_SEND_CODE,
-            data={"from": self.account, "bizType": "TERMINAL_BIND"},
-            retry_401=False,
+    def _normalize_auth_region(self) -> None:
+        if "." not in self._token["api_url"]:
+            self._token["api_url"] = "apii" + self._token["api_url"] + ".ezvizlife.com"
+
+    def _select_mfa(self, channel: int | None, account: str | None) -> None:
+        self._login_verification.select(
+            channel, account, policy=self._mfa_channel_policy, region=self._token["api_url"]
         )
 
-        if not self._meta_ok(json_output):
-            raise PyEzvizError(
-                f"Could not request MFA code: Got {self._response_summary(json_output)})"
+    def get_mfa_channels(self, country_code: str) -> tuple[MfaChannel, ...]:
+        """Explicitly discover TERMINAL_BIND options for a telephone country code."""
+        if (
+            not isinstance(country_code, str)
+            or not country_code.isascii()
+            or not country_code.isdigit()
+            or not 1 <= len(country_code) <= 6
+        ):
+            raise PyEzvizError("Country code must be an ASCII telephone country code, e.g. 27")
+        with (
+            request_deadline(time.monotonic() + self._timeout),
+            request_budget_lock(self._token_lock),
+        ):
+            self._normalize_auth_region()
+            # Never keep an old extra-method grant after a failed explicit refresh.
+            self._mfa_channel_policy = _MfaChannelPolicy()
+            with auth_http_response(
+                self._session,
+                "get",
+                timeout=self._timeout,
+                label="Verification channel discovery",
+                url=self._url(API_ENDPOINT_MFA_CHANNELS),
+                params={"countryCode": country_code},
+            ) as response:
+                result = self._parse_json(response)
+                if not self._meta_ok(result):
+                    raise PyEzvizError(
+                        f"Verification channel discovery failed: {self._response_summary(result)}"
+                    )
+                channels = parse_channels(result)
+            self._mfa_channel_policy = _MfaChannelPolicy(
+                channels=tuple(
+                    sorted({1, 3, *(item.channel for item in channels if item.supported)})
+                ),
+                region=self._token["api_url"],
             )
+            return channels
 
-        return True
+    def _captcha_context(self, purpose: _CaptchaPurpose) -> _CaptchaContext:
+        state = self._login_verification
+        delivery = purpose is _CaptchaPurpose.MFA_DELIVERY
+        return _CaptchaContext(
+            region=self._token["api_url"],
+            feature_code=self.feature_code,
+            account=state.destination(self.account) if delivery else self.account,
+            purpose=purpose,
+            channel=state.channel if delivery else None,
+        )
+
+    def _authentication_preflight(
+        self,
+        sms_code: str | int | None,
+        mfa_channel: int | None,
+        mfa_account: str | None,
+        captcha: CaptchaChallenge | None,
+        captcha_code: str | None,
+        *,
+        migrate: bool = False,
+    ) -> tuple[str | None, str | None]:
+        """Shared entry checks; only fresh web-to-Android migration replaces identity."""
+        code = verification_code(sms_code)
+        self._select_mfa(mfa_channel, mfa_account)
+        image_code = self._captcha_state.consume(
+            captcha, captcha_code, self._captcha_context(_CaptchaPurpose.LOGIN)
+        )
+        if not migrate or self._token.get("push_profile") == PUSH_PROFILE:
+            validate_feature_code(cast(dict[str, Any], self._token), feature_code=self.feature_code)
+        return code, image_code
+
+    def get_captcha(self, *, for_mfa: bool = False) -> CaptchaChallenge:
+        """Fetch one human-readable image; fetching again invalidates the old challenge."""
+        with (
+            request_deadline(time.monotonic() + self._timeout),
+            request_budget_lock(self._token_lock),
+        ):
+            self._captcha_state.clear()
+            self._normalize_auth_region()
+            context = self._captcha_context(
+                _CaptchaPurpose.MFA_DELIVERY if for_mfa else _CaptchaPurpose.LOGIN
+            )
+            if not context.account:
+                raise PyEzvizError("A usable account/contact is required for this CAPTCHA")
+            try:
+                with auth_http_response(
+                    self._session,
+                    "get",
+                    timeout=self._timeout,
+                    label="CAPTCHA image",
+                    transport_errors_as_http=True,
+                    url=self._url(API_ENDPOINT_CAPTCHA),
+                    max_body_bytes=MAX_CAPTCHA_IMAGE_BYTES,
+                    params={"account": context.account, "featureCode": self.feature_code},
+                ) as response:
+                    image = response.content
+                    if not 8 <= len(image) <= MAX_CAPTCHA_IMAGE_BYTES:
+                        raise PyEzvizError("CAPTCHA image size is outside the supported limit")
+                    return self._captcha_state.issue(image, context)
+            except BaseException:
+                self._captcha_state.clear()
+                raise
+
+    def cancel_captcha(self) -> None:
+        """Discard challenge state locally without a cloud request."""
+        with request_budget_lock(self._token_lock):
+            self._captcha_state.clear()
+
+    def send_mfa_code(
+        self,
+        *,
+        mfa_channel: int | None = None,
+        mfa_account: str | None = None,
+        captcha: CaptchaChallenge | None = None,
+        captcha_code: str | None = None,
+    ) -> bool:
+        """Explicit request/resend using selected contact, never a guessed SMS recipient."""
+        with (
+            request_deadline(time.monotonic() + self._timeout),
+            request_budget_lock(self._token_lock),
+        ):
+            state = self._login_verification
+            self._select_mfa(mfa_channel, mfa_account)
+            destination = state.destination(self.account)
+            if not destination:
+                reason, message = state.contact_error()
+                raise EzvizAuthVerificationCode(
+                    message,
+                    reason=reason,
+                    available_channels=state.available_channels(
+                        self._token["api_url"], self._mfa_channel_policy
+                    ),
+                )
+            # Metadata-backed contacts use the app's channel-aware unlogin API.
+            # Preserve the historical endpoint only for metadata-free callers.
+            endpoint = API_ENDPOINT_SEND_CODE
+            payload: JsonDict = {"from": destination, "bizType": "TERMINAL_BIND"}
+            image_code = self._captcha_state.consume(
+                captcha, captcha_code, self._captcha_context(_CaptchaPurpose.MFA_DELIVERY)
+            )
+            if state.metadata_present or image_code is not None or state.channel != 3:
+                endpoint = API_ENDPOINT_SEND_CODE_CHANNEL
+                payload.update(msgType=state.channel, imageCode=image_code or "")
+            with auth_http_response(
+                self._session,
+                "post",
+                timeout=self._timeout,
+                label="MFA code",
+                url=self._url(endpoint),
+                data=payload,
+            ) as response:
+                json_output = self._parse_json(response)
+            if not self._meta_ok(json_output):
+                error = verification_request_error(self._meta_code(json_output), json_output)
+                if error is not None:
+                    raise error
+                raise PyEzvizError(
+                    f"Could not request MFA code: {self._response_summary(json_output)}"
+                )
+            state.mark_sent(destination)
+            return True
 
     def get_service_urls(self) -> Any:
         """Get Ezviz service urls."""
@@ -3037,7 +3304,16 @@ class EzvizClient:
             self, serial, max_retries=max_retries, _owner=_sys.modules[__name__]
         )
 
-    def enable_channel99(self, sms_code: int | None = None) -> JsonDict:
+    def enable_channel99(
+        self,
+        sms_code: str | int | None = None,
+        *,
+        mfa_channel: int | None = None,
+        mfa_account: str | None = None,
+        request_mfa: bool = True,
+        captcha: CaptchaChallenge | None = None,
+        captcha_code: str | None = None,
+    ) -> JsonDict:
         """Prepare an Android-profile login for channel-99 push.
 
         Legacy web-profile tokens require a fresh credential login (and MFA if
@@ -3045,10 +3321,15 @@ class EzvizClient:
         Persist the returned token before starting push reception.
         """
         with request_budget_lock(self._token_lock):
+            sms_code, image_code = self._authentication_preflight(
+                sms_code, mfa_channel, mfa_account, captcha, captcha_code, migrate=True
+            )
             if self.mqtt_client is not None:
                 raise PyEzvizError("Stop and discard the MQTT client before migrating login")
             if self._token.get("push_profile") == PUSH_PROFILE:
-                return self.login(sms_code)
+                if image_code is not None:
+                    return self._login(sms_code, request_mfa=request_mfa, image_code=image_code)
+                return self.login(sms_code, request_mfa=request_mfa)
             if not self.account or not self.password:
                 raise EzvizAuthTokenExpired(
                     "Channel-99 migration requires a fresh credential login"
@@ -3067,16 +3348,33 @@ class EzvizClient:
             # Do not refresh a legacy session while presenting the new profile.
             self._token["session_id"] = None
             self._token["rf_session_id"] = None
-            return self._login(sms_code)
+            if image_code is not None:
+                return self._login(sms_code, request_mfa=request_mfa, image_code=image_code)
+            return self._login(sms_code, request_mfa=request_mfa)
 
-    def login(self, sms_code: int | None = None) -> JsonDict:
+    def login(
+        self,
+        sms_code: str | int | None = None,
+        *,
+        mfa_channel: int | None = None,
+        mfa_account: str | None = None,
+        request_mfa: bool = True,
+        captcha: CaptchaChallenge | None = None,
+        captcha_code: str | None = None,
+    ) -> JsonDict:
         """Get or refresh credentials, serializing mutation and persistence with push."""
         with request_budget_lock(self._token_lock):
-            return self._login_or_refresh(sms_code)
+            sms_code, image_code = self._authentication_preflight(
+                sms_code, mfa_channel, mfa_account, captcha, captcha_code
+            )
+            if image_code is not None:
+                return self._login(sms_code, request_mfa=request_mfa, image_code=image_code)
+            return self._login_or_refresh(sms_code, request_mfa=request_mfa)
 
-    def _login_or_refresh(self, sms_code: int | None = None) -> JsonDict:
+    def _login_or_refresh(
+        self, sms_code: str | int | None = None, *, request_mfa: bool = True
+    ) -> JsonDict:
         """Login implementation under the shared credential lock."""
-        validate_feature_code(cast(dict[str, Any], self._token), feature_code=self.feature_code)
         session_id = self._token.get("session_id")
         refresh_session_id = self._token.get("rf_session_id")
         if session_id and refresh_session_id:
@@ -3100,11 +3398,11 @@ class EzvizClient:
                         "api_url": self._token["api_url"],
                     }
                 )
-                return self.login(sms_code=sms_code)
+                return self._login(sms_code, request_mfa=request_mfa)
             return cast(dict[Any, Any], self._token)
 
         if self.account and self.password:
-            return self._login(sms_code)
+            return self._login(sms_code, request_mfa=request_mfa)
 
         raise PyEzvizError("Login with account and password required")
 
@@ -4168,6 +4466,7 @@ class EzvizClient:
     def close_session(self) -> None:
         """Clear current session."""
         with request_budget_lock(self._token_lock):
+            self._captcha_state.clear()
             if self._session:
                 self._session.close()
 
@@ -4238,6 +4537,7 @@ __all__ = [
     "API_ENDPOINT_IOT_FEATURE_PRODUCT_VOICE_CONFIG",
     "API_ENDPOINT_IOT_VIRTUAL_BIND",
     "API_ENDPOINT_LOGIN",
+    "API_ENDPOINT_LOGIN_V6",
     "API_ENDPOINT_LOGOUT",
     "API_ENDPOINT_MANAGED_DEVICE_BASE",
     "API_ENDPOINT_OFFLINE_NOTIFY",

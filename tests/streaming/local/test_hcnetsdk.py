@@ -8,6 +8,7 @@ import hashlib
 import hmac
 from pathlib import Path
 import socket
+import struct
 from threading import Event, Thread
 import time
 from typing import Any
@@ -57,6 +58,7 @@ from pyezvizapi.streaming.local.hcnetsdk.api import (
     HCNETSDK_CLOSE_FORMAT_HANDLE,
     HCNETSDK_COMMAND_CANDIDATE_CONTROL,
     HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN,
+    HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID,
     HCNETSDK_DEFAULT_RTSP_PORT,
     HCNETSDK_DEFAULT_SERVER_PORT,
     HCNETSDK_DEFAULT_TLS_PORT,
@@ -444,6 +446,8 @@ from pyezvizapi.streaming.local.hcnetsdk.api import (
     hcnetsdk_playback_capture_file_request,
     hcnetsdk_playback_condition,
     hcnetsdk_playback_control_v40_request,
+    hcnetsdk_ptz_control_command_port_body_tail,
+    hcnetsdk_ptz_control_command_port_template,
     hcnetsdk_real_data_type_is_media,
     hcnetsdk_real_play_request,
     hcnetsdk_set_connect_time_request,
@@ -8009,6 +8013,118 @@ def test_ezviz_lan_ptz_rejects_unsupported_or_invalid_values() -> None:
         HcNetSdkPtzPresetRequest(42, 1, 39, -1).to_native_args_hint()
 
 
+# PTZ command-port body tails for channel 1, speed 4. Left and right match the
+# frames NET_DVR_PTZControlWithSpeed_Other sent to a CS-C6N-R101-1G2WF; up and
+# down use the same layout and were checked by the camera moving. Stop is
+# -(command + 1).
+PTZ_COMMAND_PORT_OBSERVED_TAILS = [
+    (EzvizPtzCommand.UP, EzvizPtzCommand.ACTION_START, "000000010000001500000004"),
+    (EzvizPtzCommand.UP, EzvizPtzCommand.ACTION_STOP, "00000001ffffffea00000004"),
+    (EzvizPtzCommand.DOWN, EzvizPtzCommand.ACTION_START, "000000010000001600000004"),
+    (EzvizPtzCommand.DOWN, EzvizPtzCommand.ACTION_STOP, "00000001ffffffe900000004"),
+    (EzvizPtzCommand.LEFT, EzvizPtzCommand.ACTION_START, "000000010000001700000004"),
+    (EzvizPtzCommand.LEFT, EzvizPtzCommand.ACTION_STOP, "00000001ffffffe800000004"),
+    (EzvizPtzCommand.RIGHT, EzvizPtzCommand.ACTION_START, "000000010000001800000004"),
+    (EzvizPtzCommand.RIGHT, EzvizPtzCommand.ACTION_STOP, "00000001ffffffe700000004"),
+]
+PTZ_COMMAND_PORT_ACK = bytes.fromhex("00000010000000010000000100000000")
+
+
+@pytest.mark.parametrize(("command", "action", "tail"), PTZ_COMMAND_PORT_OBSERVED_TAILS)
+def test_hcnetsdk_ptz_control_command_port_template_matches_observed_tail(
+    command: int, action: int, tail: str
+) -> None:
+    request = ezviz_lan_ptz_control_request(42, 1, command, action=action, speed=4)
+    template = hcnetsdk_ptz_control_command_port_template(request)
+
+    assert HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID == 0x00030203
+    assert hcnetsdk_ptz_control_command_port_body_tail(request) == bytes.fromhex(tail)
+    assert template.command_id == HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID
+    assert template.body_tail == bytes.fromhex(tail)
+    assert template.addend is None
+    assert template.addend_delta is None
+    assert template.name == HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER
+
+
+def test_hcnetsdk_ptz_control_command_port_rejects_invalid_values() -> None:
+    with pytest.raises(PyEzvizError, match="stop flag"):
+        hcnetsdk_ptz_control_command_port_body_tail(HcNetSdkPtzControlRequest(0, 1, 23, 2))
+    with pytest.raises(PyEzvizError, match="command must be non-negative"):
+        hcnetsdk_ptz_control_command_port_body_tail(HcNetSdkPtzControlRequest(0, 1, -24, 0))
+    with pytest.raises(PyEzvizError, match="speed must be non-negative"):
+        hcnetsdk_ptz_control_command_port_body_tail(
+            HcNetSdkPtzControlRequest(0, 1, 23, 0, speed=-1)
+        )
+    with pytest.raises(PyEzvizError, match="out of range"):
+        hcnetsdk_ptz_control_command_port_body_tail(
+            HcNetSdkPtzControlRequest(0, 1, 23, 0, speed=2**32)
+        )
+    with pytest.raises(PyEzvizError, match="out of range"):
+        hcnetsdk_ptz_control_command_port_body_tail(HcNetSdkPtzControlRequest(0, 1, 2**31, 1))
+
+
+def test_hcnetsdk_pure_python_client_ptz_control_sends_start_then_stop() -> None:
+    rsa_key = RSA.generate(1024)
+    challenge = b"0123456789abcdef0123456789abcdef"
+    seed = b"s" * 64
+
+    def login_socket() -> _FakeSocket:
+        return _FakeSocket(
+            [
+                build_hcnetsdk_tcp_frame(
+                    PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge) + seed
+                ),
+                build_hcnetsdk_tcp_frame(
+                    HCNETSDK_COMMAND_PORT_TEST_SESSION_ID + b"CAM123\x00",
+                    field_4=0x10A24BF1,
+                ),
+            ]
+        )
+
+    controls = [_FakeSocket([PTZ_COMMAND_PORT_ACK]), _FakeSocket([PTZ_COMMAND_PORT_ACK])]
+    sockets = [login_socket(), controls[0], login_socket(), controls[1]]
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        assert address == ("192.0.2.10", 8000)
+        assert timeout == HCNETSDK_COMMAND_PORT_TEST_TIMEOUT
+        return sockets.pop(0)
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        local_ip="192.0.2.56",
+        timeout=HCNETSDK_COMMAND_PORT_TEST_TIMEOUT,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+    )
+
+    responses = [
+        client.ptz_control(EzvizPtzCommand.RIGHT, speed=4),
+        client.ptz_control(EzvizPtzCommand.RIGHT, action=EzvizPtzCommand.ACTION_STOP, speed=4),
+    ]
+
+    assert sockets == []
+    for response, control, tail in zip(
+        responses,
+        controls,
+        ("000000010000001800000004", "00000001ffffffe700000004"),
+        strict=True,
+    ):
+        sent = parse_hcnetsdk_tcp_frame(control.sent[0])
+        assert len(control.sent) == 1
+        assert control.closed is True
+        assert sent.header.total_length == 44
+        assert sent.header.field_4 == 0x63000000
+        assert sent.header.field_12 == HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID
+        assert sent.body == (
+            bytes([56, 2, 0, 192])
+            + HCNETSDK_COMMAND_PORT_TEST_SESSION_ID
+            + b"\x00" * 8
+            + bytes.fromhex(tail)
+        )
+        assert response.response.to_bytes() == PTZ_COMMAND_PORT_ACK
+
+
 def test_ezviz_lan_settings_error_code_matches_presenter_offset() -> None:
     assert HCNETSDK_EZVIZ_SETTINGS_ERROR_BASE == 0x50910
     assert ezviz_lan_settings_error_code(1) == 0x50911
@@ -8506,3 +8622,185 @@ class _FakeSocket(_FragmentedSocket):
     def settimeout(self, timeout: float | None) -> None:
         self.timeout = timeout
         self.timeout_history.append(timeout)
+
+
+class _AckControlSocket(_FakeSocket):
+    """Control socket that counts reads and records SO_LINGER changes."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        super().__init__(chunks)
+        self.recv_calls = 0
+        self.linger: list[bytes] = []
+
+    def recv(self, length: int) -> bytes:
+        self.recv_calls += 1
+        return super().recv(length)
+
+    def setsockopt(self, level: int, option: int, value: bytes) -> None:
+        assert (level, option) == (socket.SOL_SOCKET, socket.SO_LINGER)
+        self.linger.append(value)
+
+
+class _SilentControlSocket(_AckControlSocket):
+    """Control socket that accepts the frame but never answers."""
+
+    def __init__(self, clock: list[float], events: list[object]) -> None:
+        super().__init__([])
+        self._clock = clock
+        self._events = events
+
+    def sendall(self, data: bytes) -> None:
+        super().sendall(data)
+        self._events.append("sent")
+
+    def recv(self, length: int) -> bytes:
+        self._events.append(("recv", self.timeout))
+        assert self.timeout is not None
+        self._clock[0] += self.timeout
+        raise TimeoutError("timed out")
+
+
+def _ptz_ack_test_client(
+    rsa_key: Any, controls: list[_FakeSocket]
+) -> tuple[HcNetSdkPurePythonClient, list[_FakeSocket]]:
+    challenge = b"0123456789abcdef0123456789abcdef"
+    login = _FakeSocket(
+        [
+            build_hcnetsdk_tcp_frame(
+                PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge) + b"s" * 64
+            ),
+            build_hcnetsdk_tcp_frame(
+                HCNETSDK_COMMAND_PORT_TEST_SESSION_ID + b"CAM123\x00", field_4=0x10A24BF1
+            ),
+        ]
+    )
+    sockets: list[_FakeSocket] = [login, *controls]
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        sock = sockets.pop(0)
+        sock.timeout = timeout
+        return sock
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        local_ip="192.0.2.56",
+        timeout=HCNETSDK_COMMAND_PORT_TEST_TIMEOUT,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+    )
+    return client, sockets
+
+
+def test_hcnetsdk_ptz_control_ack_timeout_counts_from_the_written_frame() -> None:
+    rsa_key = RSA.generate(1024)
+    clock = [50.0]
+    events: list[object] = []
+    control = _SilentControlSocket(clock, events)
+    client, sockets = _ptz_ack_test_client(rsa_key, [control])
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        client.ptz_control(
+            EzvizPtzCommand.RIGHT,
+            speed=4,
+            ack_timeout=0.5,
+            on_sent=lambda: events.append("on_sent"),
+            monotonic=lambda: clock[0],
+        )
+
+    # The read is bounded by ack_timeout, not by the 3 s socket timeout.
+    assert events == ["sent", "on_sent", ("recv", 0.5)]
+    assert clock == [50.5]
+    assert sockets == []
+    assert control.closed is True
+    # Closed with a reset, so a lost start is not retransmitted later.
+    assert control.linger == [struct.pack("ii", 1, 0)]
+
+
+def test_hcnetsdk_ptz_control_reports_written_frame_before_the_ack() -> None:
+    rsa_key = RSA.generate(1024)
+    events: list[object] = []
+    control = _AckControlSocket([PTZ_COMMAND_PORT_ACK])
+    client, _ = _ptz_ack_test_client(rsa_key, [control])
+
+    response = client.ptz_control(
+        EzvizPtzCommand.RIGHT,
+        speed=4,
+        ack_timeout=0.5,
+        on_sent=lambda: events.append((len(control.sent), control.recv_calls)),
+    )
+
+    # One frame written and nothing read yet when on_sent runs.
+    assert events == [(1, 0)]
+    assert control.recv_calls > 0
+    assert response.response.to_bytes() == PTZ_COMMAND_PORT_ACK
+    # An acknowledged frame gets a normal close.
+    assert control.linger == [struct.pack("ii", 1, 0), struct.pack("ii", 0, 0)]
+
+
+class _TrickleLoginSocket(_FakeSocket):
+    """Login socket that returns one byte per read, one clock second apart."""
+
+    def __init__(self, clock: list[float]) -> None:
+        super().__init__([b"\x00" * 4096])
+        self._clock = clock
+
+    def recv(self, length: int) -> bytes:
+        self._clock[0] += 1.0
+        return super().recv(1)
+
+
+def test_hcnetsdk_ptz_control_deadline_bounds_the_whole_login() -> None:
+    clock = [10.0]
+    deadline = 12.5
+    login = _TrickleLoginSocket(clock)
+    sockets: list[_FakeSocket] = [login]
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        sock = sockets.pop(0)
+        sock.timeout = timeout
+        return sock
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        local_ip="192.0.2.56",
+        timeout=HCNETSDK_COMMAND_PORT_TEST_TIMEOUT,
+        socket_factory=socket_factory,
+        rsa_key=RSA.generate(1024),
+    )
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        client.ptz_control(
+            EzvizPtzCommand.RIGHT,
+            action=EZVIZ_LAN_PTZ_ACTION_STOP,
+            deadline=deadline,
+            monotonic=lambda: clock[0],
+        )
+
+    # Each byte arrives inside the socket timeout; only the deadline stops it.
+    assert clock[0] <= deadline + 1.0
+    assert login.closed is True
+
+
+def test_hcnetsdk_ptz_control_without_ack_timeout_keeps_the_normal_close() -> None:
+    rsa_key = RSA.generate(1024)
+    control = _AckControlSocket([PTZ_COMMAND_PORT_ACK])
+    client, _ = _ptz_ack_test_client(rsa_key, [control])
+
+    client.ptz_control(EzvizPtzCommand.RIGHT, action=EZVIZ_LAN_PTZ_ACTION_STOP, speed=4)
+
+    assert control.linger == []
+
+
+@pytest.mark.parametrize("ack_timeout", [0.0, -1.0, float("nan")])
+def test_hcnetsdk_ptz_control_rejects_invalid_ack_timeout(ack_timeout: float) -> None:
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        raise AssertionError("connected despite an invalid ack_timeout")
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        socket_factory=socket_factory,
+    )
+    with pytest.raises(PyEzvizError, match="ack_timeout"):
+        client.ptz_control(EzvizPtzCommand.RIGHT, ack_timeout=ack_timeout)

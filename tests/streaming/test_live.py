@@ -14,6 +14,7 @@ import time
 from typing import Any
 from unittest.mock import Mock
 
+from Crypto.Cipher import AES
 import pytest
 
 from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
@@ -21,6 +22,8 @@ from pyezvizapi.streaming import live, selection
 from pyezvizapi.streaming.capture import AutoClipSource
 from pyezvizapi.streaming.cloud.protocol import VtmStreamClient
 from pyezvizapi.streaming.media.models import MediaPacket, MediaPacketMetadata
+from pyezvizapi.streaming.media.rtp_timing import _pack_header
+from tests.streaming.media.test_ps_stream_isolation import pes
 
 
 def _process(monkeypatch: pytest.MonkeyPatch, script: str) -> None:
@@ -53,7 +56,82 @@ def test_reads_and_closes(monkeypatch: pytest.MonkeyPatch) -> None:
         assert stream.read(2) == b"ab"
         assert stream.read() == b"c"
         assert stream.read() == b""
-    source.close.assert_called_once()
+    source.close.assert_called()
+
+
+@pytest.mark.parametrize(("header_size", "nal_header"), [(1, b"\x65"), (2, b"\x26\x01")])
+def test_decrypts_inner_ps_video_with_clear_vtm_flag(
+    monkeypatch: pytest.MonkeyPatch, header_size: int, nal_header: bytes
+) -> None:
+    _process(monkeypatch, "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())")
+    source = _source()
+    clear = b"0123456789abcdef"
+    cipher = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
+    start = b"\x00\x00\x00\x01" + nal_header
+    audio = pes(0xC0, b"unchanged audio", 0)
+    encrypted = _pack_header(0) + pes(0xE0, start + cipher, 0, aligned=True) + audio
+    expected = _pack_header(0) + pes(0xE0, start + clear, 0, aligned=True) + audio
+    source.iter_media_packets.return_value = _packets(
+        MediaPacket(encrypted[index : index + 7], MediaPacketMetadata(source="cloud_vtm"))
+        for index in range(0, len(encrypted), 7)
+    )
+    with live.LiveMpegtsStream(
+        source, "ffmpeg", media_key="camera-key", nalu_header_size=header_size
+    ) as stream:
+        assert b"".join(iter(stream.read, b"")) == expected
+    assert isinstance(stream._transform, live.NativePsTransform)
+    assert stream._transform.pending_bytes == 0
+
+
+def test_legacy_ps_waits_for_pes_run_and_leaves_audio_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _process(monkeypatch, "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())")
+    source = _source()
+    key = b"test-camera-key!"
+    clear = b"\x67" + b"0123456789abcde"
+    encrypted = AES.new(key, AES.MODE_ECB).encrypt(clear)
+    start = b"\x00\x00\x00\x01"
+    pack = _pack_header(0)
+    audio = pes(0xC0, b"audio", 0)
+    chunks = [
+        pack + pes(0xE0, start + encrypted[:8], 0, aligned=True),
+        pes(0xE0, encrypted[8:]),
+        audio,
+    ]
+    source.iter_media_packets.return_value = _packets(
+        MediaPacket(chunk, MediaPacketMetadata(source="cloud_vtm")) for chunk in chunks
+    )
+    with live.LiveMpegtsStream(source, "ffmpeg", media_key=key, nalu_header_size=0) as stream:
+        assert b"".join(iter(stream.read, b"")) == (
+            pack + pes(0xE0, start + clear[:8], 0, aligned=True) + pes(0xE0, clear[8:]) + audio
+        )
+
+
+def test_rtp_output_can_be_read_and_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    entered = Event()
+    release = Event()
+    source = _source()
+    source.close.side_effect = release.set
+    body = bytes.fromhex("806000010000000155667788") + b"payload"
+    source.iter_media_packets.return_value = _packets(
+        [MediaPacket(body, MediaPacketMetadata(source="cloud_vtm"))]
+    )
+
+    def copy_rtp(packets: Iterable[Any], output: Any, **kwargs: Any) -> None:
+        assert next(iter(packets)).body == body
+        assert kwargs["audio_key"] == b"test-key"
+        output.write(b"transport stream")
+        output.flush()
+        entered.set()
+        assert release.wait(3)
+
+    monkeypatch.setattr(live, "_copy_cloud_rtp_packets_to_mpegts", copy_rtp)
+    with live.LiveMpegtsStream(source, "ffmpeg", media_key=b"test-key") as stream:
+        assert entered.wait(2)
+        assert stream.read() == b"transport stream"
+        stream.close()
+        assert not stream._writer.is_alive()
 
 
 def test_encrypted_input_fails(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,7 +150,9 @@ def test_encrypted_input_fails(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_ffmpeg_stderr_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     _process(monkeypatch, "import sys; sys.stderr.write('bad media'); sys.exit(2)")
     source = _source()
-    source.iter_media_packets.return_value = _packets([])
+    source.iter_media_packets.return_value = _packets(
+        [MediaPacket(b"bad input", MediaPacketMetadata(source="cloud_vtm"))]
+    )
     with (
         live.LiveMpegtsStream(source, "ffmpeg") as stream,
         pytest.raises(PyEzvizError, match="bad media"),
@@ -137,7 +217,7 @@ def test_close_during_cloud_bootstrap_retains_owner_until_it_exits(
         stream.close()
     transport.start.assert_not_called()
     transport.close.assert_called_once()
-    assert stream._process.poll() is not None
+    assert stream._process is None
     assert not stream._writer.is_alive()
 
 
@@ -197,7 +277,7 @@ def test_close_does_not_report_unverified_transport_cleanup_as_success(
     stream = live.LiveMpegtsStream(source, "ffmpeg")
     with pytest.raises(PyEzvizError, match="cleanup could not be verified"):
         stream.close()
-    assert stream._process.poll() is not None
+    assert stream._process is None
     assert not stream._writer.is_alive()
 
 

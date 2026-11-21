@@ -1445,6 +1445,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
     allow_encrypted: bool = False,
     startup_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    on_process: Callable[[subprocess.Popen[bytes]], None] | None = None,
 ) -> None:
     """Depacketize RTP video and optional descriptor-backed AAC to MPEG-TS."""
 
@@ -1839,11 +1840,14 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
 
     remux_error: BaseException | None = None
     try:
+        if on_process is not None:
+            on_process(process)
         copy_remuxed_output(
             process,
             output,
             write_input=_write_input,
             cancel_input=_cancel_inputs,
+            retain_input_owner=on_process is not None,
         )
     except BaseException as err:
         remux_error = err

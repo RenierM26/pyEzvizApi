@@ -217,6 +217,7 @@ def copy_remuxed_output(  # noqa: PLR0912, PLR0915
     *,
     write_input: Callable[[BinaryIO], None],
     cancel_input: Callable[[], None] | None = None,
+    retain_input_owner: bool = False,
 ) -> None:
     """Run a streaming FFmpeg remux with coordinated cancellation and cleanup.
 
@@ -271,6 +272,10 @@ def copy_remuxed_output(  # noqa: PLR0912, PLR0915
             with suppress(Exception):
                 cancel_input()
             writer.join(timeout=FFMPEG_STOP_TIMEOUT_SECONDS)
+        if retain_input_owner:
+            # The outer live owner bounds its own join and can await this same
+            # worker again. Do not return while the input iterator is executing.
+            writer.join()
         if not writer.is_alive():
             with suppress(OSError):
                 stdin.close()

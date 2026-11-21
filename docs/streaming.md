@@ -719,9 +719,15 @@ with open_live_mpegts_stream(client, serial, source=AutoClipSource(mode="cloud")
 
 Explicit cloud mode skips local SDK discovery. Omitting `source` retains
 automatic selection, which chooses EZVIZ SDK transports rather than RTSP.
-Only clear MPEG-PS is supported. Encrypted packets and local ECDH/RTP input
-raise `EzvizUnsupportedMediaError`. There is no transport switch once packets
-have been selected.
+The reader supports MPEG-PS and supported VTM RTP/IDMX streams. To decrypt
+inner media encryption, use explicit cloud mode and pass the authorized camera
+key as `media_key`. For MPEG-PS, set `nalu_header_size=0` for encrypted NAL
+headers, `1` for clear H.264 headers, or `2` for clear HEVC headers. For RTP,
+the reader uses the detected codec and retains AAC when the camera supplies a
+supported descriptor and the key. A clear VTM transport flag does not establish
+that its video is clear. The reader does not fetch keys or guess encryption
+settings. It rejects transport-level encryption and local ECDH; transport
+selection does not change once media has started.
 
 Run blocking reads off the event loop. Call `close()` from another thread
 on disconnect or unload. The stream owns the transport and FFmpeg, not the

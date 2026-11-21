@@ -2,23 +2,28 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import closing, suppress
-from io import BufferedReader
+from functools import partial
+from itertools import chain
+import socket
 import subprocess
-import sys
 from threading import Event, Lock, Thread
 import time
-from typing import TYPE_CHECKING, BinaryIO, cast
+from typing import TYPE_CHECKING, BinaryIO
 
 from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
 from pyezvizapi.streaming.capture import AutoClipSource
-from pyezvizapi.streaming.media.models import is_positive_finite_duration_bound
-from pyezvizapi.streaming.media.remux import (
-    _ffmpeg_exit_error,
-    _wait_for_process,
-    open_mpegts_remux_process,
-    start_stderr_drain,
+from pyezvizapi.streaming.cloud.bootstrap import (
+    _copy_cloud_rtp_packets_to_mpegts,
+    _decrypt_cloud_rtp_nal_unit,
+    _parse_cloud_rtp_packet,
 )
+from pyezvizapi.streaming.cloud.protocol import VtmChannel, VtmPacket
+from pyezvizapi.streaming.media.models import MediaPacket, is_positive_finite_duration_bound
+from pyezvizapi.streaming.media.native_ps import LegacyPsVideoTransform, NativePsTransform
+from pyezvizapi.streaming.media.remux import copy_remuxed_output, open_mpegts_remux_process
+from pyezvizapi.streaming.media.rtp import RtpVideoCodec
 from pyezvizapi.streaming.selection import AutoMediaStream
 
 if TYPE_CHECKING:
@@ -39,12 +44,23 @@ class LiveMpegtsStream:
         *,
         startup_timeout: float = 10.0,
         close_timeout: float = 15.0,
+        media_key: str | bytes | None = None,
+        nalu_header_size: int = 2,
     ) -> None:
         if not is_positive_finite_duration_bound(startup_timeout):
             raise ValueError("Live startup timeout must be positive and finite")
         if not is_positive_finite_duration_bound(close_timeout):
             raise ValueError("Live close timeout must be positive and finite")
+        self._transform: NativePsTransform | LegacyPsVideoTransform | None = None
+        if media_key is not None:
+            self._transform = (
+                LegacyPsVideoTransform(media_key)
+                if nalu_header_size == 0 and not isinstance(nalu_header_size, bool)
+                else NativePsTransform(media_key, nalu_header_size=nalu_header_size)
+            )
+        self._media_key = media_key
         self._source = source
+        self._ffmpeg_path = ffmpeg_path
         self._closed = Event()
         self._close_lock = Lock()
         self._startup_timeout = startup_timeout
@@ -52,42 +68,107 @@ class LiveMpegtsStream:
         self._stopper: Thread | None = None
         self._shutdown_error: Exception | None = None
         self._error: Exception | None = None
-        self._process = open_mpegts_remux_process(ffmpeg_path)
-        assert self._process.stdin is not None and self._process.stdout is not None
-        self._stdout = cast(BufferedReader, self._process.stdout)
-        self._tail, self._stderr_thread = start_stderr_drain(self._process)
-        self._writer = Thread(
-            target=self._feed,
-            args=(self._process.stdin,),
-            name="pyezvizapi-live-mpegts",
-            daemon=True,
-        )
+        self._process: subprocess.Popen[bytes] | None = None
+        self._reader, self._sender = socket.socketpair()
+        self._writer = Thread(target=self._feed, name="pyezvizapi-live-mpegts", daemon=True)
         self._writer.start()
 
-    def _feed(self, stdin: BinaryIO) -> None:
+    def _checked_packets(self, packets: Iterator[MediaPacket]) -> Iterator[MediaPacket]:
+        for packet in packets:
+            if self._closed.is_set():
+                return
+            if packet.metadata.encrypted or packet.metadata.source == "local_ecdh":
+                raise EzvizUnsupportedMediaError(
+                    "Live MPEG-TS does not support encrypted transport or local ECDH",
+                    source=packet.metadata.source,
+                    reason="unsupported_live_input",
+                )
+            if packet.body:
+                yield packet
+
+    def _set_process(self, process: subprocess.Popen[bytes]) -> None:
+        self._process = process
+        if self._closed.is_set():
+            self._terminate_process()
+
+    def _terminate_process(self) -> None:
+        process = self._process
+        if process is not None and process.poll() is None:
+            with suppress(ProcessLookupError):
+                process.kill()
+
+    def _feed(self) -> None:
         try:
             if self._closed.is_set():
                 return
             deadline = time.monotonic() + self._startup_timeout
-            with closing(self._source.iter_media_packets(startup_deadline=deadline)) as packets:
-                for packet in packets:
-                    if self._closed.is_set():
-                        return
-                    if packet.metadata.encrypted or packet.metadata.source == "local_ecdh":
-                        raise EzvizUnsupportedMediaError(
-                            "Live MPEG-TS requires clear MPEG-PS input",
-                            source=packet.metadata.source,
-                            reason="unsupported_live_input",
-                        )
-                    stdin.write(packet.body)
-                    stdin.flush()
-        except BrokenPipeError:
+            with (
+                self._sender.makefile("wb") as output,
+                closing(self._source.iter_media_packets(startup_deadline=deadline)) as packets,
+            ):
+                checked = self._checked_packets(packets)
+                first = next(checked, None)
+                if first is None:
+                    return
+                payloads = chain((first,), checked)
+                if (
+                    first.metadata.source == "cloud_vtm"
+                    and _parse_cloud_rtp_packet(first.body) is not None
+                ):
+                    self._copy_rtp(payloads, output, deadline)
+                else:
+                    process = open_mpegts_remux_process(self._ffmpeg_path)
+                    self._set_process(process)
+                    copy_remuxed_output(
+                        process,
+                        output,
+                        write_input=partial(self._write_ps, payloads),
+                        cancel_input=self._source.close,
+                        retain_input_owner=True,
+                    )
+        except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as error:
             self._error = error
         finally:
+            if self._transform is not None:
+                self._transform.close()
+            self._media_key = None
             with suppress(OSError):
-                stdin.close()
+                self._sender.shutdown(socket.SHUT_WR)
+            self._sender.close()
+
+    def _write_ps(self, packets: Iterator[MediaPacket], stdin: BinaryIO) -> None:
+        for packet in packets:
+            body = packet.body
+            if self._transform is not None:
+                body = self._transform.feed(body)
+            if body:
+                stdin.write(body)
+                stdin.flush()
+
+    def _copy_rtp(self, packets: Iterator[MediaPacket], output: BinaryIO, deadline: float) -> None:
+        media_key = self._media_key
+
+        def decrypt(annexb: bytes, codec: RtpVideoCodec) -> bytes:
+            assert media_key is not None
+            return _decrypt_cloud_rtp_nal_unit(
+                annexb[4:], media_key, nalu_header_size=2 if codec == "hevc" else 1
+            )
+
+        _copy_cloud_rtp_packets_to_mpegts(
+            (
+                VtmPacket(VtmChannel.STREAM, len(packet.body), 0, 0, packet.body)
+                for packet in packets
+            ),
+            output,
+            ffmpeg_path=self._ffmpeg_path,
+            cancel_input=self._source.close,
+            transform=decrypt if media_key is not None else None,
+            audio_key=media_key,
+            startup_deadline=deadline,
+            on_process=self._set_process,
+        )
 
     def read(self, size: int = 65536) -> bytes:
         """Read up to size bytes; return empty bytes on EOF or cancellation."""
@@ -96,8 +177,8 @@ class LiveMpegtsStream:
         if self._closed.is_set():
             return b""
         try:
-            chunk = self._stdout.read1(size)
-        except (OSError, ValueError):
+            chunk = self._reader.recv(size)
+        except OSError:
             if self._closed.is_set():
                 return b""
             raise
@@ -105,26 +186,20 @@ class LiveMpegtsStream:
             return b""
         if chunk:
             return chunk
-        try:
-            status = self._process.wait(timeout=5)
-            if self._stderr_thread is not None:
-                self._stderr_thread.join(timeout=1)
-            if self._error is not None:
-                if isinstance(self._error, PyEzvizError):
-                    raise self._error
-                raise PyEzvizError("Live media input failed") from self._error
-            if status:
-                raise _ffmpeg_exit_error(status, self._tail.text())
-            return b""
-        except subprocess.TimeoutExpired as error:
-            raise PyEzvizError("FFmpeg did not exit after closing its output") from error
-        finally:
-            self.__exit__(*sys.exc_info())
+        error = self._error
+        if error is not None:
+            with suppress(Exception):
+                self.close()
+            if isinstance(error, PyEzvizError):
+                raise error
+            raise PyEzvizError("Live media input failed") from error
+        self.close()
+        return b""
 
     def _stop(self) -> None:
         try:
             try:
-                _wait_for_process(self._process)
+                self._terminate_process()
             finally:
                 self._source.close()
         except Exception as error:
@@ -136,19 +211,18 @@ class LiveMpegtsStream:
         with self._close_lock:
             self._closed.set()
             if self._stopper is None:
+                with suppress(OSError):
+                    self._reader.shutdown(socket.SHUT_RDWR)
+                self._reader.close()
                 self._stopper = Thread(target=self._stop, name="pyezvizapi-live-stop", daemon=True)
                 self._stopper.start()
             stopper = self._stopper
-        for thread in (stopper, self._writer, self._stderr_thread):
-            if thread is not None:
-                thread.join(timeout=max(0.0, deadline - time.monotonic()))
-                if thread.is_alive():
-                    raise LiveStreamShutdownTimeout(
-                        "Live MPEG-TS shutdown timed out; stream owner retained"
-                    )
-        self._stdout.close()
-        if self._process.stderr is not None:
-            self._process.stderr.close()
+        for thread in (stopper, self._writer):
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            if thread.is_alive():
+                raise LiveStreamShutdownTimeout(
+                    "Live MPEG-TS shutdown timed out; stream owner retained"
+                )
         if (
             self._shutdown_error is not None
             or not self._source.capture_result["transport_closure_verified"]
@@ -176,12 +250,23 @@ def open_live_mpegts_stream(
     ffmpeg_path: str = "ffmpeg",
     source: AutoClipSource | None = None,
     close_timeout: float = 15.0,
+    media_key: str | bytes | None = None,
+    nalu_header_size: int = 2,
 ) -> LiveMpegtsStream:
-    """Open clear MPEG-PS live media using the selected transport policy."""
+    """Open MPEG-PS or supported cloud RTP media using the selected transport.
+
+    Supply the camera's media key for inner video encryption. For MPEG-PS set
+    ``nalu_header_size=0`` for encrypted headers, 1 for clear H.264 headers,
+    or 2 for clear HEVC headers. Cloud RTP uses its detected codec. Transport-level encryption and local ECDH are not supported.
+    """
     options = source if source is not None else AutoClipSource()
+    if media_key is not None and options.mode != "cloud":
+        raise ValueError("Live media decryption requires explicit cloud mode")
     return LiveMpegtsStream(
         AutoMediaStream(client, serial, options, channel=channel),
         ffmpeg_path,
         startup_timeout=options.timeout,
         close_timeout=close_timeout,
+        media_key=media_key,
+        nalu_header_size=nalu_header_size,
     )

@@ -6,8 +6,12 @@ from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.streaming.cloud.protocol import (
     _decrypt_hikvision_ps_video_packets,
     _MpegPsVideoDecryptState,
+    decrypt_hikvision_ps_video,
 )
-from pyezvizapi.streaming.media.containers import mpeg_ps_complete_prefix_length
+from pyezvizapi.streaming.media.containers import (
+    mpeg_ps_complete_prefix_length,
+    mpeg_ps_decryptable_prefix_length,
+)
 
 MAX_PENDING_PS_BYTES = 1024 * 1024
 _PS_START = b"\x00\x00\x01"
@@ -108,3 +112,30 @@ class NativePsTransform:
         self._output.clear()
         self._states.clear()
         self._key = None
+
+
+class LegacyPsVideoTransform:
+    """Decrypt whole-header NALs once a complete video PES run is available."""
+
+    def __init__(self, key: str | bytes) -> None:
+        if not key:
+            raise ValueError("Supply a nonempty media key")
+        self._key = key
+        self._buffer = bytearray()
+
+    def feed(self, data: bytes) -> bytes:
+        if len(self._buffer) + len(data) > MAX_PENDING_PS_BYTES:
+            raise PyEzvizError("Legacy MPEG-PS pending byte limit exceeded before append")
+        self._buffer.extend(data)
+        if len(self._buffer) >= 3 and self._buffer[:3] != _PS_START:
+            raise PyEzvizError("Legacy video decryption requires MPEG-PS input")
+        end = mpeg_ps_decryptable_prefix_length(self._buffer)
+        if not end:
+            return b""
+        run = bytes(self._buffer[:end])
+        del self._buffer[:end]
+        return decrypt_hikvision_ps_video(run, self._key, nalu_header_size=0)
+
+    def close(self) -> None:
+        self._buffer.clear()
+        self._key = b""

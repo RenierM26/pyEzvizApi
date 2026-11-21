@@ -276,18 +276,27 @@ def open_live_mpegts_stream(
     close_timeout: float = 15.0,
     media_key: str | bytes | None = None,
     nalu_header_size: int = 2,
+    cloud_stream_index: int = 1,
 ) -> LiveMpegtsStream:
     """Open MPEG-PS or supported cloud RTP media using the selected transport.
 
     Supply the camera's media key for inner video encryption. For MPEG-PS set
     ``nalu_header_size=0`` for encrypted headers, 1 for clear H.264 headers,
-    or 2 for clear HEVC headers. Cloud RTP uses its detected codec. Transport-level encryption and local ECDH are not supported.
+    or 2 for clear HEVC headers. Cloud RTP uses its detected codec. Transport-level
+    encryption and local ECDH are not supported.
+
+    ``cloud_stream_index=2`` requests the cloud substream on supported cameras
+    (Standard on the C8W). It does not affect local viewing or camera settings.
     """
     options = source if source is not None else AutoClipSource()
     if media_key is not None and options.mode != "cloud":
         raise ValueError("Live media decryption requires explicit cloud mode")
+    if type(cloud_stream_index) is not int or cloud_stream_index < 1:
+        raise ValueError("Cloud stream index must be a positive integer")
     return LiveMpegtsStream(
-        AutoMediaStream(client, serial, options, channel=channel),
+        AutoMediaStream(
+            client, serial, options, channel=channel, cloud_stream_index=cloud_stream_index
+        ),
         ffmpeg_path,
         startup_timeout=options.timeout,
         close_timeout=close_timeout,

@@ -228,11 +228,13 @@ class AutoMediaStream:
         options: AutoClipSource,
         *,
         channel: int | None = None,
+        cloud_stream_index: int = 1,
     ) -> None:
         self._client = client
         self._serial = serial
         self._options = options
         self._channel = channel
+        self._cloud_stream_index = cloud_stream_index
         self._stream: Any = None
         self._transport_lock = Lock()
         self._transport_close_lock = Lock()
@@ -479,6 +481,7 @@ class AutoMediaStream:
                             timeout=source.timeout,
                             capture_deadline=cloud_deadline,
                             monotonic=monotonic,
+                            stream_index=self._cloud_stream_index,
                         )
                         self._transports_opened += 1
                         if self._closed:

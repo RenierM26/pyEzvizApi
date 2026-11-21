@@ -729,6 +729,11 @@ that its video is clear. The reader does not fetch keys or guess encryption
 settings. It rejects transport-level encryption and local ECDH; transport
 selection does not change once media has started.
 
+Cloud viewing defaults to stream index 1. Pass `cloud_stream_index=2` to
+`open_live_mpegts_stream` to request a substream on cameras that support it
+(Standard on the C8W). This selects the stream for that session only: it does
+not change camera settings or retry automatically at another quality.
+
 Run blocking reads off the event loop. Call `close()` from another thread
 on disconnect or unload. The stream owns the transport and FFmpeg, not the
 account client. The source timeout bounds discovery, connection startup, and

@@ -899,6 +899,7 @@ def build_vtm_url(
     channel: int = 1,
     client_type: int = 9,
     timestamp_ms: int | None = None,
+    stream_index: int = 1,
 ) -> str:
     """Build the ysproto live URL used for the VTM stream-info request."""
 
@@ -909,7 +910,7 @@ def build_vtm_url(
         **biz,
         "dev": serial,
         "chn": str(channel),
-        "stream": "1",
+        "stream": str(stream_index),
         "cln": str(client_type),
         "isp": "0",
         "auth": "1",

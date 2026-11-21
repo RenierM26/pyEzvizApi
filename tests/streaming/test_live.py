@@ -245,8 +245,9 @@ def test_close_interrupts_reader_and_input(monkeypatch: pytest.MonkeyPatch) -> N
     assert stopped.is_set()
 
 
+@pytest.mark.parametrize("cloud_stream_index", [None, 2])
 def test_close_during_cloud_bootstrap_retains_owner_until_it_exits(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, cloud_stream_index: int | None,
 ) -> None:
     _process(monkeypatch, "import sys; sys.stdin.buffer.read()")
     entered = Event()
@@ -257,14 +258,21 @@ def test_close_during_cloud_bootstrap_retains_owner_until_it_exits(
     def open_cloud(_client: Any, serial: str, **kwargs: Any) -> Mock:
         assert serial == "CAMERA"
         assert kwargs["channel"] == 0
+        assert kwargs["stream_index"] == (cloud_stream_index or 1)
         assert 0 < kwargs["capture_deadline"] - time.monotonic() <= 10
         entered.set()
         assert release.wait(5)
         return transport
 
     monkeypatch.setattr(selection, "open_cloud_stream", open_cloud)
+    quality = {} if cloud_stream_index is None else {"cloud_stream_index": cloud_stream_index}
     stream = live.open_live_mpegts_stream(
-        client, "CAMERA", channel=0, source=AutoClipSource(mode="cloud"), close_timeout=0.1
+        client,
+        "CAMERA",
+        channel=0,
+        source=AutoClipSource(mode="cloud"),
+        close_timeout=0.1,
+        **quality,
     )
     try:
         assert entered.wait(2)

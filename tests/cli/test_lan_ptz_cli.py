@@ -503,12 +503,14 @@ def test_wire_slow_stop_login_is_cut_at_the_timeout(wire, capsys):
     assert plan == []
 
 
-def test_wire_login_failure_writes_no_start_frame(wire, capsys):
+def test_wire_login_failure_writes_no_start_frame(wire, capsys, monkeypatch):
     args, plan, log, _ = wire
     plan += [ConnectionRefusedError(), ConnectionRefusedError(), ConnectionRefusedError()]
-    began = time.monotonic()
+    def unexpected_wait(seconds: float) -> None:
+        pytest.fail(f"Login failure must not wait for motion ({seconds}s)")
+
+    monkeypatch.setattr(lan.time, "sleep", unexpected_wait)
     assert cli.main(args) == 1
-    assert time.monotonic() - began < WIRE_DURATION
     output = json.loads(capsys.readouterr().out)
     assert (output["stage"], output["start"], output["stop"], output["stopped"]) == (
         "start",

@@ -311,3 +311,28 @@ real transport, including separate regional keys, actual prepared forms,
 clock/key/lockout/rate-limit responses, zero-prefixed codes and request counts.
 They do not establish current 7.6/iOS behavior, v5/v6 acceptance for every region,
 real message delivery, live account lock recovery or actual UI rendering.
+
+## Explicit login host lookup
+
+Use the offline Android 7.6.1 catalog snapshot to show named regions. Let the
+user choose their account's registered region, then pass its internal ID to the
+host resolver. The ID is not a country code or dialing prefix:
+
+```python
+from pyezvizapi import EzvizClient
+from pyezvizapi.cloud.region import list_login_areas, resolve_login_host
+
+area = next(area for area in list_login_areas() if area.name == "South Africa")
+host = resolve_login_host(area.area_id)
+client = EzvizClient(account, password, url=host)
+```
+
+The lookup sends only the area ID to the global EZVIZ endpoint, requires no
+account or token, and does not modify an existing client. Russia uses the
+app’s dedicated host without a lookup. The bundled catalog is a versioned
+snapshot, not a live list of account eligibility. A successful response
+does not prove that the area belongs to an account; EZVIZ may return its
+global host even for unknown IDs. This is opt-in: the default host and normal
+`1100` redirect handling are unchanged. For `1102`, finish selection in the
+EZVIZ app: the forced region picker saves the region on the account, which
+this read-only lookup does not do.

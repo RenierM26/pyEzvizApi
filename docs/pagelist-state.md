@@ -52,7 +52,8 @@ does not authorize a generic key/value write.
 | `NODISTURB.alarmEnable`, `callingEnable` | `do_not_disturb` / `set_answer_call` only where their notification contract matches | These raw fields describe suppression; the camera projection inverts them for push notifications. Verify the matching control, not the raw boolean alone. |
 | `TIME_PLAN` | `set_time_plan_infos` | Match the plan type and resource; a returned plan is not a general scheduling capability. |
 | `STATUS.optionals.AlgorithmInfo` | `set_algorithm_param`, or `set_detection_sensitivity` for its separate sensitivity contract | HA: `504` plus matching subtype/channel for PIR/human algorithm settings; `61` and matching subtype or model-specific condition for sensitivity. |
-| `STATUS.optionals.Alarm_DetectHumanCar`, `Alarm_AdvancedDetect` | `set_alarm_detect_human_car`, `set_alarm_advanced_detect`; `set_detection_mode` selects its route | HA distinguishes `224` and `534`, with work-mode context on the advanced variant. Do not infer identical mode values. |
+| `STATUS.optionals.Alarm_DetectHumanCar` | `set_alarm_detect_human_car`; deprecated `set_detection_mode` is an alias for this legacy writer only | HA uses capability `224`. The alias does not select the advanced route. |
+| `STATUS.optionals.Alarm_AdvancedDetect` | `set_alarm_advanced_detect` (call explicitly for the advanced variant) | HA uses capability `534` with work-mode context. Do not assume the legacy and advanced mode values are interchangeable. |
 | `STATUS.optionals.batteryCameraWorkMode` | `set_battery_camera_work_mode` | HA: `502` or `687`, with distinct mode families. |
 | `STATUS.optionals.NightVision_Model` | `set_night_vision_mode`; channel-aware `set_dev_config_kv` path for luminance or duration | HA: `274` for smart night vision, `353` for duration, and `688` mode-token checks for variants. Preserve sibling fields when updating a complete config. |
 | `STATUS.optionals.device_ICR_DSS` | HA uses `set_dev_config_kv` with the ICR object | HA requires the reported object and checks sensitivity presence for the sensitivity control. A separate native LAN day/night mode setter does not prove cloud-key parity. |
@@ -66,7 +67,7 @@ does not authorize a generic key/value write.
 | `FEATURE_INFO.…Video.LensCleaning.DefogCfg` | `set_lens_defog_mode` | HA requires token `6` in capability `688` and a nonempty reported defog mode. See the route details below. |
 | `FEATURE_INFO.…Video.VideoAdjustment.ImageFlip` | `set_image_flip_iot` | Android checks the feature definition and resource. Not equivalent to native mirror-mode numbers. |
 | `FEATURE_INFO.…NetworkSecurityProtection.PortSecurity` | `set_port_security` | Gate on the specific reported client mode or port, not merely on the parent domain. |
-| `FEATURE_INFO.…DoorLock.LightCtrl.NightLightCfg` | Intercom helper `set_label_light` | Requires an intercom and usable observed property or validated legacy fallback; the two routes are not interchangeable. |
+| `FEATURE_INFO.…Video.LightCtrl.NightLightEnable` | Intercom helper `set_label_light` | Requires intercom category `BDoorBell`, a usable video resource/local index, and a reported boolean value (or a value that can be interpreted as boolean). If that route is unavailable, the helper accepts one usable observed switch `611` row as a legacy fallback; it does not retry via `611` after a rejected IoT write. |
 | `FEATURE_INFO.…IntelligentAPP.DownloadedAPP` | `set_intelligent_app_state` | Match a reported app identity and its supported action; an installed-app list is not proof every app can be toggled. |
 | `FEATURE_INFO.…Video.PTZMasterSlaveTrace.LinkedTrackingAdvancedCfg` | Companion `set_linked_tracking_takeover` via the SDK IoT route | HA: `715` and eligible routing. Not the generic tracking switch or native linked-lens calibration. |
 | `deviceInfos.name`, firmware upgrade state | `update_device_name`, `upgrade_device` | Metadata and update actions, not toggles. The update action is not a way to set reported progress/version fields. |
@@ -146,7 +147,7 @@ Generic IoT methods alone do not qualify it.
 | --- | --- |
 | `DoorLock.DoorLockMgr` | `MessagePlanCfg`, `WeatherReminderPlan` |
 | `DoorLock.LensPrivacyCover` | `LensPrivacyCoverModeParams` |
-| `DoorLock.LightCtrl` | `NightLightCfg` |
+| `DoorLock.LightCtrl` | `NightLightCfg` (writer unverified; distinct from `Video.LightCtrl.NightLightEnable`) |
 | `DoorLock.RGBLightCtrl` | `ProjectionLampCfg` |
 | `DoorLock.SensorLight` | `RadarFMCfg` |
 | `Video.AudioMgr` | `AudioSourceEnhancement`, `DirectionalPickup`, `MicAdaptive` |

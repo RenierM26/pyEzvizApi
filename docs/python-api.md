@@ -94,3 +94,6 @@ retained for the pinned HA consumer; see [compatibility](ha-compatibility.md).
 
 For `save_clip`, `save_clip_with_options`, `save_image` and source-specific
 requirements, see [media saving](media-saving.md) and the [streaming reference](streaming.md).
+
+See [authentication and MFA recovery](auth/login-recovery.md) for selected channels,
+explicit code requests and structured login failure handling.

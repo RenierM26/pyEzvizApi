@@ -24,7 +24,8 @@ def worker(monkeypatch):
 
 
 @pytest.mark.parametrize("phase", ["headers", "body"])
-def test_loopback_dribble_does_not_hold_caller_past_deadline(worker, phase):
+@pytest.mark.parametrize("body_limit", [1024 * 1024, _budget_http.MAX_BOOTSTRAP_BODY_BYTES])
+def test_loopback_dribble_does_not_hold_caller_past_deadline(worker, phase, body_limit):
     stopped = Event()
     disconnected = Event()
     class Handler(BaseHTTPRequestHandler):
@@ -56,7 +57,7 @@ def test_loopback_dribble_does_not_hold_caller_past_deadline(worker, phase):
     started = time.monotonic()
     try:
         with pytest.raises(TimeoutError), request_deadline(started + 0.12):
-            budgeted_http_call(session, "get", url=f"http://127.0.0.1:{server.server_port}", timeout=1)
+            budgeted_http_call(session, "get", url=f"http://127.0.0.1:{server.server_port}", timeout=1, max_body_bytes=body_limit)
         elapsed = time.monotonic() - started
         assert elapsed < CALLER_RETURN_CEILING_SECONDS
         assert stopped.wait(2)

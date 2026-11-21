@@ -57,6 +57,14 @@ class CameraChannel:
         return int(self.local_index)
 
 
+def _local_index(value: object) -> str | None:
+    if type(value) is int and 0 <= value <= 999_999:
+        return str(value)
+    if isinstance(value, str) and _INDEX.fullmatch(value):
+        return value
+    return None
+
+
 def _channels(data: Mapping[str, Any]) -> tuple[CameraChannel, ...]:
     rows = data.get("resourceInfos", ())
     if not isinstance(rows, (list, tuple)):
@@ -68,10 +76,8 @@ def _channels(data: Mapping[str, Any]) -> tuple[CameraChannel, ...]:
         resource = row.get("resourceIdentifier")
         if not isinstance(resource, str) or not _VIDEO.fullmatch(resource):
             continue
-        index = row.get("localIndex")
-        if type(index) is int and index >= 0:
-            index = str(index)
-        if not isinstance(index, str):
+        index = _local_index(row.get("localIndex"))
+        if index is None:
             raise CameraChannelError("invalid")
         channel = CameraChannel(resource, index)
         if index in found and found[index] != channel:
@@ -158,20 +164,16 @@ def notification_camera_channel(
         or ext.get("channel_type") not in (1, "1")
     ):
         return None
-    index = ext.get("channel_no")
-    if type(index) is int:
-        index = str(index)
-    if not isinstance(index, str):
+    index = _local_index(ext.get("channel_no"))
+    if index is None:
         return None
     return next((c for c in camera_channels(data) if c.local_index == index), None)
 
 
 def alarm_camera_channel(data: Mapping[str, Any], alarm: Mapping[str, Any]) -> CameraChannel | None:
     """Resolve the explicit channel of a normalized alarm, never its list position."""
-    index = alarm.get("channel")
-    if type(index) is int:
-        index = str(index)
-    if not isinstance(index, str):
+    index = _local_index(alarm.get("channel"))
+    if index is None:
         return None
     return next((c for c in camera_channels(data) if c.local_index == index), None)
 

@@ -35,6 +35,7 @@ See the [2.5.0 release notes](release-2.5.0.md) for intercom APIs and compatibil
 - [Python client usage](python-api.md)
 - [Command-line guide](cli.md)
 - [Channel-99 push transport and migration](channel99.md)
+- [Authentication, MFA and login recovery](auth/login-recovery.md)
 - [Persisted installation identities (2.1.0+)](auth/persisted-client-identity.md)
 - [Media paths and their requirements](media.md)
 - [Saving images and finite clips](media-saving.md)

@@ -5,11 +5,87 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+### Added
+
 - Add immutable reported camera channels, app-backed point routing, explicit
   notification-channel normalization and strict batch image-channel selection.
   Keep routing/framing out of Home Assistant adapters, with no implicit I/O,
   background consumers, guessed RTSP paths or last-lens image fallback. Existing
   positional image APIs remain compatible. See [camera channels](docs/camera-channels.md).
+
+- Local PTZ over the command port: `HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID`
+  (`0x00030203`), `hcnetsdk_ptz_control_command_port_template`,
+  `HcNetSdkPurePythonClient.ptz_control` and `lan ptz up|down|left|right`. The body
+  tail is channel, signed command and speed; a stop is sent as `-(command + 1)`.
+  Observed on a CS-C6N-R101-1G2WF. The CLI bounds the run time and always sends
+  the stop; an acknowledgment does not establish that the camera moved. The
+  duration counts from when the start frame is written, and a late or lost start
+  acknowledgment does not delay the stop: `ptz_control` and `execute_template`
+  take `on_sent` and `ack_timeout` for this, plus `deadline` to bound a whole
+  call. Each CLI stop attempt is bounded by `--timeout`.
+
+### Fixed
+
+- Enforce the 1 MiB CAPTCHA decoded-body limit during HTTP streaming, stopping
+  on the first excess chunk instead of buffering against the shared 8 MiB
+  bootstrap cap. Other scoped requests keep their 8 MiB limit. This is response
+  limit hardening, not behavior-neutral cleanup; no retries or delivery are added.
+- Explain when no usable bound phone is reported for SMS/phone verification,
+  without sending a message or silently switching to email.
+- Revalidate retained MFA delivery selections after channel discovery refreshes,
+  blocking withdrawn methods before login, push migration or message delivery.
+- Reject changed or missing saved channel-99 feature identities during CAPTCHA
+  reauthentication before replacing credentials or persisting push state.
+
+### Added
+
+- Human-completed image CAPTCHA recovery for login and MFA delivery requests,
+  with ephemeral context-bound handles, explicit cancellation, bounded image
+  fetches and CLI prompts. No automatic solving or replay after failure.
+- Explicit regional/business MFA channel discovery. Server-advertised voice,
+  WhatsApp and Zalo require a usable phone and current-region policy before
+  selection; preserve the app's separate delivery/login channel mapping.
+
+### Fixed
+
+- Do not block reported MFA email/SMS contacts merely because a login challenge
+  also advertises terminal/security verification alternatives. Use the app's
+  channel-aware unlogin code-request API for metadata-backed contacts, preserve
+  the metadata-free legacy path, and stop on request-side CAPTCHA challenges.
+  Keep token-only recovery app-required; no temporary token is persisted.
+
+- Use the app-compatible RSA-wrapped password on `login/v6`; distinguish
+  incorrect credentials (`1226`) from public-key, system-clock and lockout errors.
+  Key fetch/encryption failures no longer silently downgrade to v5. Explicit
+  `EzvizClient(..., login_api="v5")` remains for known legacy regions. Fixes #401.
+- Preserve MFA codes as strings, including leading zeros and `000000`, and
+  accept explicitly selected SMS/email channels. Separate challenge, request,
+  submission and explicit resend; never automatically resend during submission.
+  Contact metadata stays in memory, not exported tokens. See
+  [authentication and recovery](docs/auth/login-recovery.md) for compatibility
+  changes, stable error reasons and app-required recovery flows.
+
+- Validate MFA channel/contact selections atomically and report code-request
+  acceptance only for the active contact. Changed server contact metadata does
+  not automatically resend a code.
+
+### Changed
+
+- Share login/push-migration authentication preflight while preserving intentional
+  web-to-Android identity replacement. Keep immutable regional channel grants
+  separate from ephemeral contacts/request receipts; use typed CAPTCHA contexts
+  and named forward-only CLI challenge stages with the same image/OTP limits.
+- Harden channel discovery, CAPTCHA and code requests with one-attempt HTTP
+  cleanup/redaction and total deadlines including token-lock wait and response
+  processing. Reject HTTP redirects without following them; no new retries or
+  message delivery are introduced. See the authentication guide for exception
+  compatibility and deadline semantics.
+
+- Share CLI verification handling between account login and push migration,
+  separate challenge actions from side-effect-free login error classification,
+  use a bounded regional redirect loop, and reuse static error/key lookup tables.
+  Request limits, RSA/key refresh behavior and public authentication options remain
+  unchanged; no key caching or automatic retries are added.
 
 ## v2.5.1 - 2026-11-16
 

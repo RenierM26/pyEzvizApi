@@ -161,3 +161,11 @@ def test_capture_default_and_explicit_channel_are_separate():
     assert capture_channel_number(data(), "Video_1:2") == 2
     with pytest.raises(CameraChannelError):
         capture_channel_number(data(), "Video_2:3")
+
+
+def test_oversized_numeric_channel_is_invalid():
+    data = {"resourceInfos": [{"resourceIdentifier": "Video_1", "localIndex": 10**5000}]}
+    assert camera_channels(data) == ()
+    with pytest.raises(CameraChannelError) as caught:
+        resolve_camera_channel(data, "Video_1:1")
+    assert caught.value.reason == "invalid"

@@ -33,23 +33,23 @@ relationship was established in this trace; it does not mean unsupported.
 | 11 | WIFI | Unverified. |
 | 12 | WIFI_MARKETING | Unverified. |
 | 13 | WIFI_LIGHT | Unverified; HA checks for the switch entry. |
-| 14 | PLUG | Unverified. |
-| 21 | SLEEP | HA: `62` Sleep. |
+| 14 | PLUG | App: home-card toggle requires a non-null switch state; updates cached state on success. No numeric capability gate established for this handler. |
+| 21 | SLEEP | App: home settings menu requires `62 = 1`, online status and sleep permission for a shared device. |
 | 22 | SOUND | App: doorbell microphone setting requires `63 = 1` and online. |
 | 23 | BABY_CARE | Unverified. |
 | 24 | LOGO | Unverified; do not equate with SDK switch 702. |
 | 25 | MOBILE_TRACKING | HA: `73` IntelligentTrack; distinct from switches 650 and 701. |
 | 26 | CHANNELOFFLINE | HA: `70` ChannelOffline. |
-| 29 | ALL_DAY_VIDEO | HA: `88` FullDayRecord; app storage UI reads switch 29. |
+| 29 | ALL_DAY_VIDEO | App: normal-disk storage view uses `88 = 1`; switch on means all-day recording, off means activity recording. |
 | 32 | AUTO_SLEEP | HA: `144` AutoSleep. |
-| 34 | ROAMING_STATUS | App operator settings read this state; specific support key unverified. |
-| 35 | DEVICE_4G | App operator settings read this state; specific support key unverified. |
+| 34 | ROAMING_STATUS | App operator settings read and change this state via a dedicated presenter action; specific support key unverified. |
+| 35 | DEVICE_4G | App operator settings read and change this state via a dedicated presenter action; specific support key unverified. |
 | 37 | ALARM_REMIND_MODE | Unverified. |
 | 39 | OUTDOOR_RINGING_SOUND | App: doorbell requires `164 = 1` BellSet and online. |
-| 40 | INTELLIGENT_PQ_SWITCH | Unverified predicate; app has IntelligentPQSwitch capability `366`. Not capability key 40 (privacy). |
+| 40 | INTELLIGENT_PQ_SWITCH | App settings toggle this switch using the selected camera channel, or channel 1 when none is selected. The app defines IntelligentPQSwitch capability `366`, but the display predicate was not established. |
 | 41 | DEVICE_HUMAN_RELATE_LIGHT | App: LightSettingActivity selects this ID when `297 = 3`. |
 | 101 | DOORBELL_TALK | App: `101 = 1` and online gate the chime calling UI, but that UI reads calling state from alarm no-disturb data. Do not assume it writes switch 101. |
-| 200 | HUMAN_INTELLIGENT_DETECTION | App reads this state in DetectionPeopleSettingActivity; sensitivity adjustment has its own gate. Switch capability predicate unverified. |
+| 200 | HUMAN_INTELLIGENT_DETECTION | App sends switch 200 with the selected channel in DetectionPeopleSettingActivity. Its sensitivity controls separately require `61 = 1` and detection on; that is not the gate for switch 200 itself. |
 | 301 | LIGHT_FLICKER | App: DetectionAlertActivity uses `301 > 0` and switch state for its summary. HA associates `96` ActiveDefense; the checks are not equivalent. |
 | 303 | ALARM_LIGHT | App: LightSettingActivity selects this ID when `297 = 2`; `113` AlarmLight exists but is not the selector in this branch. |
 | 305 | ALARM_LIGHT_RELEVANCE | App: LightSettingActivity selects this ID when `297 = 1`. |
@@ -71,6 +71,18 @@ relationship was established in this trace; it does not mean unsupported.
 | 617 | DISTORTION_CORRECTION | HA: `490` DistortionCorrection. Not in the traced Android enum. |
 | 702 | LOGO_WATERMARK | HA: switch-entry presence. SDK lists capability `632` LogoWatermark separately; Android switch gate unverified. |
 
+## Other capabilities used by these screens
+
+| Key | Verified app use |
+| ---: | --- |
+| 61 | Sensitivity adjustment in the people-detection screen; does not replace switch 200. |
+| 219 | Stop-recording support. One of the alternatives in the player’s local record-mode eligibility check. |
+| 615 | Partial-area recording support. Another alternative in that player check. |
+
+`PlayDataInfo.isLocalSupportChangeRecordMode` checks for at least one disk,
+at least one of `88`, `219`, or `615` equal to 1, and acceptable disk status.
+This broader player predicate is not the storage screen’s switch-29 gate.
+
 ## Source trail
 
 - Android: `com.ezviz.devicemgr.model.filter.DeviceSwitchType` (wire IDs, not
@@ -79,7 +91,8 @@ relationship was established in this trace; it does not mean unsupported.
 - Android: `DoorBellSettingActivity`, `ChimeSettingActivity`,
   `CameraSettingActivity`, `DetectionAlertActivity`, `LightSettingActivity`,
   `DeviceSettingActivity`, `BasestationDetailAdapter` and
-  `PlayDataInfo` (state reads and contextual gates).
+  `PlayDataInfo`, `ResourceModel.switchPlug`, `ResourceSettingMenuDialog.initSleepSwitch`,
+  `StorageStateActivity` and `DetectionPeopleSettingActivity` (state reads and contextual gates).
 - SDK: [constants](../pyezvizapi/constants.py), especially `DeviceSwitchType`
   and `SupportExt`. HA associations come from the companion
   `ha-ezviz` switch definitions and are not vendor rules.

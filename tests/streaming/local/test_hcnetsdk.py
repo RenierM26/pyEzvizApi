@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 import errno
 import hashlib
@@ -8907,3 +8908,53 @@ def test_legacy_osd_visibility_round_trip(monkeypatch):
     assert len(writes) == 1
     assert writes[0].command_id == 0x110011
     assert writes[0].body_tail == b"\0\0\0\1" + payload
+
+
+def test_camera_parameter_writes_cannot_interleave(monkeypatch):
+    client = HcNetSdkPurePythonClient(HcNetSdkLanEndpoint("CAM123", "192.0.2.10"), "password")
+    raw = (152).to_bytes(4, "big") + bytes(148)
+    first_write = Event()
+    second_attempt = Event()
+    release_first = Event()
+    reads: list[bytes] = []
+
+    def read():
+        reads.append(raw)
+        return ezviz_lan_camera_param_config(raw)
+
+    def write(template):
+        nonlocal raw
+        if not first_write.is_set():
+            first_write.set()
+            assert release_first.wait(5)
+        raw = template.body_tail
+
+    class ObservedLock:
+        def __init__(self):
+            self.lock = client._settings_lock  # noqa: SLF001
+            self.entries = 0
+
+        def __enter__(self):
+            self.entries += 1
+            if self.entries == 2:
+                second_attempt.set()
+            self.lock.acquire()
+
+        def __exit__(self, *args):
+            self.lock.release()
+
+    monkeypatch.setattr(client, "_settings_lock", ObservedLock())
+    monkeypatch.setattr(client, "camera_param_config", read)
+    monkeypatch.setattr(client, "execute_template", write)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(client.set_camera_wdr, True)
+        try:
+            assert first_write.wait(5)
+            second = pool.submit(client.set_camera_mirror_mode, 3)
+            assert second_attempt.wait(5)
+            assert len(reads) == 1
+        finally:
+            release_first.set()
+        assert first.result(timeout=5).wdr_enabled == 1
+        assert second.result(timeout=5).wdr_enabled == 1
+    assert raw[118] == 3

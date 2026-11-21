@@ -145,7 +145,11 @@ Use `lan wdr enable` or `lan wdr disable` with the same connection options.
 The SDK method `set_camera_wdr(enabled)` requires the native 152-byte layout
 and a binary starting value. It preserves backlight mode and the other bytes
 in the outgoing configuration, sends at most one write, and verifies the full
-configuration by reading back. Avoid concurrent imaging configuration changes.
+configuration by reading back. Native setting writes through a single SDK
+client are serialized from the initial read through verification. This does
+not coordinate different clients or protect a service-switch payload that
+the caller read separately. Avoid concurrent configuration changes from
+another client.
 If verification fails, read status before retrying. Writes were verified on
 an H9c; other models are unverified.
 

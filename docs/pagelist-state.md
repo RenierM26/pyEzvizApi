@@ -102,46 +102,176 @@ control without tracing the actual write payload, scope, and capability check.
 
 ### Follow-up trace: recording, indicator, speaker, and WDR
 
-- **Recording:** Android's storage screen changes numbered switch 29 for
-  all-day versus activity recording, under the disk and capability gates in
-  the [switch matrix](device-switches.md). Separately, the player reads the
-  selected resource's `RecordStorage.RecordMode.schema.properties.recordMode.enum`
-  to check for `preRolling` support. This is a schema check, not proof of a
-  write route or an alias for `STATUS.optionals.Record_Mode`.
-- **Indicator:** Android's daylight-mode picker reads `IndicatorLight.mode`
-  and requires `331 = 1`, a reported mode other than the missing sentinel
-  `-1`, and switch 3 on. The picker sends channel 1, key `IndicatorLight`,
-  and a JSON string containing `enable: 1` and the selected numeric `mode`
-  through the same key/value route exposed by `set_device_key_value`.
-  There is no dedicated SDK mode setter. This does not establish a writer
-  for the separate IoT `IndicatorLightCfg` property.
-- **Speaker:** The fixture's `SpeakerConfig` contains `RingSwitch`,
-  `RingIndex`, `IntelligentSwitch`, and `IntelligentIndex`, all reported as
-  `-1` in the observed records. This is not volume state. Neither the
-  LAN speaker-volume setter nor the cloud volume helpers establish a writer
-  for this object. The reader, setter, and capability gate remain unmapped.
-- **WDR:** Cloud switch 604 has an HA route gated by `273` and switch
-  presence. Native LAN WDR updates a camera configuration structure.
-  Neither route establishes how to write the separate pagelist feature
-  `Video.ImageBacklight.WDR` or which models use it interchangeably.
+The retained Android 7.4.1.0421 asset split contains the React Native
+`RevisionSetting` bundle (version `5.0.0.22639082`); the Java paths below
+were checked in the retained 7.6.1 decompile. These are static traces, not
+live device tests. Channel numbers on legacy calls and IoT local indexes
+are separate namespaces; a request scope does not prove independent lens state.
 
-Sources: [inventory assembly](../pyezvizapi/cloud/operations/devices.py),
-[record model](../pyezvizapi/models.py), [feature readers](../pyezvizapi/devices/features.py),
-[cloud controls](../pyezvizapi/cloud/operations/controls.py), the
-[pagelist fixture](../tests/fixtures/page_list_response.json), and the retained
-Android trace and companion definitions identified in the [switch reference](device-switches.md).
+Two SDK transports already cover the traced cloud writes:
+
+- **Key/value:** `set_device_key_value(serial, channel, key, value)` sends
+  `PUT /v3/devconfig/v1/keyValue/{serial}/{channel}/op` with query parameters
+  `key` and `value`. Pass a serialized JSON string for these objects. The
+  generic `get_dev_config` sends GET with `key` on the same path; that is not
+  evidence that a particular screen reads that key live.
+- **IoT:** `get_device_feature_value` issues GET and `set_iot_feature` issues
+  PUT to `/v3/iot-feature/feature/{serial}/{resource}/{localIndex}/{domain}/{property}`.
+  The app reads `data` from GET and sends the JSON body `{"value": {...}}`
+  for these PUTs. The SDK sends the body supplied by the caller, so include
+  the envelope and pass the local index explicitly, especially for `global/0`.
+  Neither transport enforces these features' UI gates.
+
+#### Recording: numeric mode, IoT mode, and switch 29
+
+- **`STATUS.optionals.Record_Mode`:** The revised SD-card screen reads
+  `statusInfo.optionals.Record_Mode` as an object or JSON string and uses
+  its numeric `mode`. `recordModeView.js` writes key `Record_Mode` with
+  `{"mode": N}` through the query-based key/value route at the screen's
+  `base.channelNo` (initialized to 1), not at an IoT resource index. The
+  parent requires a working disk (`diskState` contains `0`) and support
+  for at least one of `88`, `219`, or `793` via the bundle's
+  `getBoolSupport`. The key/value branch uses `793` first, otherwise `219`. With `219`, the choices are event `0`,
+  all-day `1`, and stop `2`. With `793`, its comma-separated tokens
+  `1`, `2`, and `4` advertise event `0`, all-day `1`, and AOV `4`,
+  respectively. If `687` contains `8` per the app's string check,
+  battery work modes `3` and `4` disable event, and all-day/AOV require
+  work modes `2`/`7` respectively. An enabled advertised
+  `Video/1/BatCustomSpecial/TimeLapseMode` also disables these choices.
+  The fixture only reports numeric mode `0`; the other values come from
+  the app picker. There is no dedicated SDK recording-mode helper.
+- **`FEATURE_INFO.1.Video.RecordStorage.RecordMode`:** The revised SD-card
+  screen reads/writes `Video/1/RecordStorage/RecordMode` via IoT. It matches
+  the product profile's resource, index, domain, and property schema and
+  requires `schema.properties.recordMode.enum` to include `preRolling`
+  for the pre-roll control. GET reads `recordMode` and
+  `preRecordParams.fps` (UI default 2). The toggle copies the last
+  fetched object and replaces `recordMode` with `preRolling` or `event`.
+  Enabling is blocked in battery saving mode `3`; the first-enable
+  explainer is a separate UI step. The 2/4 fps picker also requires the
+  profile's `preRecordParams` schema field and pre-roll on; it copies
+  the outer object and replaces `preRecordParams` with `{"fps": 2}` or
+  `{"fps": 4}`. A separate recording enhancement control reads the
+  same route when `775 = 1`. It additionally requires the page's
+  record-mode gate and event mode (with `219` or `615`, numeric mode
+  `0` or `3`; otherwise, with `88`, switch 29 off). It reads
+  `eventRecordParams.suppleRecordEnabled` and `suppleRecordStorage`
+  and sends `{"value":{"recordMode":"event","eventRecordParams":{"suppleRecordEnabled":<bool>}}}`;
+  it does not send the storage count. The Java player's separate
+  `supportStreamStateChange` reads the current playback resource/local
+  index's schema for `preRolling`; it is not a write. SDK generic IoT
+  read/write exists; no dedicated helper implements either settings flow.
+- **Binary alternative:** When neither numeric-mode branch applies, the
+  revised screen uses switch 29 with `88`: on is all-day, off is event
+  recording. Its shared switch action sends
+  `PUT /v3/devices/{serial}/{channel}/{enable}/29/switchStatus`, with
+  channel 0 for owned devices and 1 for shared devices as classified by
+  the bundle. Java `StorageStateActivity` instead requires disk support
+  (`4 != 0`), normal disk state, and `88 = 1`; it writes
+  `PUT /v3/devices/{serial}/switch` with query parameters
+  `channelNo=1`, `enable=0|1`, and `switchType=29` (SDK `device_switch`).
+  HA requires the `88` key and switch-row presence with SDK
+  `switch_status` (default channel 0, v3 path and legacy POST fallback).
+  The Java player's broader `isLocalSupportChangeRecordMode` predicate
+  (disk count > 0, one of `88/219/615 = 1`, disk state containing `0`)
+  is not the switch-29 gate or a LAN write. SDK `record_config_v30` is a
+  separate native recording-config read, not a setter for either named mode.
+
+#### Indicator: daylight picker and global night mode
+
+- **`STATUS.optionals.IndicatorLight`:** Java
+  `DeviceSettingActivity` parses `mode` from the optionals JSON. The
+  picker requires `331 = 1`, mode not `-1`, and switch 3 on.
+  It writes channel 1 via `set_device_key_value`, key `IndicatorLight`,
+  value `{"enable":1,"mode":N}` (`0` daytime only, `1` always on).
+  No dedicated SDK mode setter; `switch_device_state_led` is the
+  separate binary switch 3 control.
+- **`FEATURE_INFO.0.global.IndicatorLight.IndicatorLightCfg`:** In
+  `lightSettingViewModel.js`, the ordinary status-light branch requires
+  switch 3 present and on, no `242` doorbell-indicator support, no
+  CatEye category, and for DB2C only, the app's doorbell-online check.
+  The night-mode row also requires the product profile function point
+  `global/0/IndicatorLight/IndicatorLightCfg`. The app seeds from cached
+  feature state, then GETs that exact property; the toggle uses the
+  object's `enabled` and PUTs `{"value":{"enabled":<bool>,"mode":"nightMode"}}`.
+  It sends `nightMode` even when disabling, not `lightKeepOn` as seen
+  in the fixture. This is a device-global IoT write, not the channel-1
+  daylight key or the separate doorbell/intercom light control. The SDK
+  has the generic IoT reader/writer but no dedicated night-mode helper.
+
+#### Speaker configuration
+
+`STATUS.optionals.SpeakerConfig` is a per-device pagelist optionals
+string with `RingSwitch`, `RingIndex`, `IntelligentSwitch`, and
+`IntelligentIndex` all `-1` in the fixture. The raw optionals are
+available through the SDK inventory, but no setting-specific app read,
+write payload, write scope, or feature gate was identified in the
+retained Java and bundled React Native settings. Do not treat `-1` as
+off or use the generic key/value route on this basis.
+
+Existing controls are for different settings. The app's
+`soundSelect.js` reads/writes `device_bell` with `Type`, `Volume`,
+and `CustomRingIndex`, not `SpeakerConfig.RingIndex`. The SDK's cloud
+audio helpers use the gated `ChimeMusic` / `CustomVoice_Volume` contracts
+listed above. Native `audioout_volume` (3237, default channel 1) and
+`set_audio_output_volume` (3238, fixed channel 1, integer 0–100, expected
+68-byte layout and read-back) address only `NET_DVR_AUDIOOUT_VOLUME`.
+No dedicated or verified generic setter for `SpeakerConfig` itself was found.
+
+#### WDR: IoT level, cloud switch, and LAN byte
+
+- **`FEATURE_INFO.1.Video.ImageBacklight.WDR`:**
+  The graphics view model adds WDR only for owned devices.
+  `graphicSettingDynamicVM.js` requires `getBoolSupport(273)` (value
+  2 changes the label to digital WDR) and the product profile function
+  point `Video/1/ImageBacklight/WDR`. It GETs that property and reads
+  `hdrSwitchEnabled` (`open` means on) and `WDRLevel1`. Once loaded,
+  the toggle sends both fields, preserving the level and changing
+  `hdrSwitchEnabled` to `open` or `close`. The level slider is visible
+  only when on (0–100, step 10); the PUT sends
+  `{"value":{"hdrSwitchEnabled":"open","WDRLevel1":<level>}}`. The SDK
+  has the scoped generic IoT reader/writer, but no dedicated IoT WDR
+  helper or level setter.
+- **Binary alternative:** With `273` but no matching function point,
+  the same app screen reads switch 604 and calls its v3 switch action
+  at channel 0 (the graphics view is owner-only for this row). A connected
+  `HomeKitAccess.HomeKitAccessParam.accessStatus` blocks that fallback
+  action, not the traced IoT branch. An IoT read failure shows retry;
+  it does not select switch 604. HA independently requires the `273` key
+  and switch-row presence and uses the default SDK channel 0.
+- **Native LAN alternative:** The app's `EZRNLanDevModule` requires a
+  LAN device/session and a readable camera parameter struct; it uses
+  HCNetSDK 1067/1068 with SDK channel selector `-1` and updates both
+  `byWDREnabled` and `byBacklightMode`. The SDK's executable
+  `camera_param_config` and `set_camera_wdr` (also `lan wdr`) use the
+  default camera configuration: read exposed as channel 1, write
+  dispatch `0x111095` without a channel argument. The setter accepts
+  only a boolean and requires the 152-byte layout and a starting byte
+  of 0 or 1 at offset 52. It preserves other bytes, including backlight
+  mode and WDR levels, and checks the full read-back. This native gate
+  is not cloud capability `273`, and neither this LAN path nor switch
+  604 establishes synchronization with the IoT property.
+
+Bundle source anchors: `pages/storage/SDCard/{sdCardList,recordModeView,recordEnhance}.js`,
+`pages/light/lightSettingViewModel.js`,
+`pages/graphic/viewModels/graphicSettingDynamicVM.js`,
+`actions/{baseAction,IOTFeatureAction}.js`, and `custom/deviceUtils.js`.
+SDK references: [inventory assembly](../pyezvizapi/cloud/operations/devices.py),
+[cloud controls](../pyezvizapi/cloud/operations/controls.py),
+[native configuration](../pyezvizapi/streaming/local/hcnetsdk/api.py),
+and the [pagelist fixture](../tests/fixtures/page_list_response.json).
 
 ### Fixture coverage: status optionals
 
-- **Mapped above:** `Alarm_AdvancedDetect`, `Alarm_DetectHumanCar`, `Alarm_Light`, `AlgorithmInfo`, `ChimeMusic`, `CustomVoice_Volume`, `NightVision_Model`, `OSD`, `batteryCameraWorkMode`, `device_ICR_DSS`, `display_mode`, `inverse_mode`, `IndicatorLight`.
+- **Mapped above:** `Alarm_AdvancedDetect`, `Alarm_DetectHumanCar`, `Alarm_Light`, `AlgorithmInfo`, `ChimeMusic`, `CustomVoice_Volume`, `NightVision_Model`, `OSD`, `Record_Mode`, `batteryCameraWorkMode`, `device_ICR_DSS`, `device_bell`, `display_mode`, `inverse_mode`, `IndicatorLight`.
 - **Reported telemetry or metadata; no setter inferred:** `4G_Info`, `Battery_WorkStatus`, `DB_Chime_ConnInfo`, `OnlineStatus`, `Route_LinkageStatus`, `StorageFirstRecordTime`, `cloudChannelList`, `diskCapacity`, `diskCid`, `diskHealth`, `hfullViewURL`, `kms_version`, `lastUpgradeTime`, `latestUnbandTime`, `latestUnbindTime`, `networkingMode`, `powerRemaining`, `powerStatus`, `powerType`, `superState`, `updateCode`, `updateProcessExtend`, `wanIp`.
-- **Unmapped setting or ambiguous field:** `Alarm_Interval`, `Auto_night_vision`, `BodyDetectTimeInterval`, `CustomVoice`, `ICR`, `OneClickMute`, `PresetEffect`, `ROI`, `RecordCoverStorage`, `Record_Mode`, `Remind_Way`, `SpeakerConfig`, `Temperature_Threshold`, `daylightSavingTime`, `device_auto_rouse`, `device_bell`, `device_screen_lightness`, `device_screen_overtime`, `device_static_DNS`, `device_video_time`, `device_wifi_mode`, `gesture_remind_type`, `image_para`, `language`, `lightcamera_delay_off`, `preset`, `pri_cover_area`, `returnToPoint`, `sound_detect_type`, `talkMode`, `talk_speaker_volume`, `timeFormat`, `timeZone`, `tzCode`, `video_para`, `voiceIndex`.
+- **Unmapped setting or ambiguous field:** `Alarm_Interval`, `Auto_night_vision`, `BodyDetectTimeInterval`, `CustomVoice`, `ICR`, `OneClickMute`, `PresetEffect`, `ROI`, `RecordCoverStorage`, `Remind_Way`, `SpeakerConfig`, `Temperature_Threshold`, `daylightSavingTime`, `device_auto_rouse`, `device_screen_lightness`, `device_screen_overtime`, `device_static_DNS`, `device_video_time`, `device_wifi_mode`, `gesture_remind_type`, `image_para`, `language`, `lightcamera_delay_off`, `preset`, `pri_cover_area`, `returnToPoint`, `sound_detect_type`, `talkMode`, `talk_speaker_volume`, `timeFormat`, `timeZone`, `tzCode`, `video_para`, `voiceIndex`.
 
 ### Fixture coverage: feature domains
 
-Each row exhausts the property names observed for that resource/domain in the
-fixture. A property is unmapped unless linked to an identified writer above.
-Generic IoT methods alone do not qualify it.
+Each row lists the property names observed for that resource/domain in the
+fixture. Only the properties with a traced writer above are mapped. Generic
+IoT methods alone do not qualify a property.
 
 | Resource/domain | Observed properties |
 | --- | --- |
@@ -166,7 +296,7 @@ Generic IoT methods alone do not qualify it.
 | `Video.HumanDetection` | `HumanDetectionSwitch`, `LongStayTime` |
 | `Video.ImageAdjust` | `MultiCameraColorBalanceSwitch` |
 | `Video.ImageAdjustment` | `WideAngleMode` |
-| `Video.ImageBacklight` | `WDR` |
+| `Video.ImageBacklight` | [`WDR`](#wdr-iot-level-cloud-switch-and-lan-byte) |
 | `Video.ImageEnhance` | `LowLightImageEnhanceCfg` |
 | `Video.ImageExposure` | `AntiBandingParams` |
 | `Video.InfoMgr` | `DeviceLongitudeLatitude` |
@@ -190,7 +320,7 @@ Generic IoT methods alone do not qualify it.
 | `Video.PetInteraction` | `LaserFunnyPetMode`, `PetVoiceBroadcastCfg` |
 | `Video.PowerMgr` | `BatteryDetails` |
 | `Video.RGBLightCtrl` | `RGBLightEnable` |
-| `Video.RecordStorage` | `RecordCompressionParams`, `RecordMode` |
+| `Video.RecordStorage` | `RecordCompressionParams`, [`RecordMode`](#recording-numeric-mode-iot-mode-and-switch-29) |
 | `Video.SensorLight` | `RadarFMCfg` |
 | `Video.SoundSetting` | `MuteEnabled`, `MutePlan`, `RingtonesList`, `SoundPlan` |
 | `Video.SupplementLightMgr` | `ImageSupplementLightEventIntelligenceModeParams`, `ImageSupplementLightModeSwitchParams` |
@@ -208,7 +338,7 @@ Generic IoT methods alone do not qualify it.
 | `global.EZLink` | `LocalLink`, `SceneLink` |
 | `global.EventSubscription` | `DefencePlan` |
 | `global.HumanDetection` | `HumanDetectionParam` |
-| `global.IndicatorLight` | `IndicatorLightCfg` |
+| `global.IndicatorLight` | [`IndicatorLightCfg`](#indicator-daylight-picker-and-global-night-mode) |
 | `global.IntelligentAPP` | `DownloadedAPP`, `DynamicReservedResource` |
 | `global.KeyMgr` | `CardKeyInfo` |
 | `global.LightCtrl` | `Brightness` |

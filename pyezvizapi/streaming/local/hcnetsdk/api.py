@@ -40,20 +40,6 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.asn1 import DerSequence
 
-from pyezvizapi.streaming.local.hcnetsdk.constants import (
-    AUDIO_INPUT_VOLUME_OFFSET,
-    AUDIO_INPUT_WRITE_COMMAND,
-    AUDIO_OUTPUT_VOLUME_OFFSET,
-    AUDIO_OUTPUT_WIRE_SIZE,
-    AUDIO_OUTPUT_WRITE_COMMAND,
-    CAMERA_MIRROR_OFFSET,
-    CAMERA_PARAM_WIRE_SIZE,
-    CAMERA_PARAM_WRITE_COMMAND,
-    LEGACY_PICTURE_OSD_OFFSET,
-    LEGACY_PICTURE_WIRE_SIZE,
-    LEGACY_PICTURE_WRITE_COMMAND,
-    VIDEO_EFFECT_OFFSETS,
-)
 from pyezvizapi.streaming.local.hcnetsdk import protocol as _hcnetsdk_protocol
 from pyezvizapi._shared import resolver as _resolver
 from pyezvizapi._shared.resolver import DEFAULT_RESOLVER, BoundedResolver, ResolverBusy
@@ -4868,6 +4854,21 @@ def hcnetsdk_stdxml_isapi_command_port(  # noqa: PLR0913
     )
 
 
+# Verified write layouts; the legacy OSD field is not the V40 field.
+_CAMERA_PARAM_WRITE_COMMAND = 0x111095
+_CAMERA_PARAM_WIRE_SIZE = 152
+_CAMERA_MIRROR_OFFSET = 0x76
+_VIDEO_EFFECT_OFFSETS = {"brightness": 4, "contrast": 5, "sharpness": 6, "saturation": 7}
+_AUDIO_INPUT_WRITE_COMMAND = 0x113202
+_AUDIO_INPUT_VOLUME_OFFSET = 1
+_AUDIO_OUTPUT_WRITE_COMMAND = 0x113027
+_AUDIO_OUTPUT_WIRE_SIZE = 68
+_AUDIO_OUTPUT_VOLUME_OFFSET = 4
+_LEGACY_PICTURE_WRITE_COMMAND = 0x110011
+_LEGACY_PICTURE_WIRE_SIZE = 0x7B0
+_LEGACY_PICTURE_OSD_OFFSET = 0x78C
+
+
 class HcNetSdkPurePythonClient:
     """Pure command-port HCNetSDK-compatible client with no native SDK library."""
 
@@ -5087,7 +5088,7 @@ class HcNetSdkPurePythonClient:
         self, effect: Literal["brightness", "contrast", "sharpness", "saturation"], level: int
     ) -> EzvizLanCameraParamConfig:
         """Set one default-camera video effect (0-100) and read it back."""
-        offsets = VIDEO_EFFECT_OFFSETS
+        offsets = _VIDEO_EFFECT_OFFSETS
         if effect not in offsets:
             raise PyEzvizError("Unknown camera video effect")
         return self._set_camera_param_byte(offsets[effect], level, 100)
@@ -5098,7 +5099,7 @@ class HcNetSdkPurePythonClient:
 
     def set_camera_mirror_mode(self, mode: int) -> EzvizLanCameraParamConfig:
         """Set the default camera's native mirror mode (0-3) and read it back."""
-        return self._set_camera_param_byte(CAMERA_MIRROR_OFFSET, mode, 3)
+        return self._set_camera_param_byte(_CAMERA_MIRROR_OFFSET, mode, 3)
 
     def _set_camera_param_byte(
         self, offset: int, value: int, maximum: int
@@ -5108,7 +5109,7 @@ class HcNetSdkPurePythonClient:
         with self._settings_lock:
             before = self.camera_param_config()
             # The native 1068 dispatcher uses the complete 152-byte wire structure.
-            wire_size = CAMERA_PARAM_WIRE_SIZE
+            wire_size = _CAMERA_PARAM_WIRE_SIZE
             if len(before.raw) != wire_size or int.from_bytes(before.raw[:4], "big") != wire_size:
                 raise PyEzvizError("Unsupported camera configuration layout for writes")
             if before.raw[offset] > maximum:
@@ -5118,7 +5119,7 @@ class HcNetSdkPurePythonClient:
             payload = bytearray(before.raw)
             payload[offset] = value
             return self._write_verified_config(
-                CAMERA_PARAM_WRITE_COMMAND,
+                _CAMERA_PARAM_WRITE_COMMAND,
                 bytes(payload),
                 self.camera_param_config,
                 "Camera configuration read-back did not match",
@@ -5138,10 +5139,10 @@ class HcNetSdkPurePythonClient:
             before = self.audio_input_param()
             if before.volume == volume:
                 return before
-            offset = AUDIO_INPUT_VOLUME_OFFSET
+            offset = _AUDIO_INPUT_VOLUME_OFFSET
             payload = before.raw[:offset] + bytes([volume]) + before.raw[offset + 1 :]
             return self._write_verified_config(
-                AUDIO_INPUT_WRITE_COMMAND,
+                _AUDIO_INPUT_WRITE_COMMAND,
                 payload,
                 self.audio_input_param,
                 "Microphone configuration read-back did not match",
@@ -5153,17 +5154,17 @@ class HcNetSdkPurePythonClient:
         _validate_lan_audio_volume(volume)
         with self._settings_lock:
             before = self.audioout_volume()
-            wire_size = AUDIO_OUTPUT_WIRE_SIZE
+            wire_size = _AUDIO_OUTPUT_WIRE_SIZE
             if len(before.raw) != wire_size or before.raw[:4] != (wire_size << 16).to_bytes(
                 4, "big"
             ):
                 raise PyEzvizError("Unsupported audio-output configuration layout")
             if before.volume == volume:
                 return before
-            offset = AUDIO_OUTPUT_VOLUME_OFFSET
+            offset = _AUDIO_OUTPUT_VOLUME_OFFSET
             payload = before.raw[:offset] + bytes([volume]) + before.raw[offset + 1 :]
             return self._write_verified_config(
-                AUDIO_OUTPUT_WRITE_COMMAND,
+                _AUDIO_OUTPUT_WRITE_COMMAND,
                 payload,
                 self.audioout_volume,
                 "Speaker configuration read-back did not match",
@@ -5249,10 +5250,10 @@ class HcNetSdkPurePythonClient:
             before = self.picture_config_v30().raw
             if self._legacy_osd_value(before) == visible:
                 return
-            offset = LEGACY_PICTURE_OSD_OFFSET
+            offset = _LEGACY_PICTURE_OSD_OFFSET
             payload = before[:offset] + int(visible).to_bytes(4, "big") + before[offset + 4 :]
             self._write_verified_config(
-                LEGACY_PICTURE_WRITE_COMMAND,
+                _LEGACY_PICTURE_WRITE_COMMAND,
                 payload,
                 self.picture_config_v30,
                 "OSD configuration read-back did not match",
@@ -5261,10 +5262,10 @@ class HcNetSdkPurePythonClient:
 
     @staticmethod
     def _legacy_osd_value(raw: bytes) -> int:
-        wire_size = LEGACY_PICTURE_WIRE_SIZE
+        wire_size = _LEGACY_PICTURE_WIRE_SIZE
         if len(raw) != wire_size or int.from_bytes(raw[:4], "big") != wire_size:
             raise PyEzvizError("Unsupported legacy picture configuration layout")
-        offset = LEGACY_PICTURE_OSD_OFFSET
+        offset = _LEGACY_PICTURE_OSD_OFFSET
         value = int.from_bytes(raw[offset : offset + 4], "big")
         if value not in (0, 1):
             raise PyEzvizError("Device did not report binary OSD visibility")

@@ -8841,6 +8841,7 @@ def test_set_camera_wdr_preserves_configuration(monkeypatch, result):
         ("set_camera_video_effect", ("sharpness", 51), 6),
         ("set_camera_video_effect", ("saturation", 51), 7),
         ("set_camera_day_night_mode", (1,), 72),
+        ("set_camera_mirror_mode", (3,), 118),
     ],
 )
 def test_set_camera_imaging_field(monkeypatch, method, args, offset):
@@ -8857,3 +8858,52 @@ def test_set_camera_imaging_field(monkeypatch, method, args, offset):
     assert getattr(client, method)(*args) == after
     assert len(writes) == 1
     assert writes[0].body_tail == bytes(raw)
+
+
+@pytest.mark.parametrize(
+    ("setter", "getter", "parser", "command", "size", "offset"),
+    [
+        ("set_audio_input_volume", "audio_input_param", ezviz_lan_audio_input_param, 0x113202, 8, 1),
+        ("set_audio_output_volume", "audioout_volume", ezviz_lan_audio_output_volume, 0x113027, 68, 4),
+    ],
+)
+def test_lan_audio_volume_write(monkeypatch, setter, getter, parser, command, size, offset):
+    client = HcNetSdkPurePythonClient(HcNetSdkLanEndpoint("CAM123", "192.0.2.10"), "password")
+    payload = bytearray(size)
+    if getter == "audioout_volume":
+        payload[:2] = size.to_bytes(2, "big")
+    before = parser(payload)
+    payload[offset] = 75
+    after = parser(payload)
+    reads = iter([before, after, after])
+    writes = []
+    monkeypatch.setattr(client, getter, lambda: next(reads))
+    monkeypatch.setattr(client, "execute_template", writes.append)
+    update = getattr(client, setter)
+    with pytest.raises(PyEzvizError, match="0 to 100"):
+        update(True)
+    assert update(75) == after
+    assert update(75) == after
+    assert len(writes) == 1
+    assert writes[0].command_id == command
+    assert writes[0].body_tail == b"\0\0\0\1" + payload
+
+
+def test_legacy_osd_visibility_round_trip(monkeypatch):
+    client = HcNetSdkPurePythonClient(HcNetSdkLanEndpoint("CAM123", "192.0.2.10"), "password")
+    payload = bytearray(1968)
+    payload[:4] = len(payload).to_bytes(4, "big")
+    payload[151] = 1  # The V40 offset has the opposite value.
+    before = ezviz_lan_picture_config(payload)
+    payload[0x78F] = 1
+    after = ezviz_lan_picture_config(payload)
+    reads = iter([before, before, after, after])
+    writes = []
+    monkeypatch.setattr(client, "picture_config_v30", lambda: next(reads))
+    monkeypatch.setattr(client, "execute_template", writes.append)
+    assert not client.osd_visible()
+    client.set_osd_visible(True)
+    client.set_osd_visible(True)
+    assert len(writes) == 1
+    assert writes[0].command_id == 0x110011
+    assert writes[0].body_tail == b"\0\0\0\1" + payload

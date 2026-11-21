@@ -155,6 +155,22 @@ the numeric native mode. Read the current values via `camera_param_config()`.
 The day/night writer preserves the existing schedule and is not the numbered
 cloud IR switch.
 
+SDK callers can also use `set_audio_input_volume(volume)` and
+`set_audio_output_volume(volume)` (integer 0-100). Each updates only its own
+configuration and verifies it by reading back. On the H9c, a change addressed
+to channel 1 was also visible when reading channel 2. These setters are not
+per-lens controls.
+
+For legacy picture configuration, use `osd_visible()` and
+`set_osd_visible(visible)`. These use the legacy wire field rather than the
+V40 picture model's OSD offset. The H9c shares OSD visibility across both
+reported channels; this is not a per-lens control.
+
+`set_camera_mirror_mode(mode)` updates the default camera’s native mirror
+configuration. Modes are numeric (0-3); this does not set the cloud ImageFlip
+property. On H9c the configuration was verified, not the rendered orientation
+or which physical lens changes.
+
 ### lan ptz
 
 Moves the camera over the local command port with the same credentials and

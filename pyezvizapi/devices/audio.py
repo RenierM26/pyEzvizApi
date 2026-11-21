@@ -189,6 +189,33 @@ def set_doorbell_ringtone_tone(
     _write_doorbell_ringtone(client, serial, camera_data, config)
 
 
+def set_sd7_ringtone_tone(
+    client: EzvizClient, serial: str, tone: int, camera_data: dict[str, Any]
+) -> None:
+    """Select a built-in tone on a caller-confirmed SD7 device."""
+    if type(tone) is not int or not 1 <= tone <= 9:
+        raise PyEzvizError("SD7 ringtone tone must be an integer from 1 to 9")
+    config = _doorbell_ringtone_config(camera_data, SupportExtView.from_camera_data(camera_data))
+    config["Type"] = tone
+    _write_doorbell_ringtone(client, serial, camera_data, config)
+
+
+def set_doorbell_ringer_enabled(
+    client: EzvizClient, serial: str, enabled: bool, camera_data: dict[str, Any]
+) -> None:
+    """Apply the capability-649 shortcut: off is volume 0, on is volume 4."""
+    if not isinstance(enabled, bool):
+        raise PyEzvizError("Doorbell ringer state must be boolean")
+    support = SupportExtView.from_camera_data(camera_data)
+    if not support.has("649", ("1",)):
+        raise PyEzvizError("Doorbell does not advertise the ringer shortcut")
+    config = volume_config(camera_data, "device_bell")
+    if config is None or type(config.get("Volume")) is not int or config["Volume"] < 0:
+        raise PyEzvizError("Doorbell does not report a usable ringer volume")
+    config["Volume"] = 4 if enabled else 0
+    _write_doorbell_ringtone(client, serial, camera_data, config)
+
+
 def set_doorbell_custom_ringtone(
     client: EzvizClient, serial: str, voice_id: int, camera_data: dict[str, Any]
 ) -> None:

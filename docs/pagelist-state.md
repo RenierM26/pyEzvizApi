@@ -245,9 +245,12 @@ off or use the generic key/value route on this basis.
 The separate `device_bell` ringtone picker requires capability `241`
 and, on DB2C, the app's doorbell-online check. The standard picker offers
 tones 1–3, 4–5 when `241 = 2`, and custom tone 10 with capability `486`.
-SD7 has a distinct picker. Capability `649` instead gates an on/off
-shortcut that writes volume 0 or 4; that shortcut does not establish
-support for the full slider.
+SD7 has a distinct picker with built-in tones 1–9. Use
+`set_sd7_ringtone_tone` only after identifying an SD7 device; it uses
+the same `device_bell` write and preserves volume and the custom slot.
+Capability `649` independently gates `set_doorbell_ringer_enabled`,
+which writes volume 0 (off) or 4 (on), not the previous volume.
+That shortcut does not establish support for the full slider.
 
 Use `pyezvizapi.devices.audio.set_doorbell_ringtone_volume` for the
 standard picker’s integer range (0–7). Verify model and online eligibility
@@ -255,7 +258,7 @@ before calling it and supply a fresh device record. The helper preserves
 the reported tone and custom slot and uses the query-based key/value
 route. Use `set_doorbell_ringtone_tone` to change the built-in tone while
 preserving the reported volume and custom slot. This helper does not
-select custom tone 10 or implement the SD7 picker. With capability `486 = 1`, use `set_doorbell_custom_ringtone` with
+select custom tone 10 or the SD7-only tones. With capability `486 = 1`, use `set_doorbell_custom_ringtone` with
 a positive voice ID already verified for that doorbell. The app copies
 the selected voice ID into `CustomRingIndex` and writes `Type = 10`.
 The helper preserves volume; it does not list, upload, or audition sounds.

@@ -7,8 +7,10 @@ import pytest
 
 from pyezvizapi.devices.audio import (
     set_doorbell_custom_ringtone,
+    set_doorbell_ringer_enabled,
     set_doorbell_ringtone_tone,
     set_doorbell_ringtone_volume,
+    set_sd7_ringtone_tone,
 )
 from pyezvizapi.exceptions import PyEzvizError
 
@@ -80,3 +82,32 @@ def test_custom_ringtone_selection(flag: int, voice_id: int, accepted: bool) -> 
     assert (serial, channel, key) == ("TEST", 1, "device_bell")
     assert json.loads(payload) == {"Type": 10, "Volume": 4, "CustomRingIndex": voice_id}
     assert config == {"Type": 2, "Volume": 4, "CustomRingIndex": 0}
+
+
+@pytest.mark.parametrize(("enabled", "volume"), [(True, 4), (False, 0)])
+def test_ringer_shortcut_does_not_require_picker_capability(enabled: bool, volume: int) -> None:
+    client = Mock()
+    config = {"Volume": 6, "Type": 3, "CustomRingIndex": 0}
+    data = {"supportExt": {"649": "1"}, "optionals": {"device_bell": config}}
+    set_doorbell_ringer_enabled(client, "TEST", enabled, data)
+    serial, channel, key, payload = client.set_device_key_value.call_args.args
+    assert (serial, channel, key) == ("TEST", 1, "device_bell")
+    assert json.loads(payload) == {**config, "Volume": volume}
+    assert config["Volume"] == 6
+
+
+def test_sd7_picker_allows_tone_nine_and_preserves_other_settings() -> None:
+    client = Mock()
+    config = {"Volume": 6, "Type": 3, "CustomRingIndex": 2}
+    data = {"supportExt": {"241": "1"}, "optionals": {"device_bell": config}}
+    set_sd7_ringtone_tone(client, "TEST", 9, data)
+    assert json.loads(client.set_device_key_value.call_args.args[3]) == {**config, "Type": 9}
+
+
+def test_invalid_settings_do_not_write() -> None:
+    client = Mock()
+    with pytest.raises(PyEzvizError, match="ringer shortcut"):
+        set_doorbell_ringer_enabled(client, "TEST", True, {})
+    with pytest.raises(PyEzvizError, match="1 to 9"):
+        set_sd7_ringtone_tone(client, "TEST", 10, {})
+    client.set_device_key_value.assert_not_called()

@@ -59,7 +59,9 @@ def _aux_end(data: bytes, start: int) -> int:
     return end
 
 
-def parse_image_envelope(data: bytes) -> tuple[ImageRecord, ...] | None:
+def parse_image_envelope(
+    data: bytes, *, preserve_zero_channel: bool = False
+) -> tuple[ImageRecord, ...] | None:
     """Parse encoded records; unknown formats return None, recognized errors fail."""
     if not is_image_envelope(data):
         return None
@@ -107,7 +109,12 @@ def parse_image_envelope(data: bytes) -> tuple[ImageRecord, ...] | None:
         channel = _u(data, cursor + channel_offset, 2)
         records.append(
             ImageRecord(
-                block, channel or None, kind, version, data[cursor:block_start], data[block_end:end]
+                block,
+                channel if preserve_zero_channel else channel or None,
+                kind,
+                version,
+                data[cursor:block_start],
+                data[block_end:end],
             )
         )
         cursor = end
@@ -133,13 +140,14 @@ def decode_image_records(
     *,
     key_mode: ImageKeyMode | str = ImageKeyMode.TEXT,
     key_candidates: Sequence[str] = (),
+    preserve_zero_channel: bool = False,
 ) -> tuple[ImageRecord, ...]:
     """Unpack clear/encrypted app images without guessing keys or storing secrets."""
     try:
         mode = ImageKeyMode(key_mode)
     except ValueError as err:
         raise PyEzvizError("Unsupported image key mode") from err
-    records = parse_image_envelope(image_data)
+    records = parse_image_envelope(image_data, preserve_zero_channel=preserve_zero_channel)
     if records is None:
         if not is_clear_image(image_data) and HIK_ENCRYPTION_HEADER in image_data:
             start = image_data.find(HIK_ENCRYPTION_HEADER)

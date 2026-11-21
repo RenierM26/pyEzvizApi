@@ -40,7 +40,7 @@ def process_channel_images(
     accepted only when the camera has exactly one reported channel. The legacy
     positional/composite API remains available separately for existing callers.
     """
-    records = decode_image_records(image_data, password)
+    records = decode_image_records(image_data, password, preserve_zero_channel=True)
     indexed = any(record.channel_id is not None for record in records)
     result: dict[str, bytes] = {}
     if indexed:
@@ -61,11 +61,16 @@ def decode_image_records(
     *,
     key_mode: ImageKeyMode | str = ImageKeyMode.TEXT,
     key_candidates: Sequence[str] = (),
+    preserve_zero_channel: bool = False,
 ) -> tuple[ImageRecord, ...]:
     """Return ordered, channel-aware decoded images and retained auxiliary data."""
     result: list[ImageRecord] = []
     for record in _decode_image_payload(
-        image_data, password, key_mode=key_mode, key_candidates=key_candidates
+        image_data,
+        password,
+        key_mode=key_mode,
+        key_candidates=key_candidates,
+        preserve_zero_channel=preserve_zero_channel,
     ):
         segments = (
             extract_jpeg_segments(record.image_data)

@@ -6,7 +6,7 @@ from struct import pack
 from PIL import Image
 
 from pyezvizapi.devices.channels import CameraChannel
-from pyezvizapi.devices.images import process_channel_images
+from pyezvizapi.devices.images import decode_image_records, process_channel_images
 
 
 def jpeg(color):
@@ -48,3 +48,13 @@ def test_zero_based_channel_and_foreign_capture_identity():
         process_channel_images(body, None, (channel,), source_channel=CameraChannel("Video_1", "2"))
         == {}
     )
+
+
+def test_zero_is_explicit_in_strict_selection_but_legacy_decode_is_unchanged():
+    zero, one = jpeg("red"), jpeg("blue")
+    channels = (CameraChannel("Video", "0"), CameraChannel("Video_1", "1"))
+    payload = indexed([(1, one), (0, zero)])
+    assert process_channel_images(payload, None, channels) == {"Video:0": zero, "Video_1:1": one}
+    zero_only = indexed([(0, zero)])
+    assert process_channel_images(zero_only, None, channels[1:]) == {}
+    assert decode_image_records(zero_only)[0].channel_id is None

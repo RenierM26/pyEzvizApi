@@ -6,7 +6,6 @@ from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.streaming.cloud.protocol import (
     _decrypt_hikvision_ps_video_packets,
     _MpegPsVideoDecryptState,
-    _whole_header_nal_start,
     decrypt_hikvision_ps_video,
 )
 from pyezvizapi.streaming.media.containers import (
@@ -158,8 +157,6 @@ class LegacyPsVideoTransform:
         if not key:
             raise ValueError("Supply a nonempty media key")
         self._key = key
-        raw_key = key.encode() if isinstance(key, str) else key
-        self._aes_key = raw_key.ljust(16, b"\0")[:16]
         self._buffer = bytearray()
 
     def feed(self, data: bytes) -> bytes:
@@ -175,9 +172,13 @@ class LegacyPsVideoTransform:
             if not _is_video_pes_stream_id(packet.stream_id) or not view[packet.start + 6] & 4:
                 continue
             start = _pes_payload_start(view, packet.start)
-            if start is not None and _whole_header_nal_start(
-                view[start : packet.end], self._aes_key
-            ):
+            if start is None or not view.startswith((_PS_START, b"\0" + _PS_START), start):
+                continue
+            # Use the same validated encrypted-header scanner as buffered playback.
+            header = start - packet.start + (4 if view.startswith(b"\0" + _PS_START, start) else 3)
+            probe = view[packet.start : packet.end]
+            decoded = decrypt_hikvision_ps_video(probe, self._key, nalu_header_size=0)
+            if decoded[header : header + 16] != probe[header : header + 16]:
                 end = packet.start
                 break
         if not end:
@@ -189,4 +190,3 @@ class LegacyPsVideoTransform:
     def close(self) -> None:
         self._buffer.clear()
         self._key = b""
-        self._aes_key = b""

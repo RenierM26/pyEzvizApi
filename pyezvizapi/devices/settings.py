@@ -213,3 +213,46 @@ def set_iot_wdr_level(
     client.set_iot_feature(
         serial, "Video", local_index, "ImageBacklight", "WDR", {"value": payload}
     )
+
+
+def set_mute_plan_enabled(
+    client: EzvizClient, serial: str, enabled: bool, *, channel: CameraChannel
+) -> None:
+    """Toggle a supported mute plan without replacing its schedule.
+
+    Callers must verify that the product profile advertises this property
+    on the selected channel.
+    """
+    _require_bool(enabled)
+    resource, index = channel.resource_identifier, channel.local_index
+    response = client.get_device_feature_value(
+        serial, resource, "SoundSetting", "MutePlan", local_index=index
+    )
+    config = response.get("data")
+    if not isinstance(config, dict) or not isinstance(config.get("plan"), list):
+        raise PyEzvizError("Missing or invalid mute plan schedule")
+    client.set_iot_feature(
+        serial,
+        resource,
+        index,
+        "SoundSetting",
+        "MutePlan",
+        {"value": {**config, "enabled": enabled}},
+    )
+
+
+def set_tracking_zoom_enabled(client: EzvizClient, serial: str, enabled: bool) -> None:
+    """Toggle zoom during tracking on the app's Video/1 route.
+
+    Callers must verify the product profile and that tracking is active.
+    This does not enable tracking itself.
+    """
+    _require_bool(enabled)
+    client.set_iot_feature(
+        serial,
+        "Video",
+        "1",
+        "PTZTrace",
+        "AutoTraceParams",
+        {"value": {"trackZoomEnabled": enabled}},
+    )

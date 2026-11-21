@@ -369,14 +369,14 @@ IoT methods alone do not qualify a property.
 | `Video.PTZManualCtrl` | `HighPrecisionPTZCtrlAbsolute`, `ZoomLevelRange` |
 | `Video.PTZMasterSlaveTrace` | `LinkedTrackingAdvancedCfg` |
 | `Video.PTZPreset` | `AutoCruisingParams` |
-| `Video.PTZTrace` | `AutoTraceParams` |
+| `Video.PTZTrace` | `AutoTraceParams`: `devices.settings.set_tracking_zoom_enabled` writes only `trackZoomEnabled` on Video/1. The app requires the matching product-profile property and active tracking; this does not enable tracking. |
 | `Video.Parking` | `ParkingRuleParams` |
 | `Video.PetInteraction` | `LaserFunnyPetMode`, `PetVoiceBroadcastCfg` |
 | `Video.PowerMgr` | `BatteryDetails` |
 | `Video.RGBLightCtrl` | `RGBLightEnable` |
 | `Video.RecordStorage` | `RecordCompressionParams`, [`RecordMode`](#recording-numeric-mode-iot-mode-and-switch-29) |
 | `Video.SensorLight` | `RadarFMCfg` |
-| `Video.SoundSetting` | `MuteEnabled`, `MutePlan`, `RingtonesList`, `SoundPlan` |
+| `Video.SoundSetting` | `MuteEnabled`, `MutePlan` (toggle via `devices.settings.set_mute_plan_enabled` on a video route advertising the property; fetches and preserves the schedule), `RingtonesList`, `SoundPlan` |
 | `Video.SupplementLightMgr` | `ImageSupplementLightEventIntelligenceModeParams`, `ImageSupplementLightModeSwitchParams` |
 | `Video.SweeperMgr` | `VoiceAssistantCfg` |
 | `Video.SystemMaintenance` | `NetworkStatus` |

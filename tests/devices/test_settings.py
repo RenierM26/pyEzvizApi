@@ -11,7 +11,7 @@ import requests
 
 from pyezvizapi import EzvizClient
 from pyezvizapi.devices import settings
-from pyezvizapi.devices.channels import CameraChannelError
+from pyezvizapi.devices.channels import CameraChannel, CameraChannelError
 from pyezvizapi.exceptions import PyEzvizError
 
 
@@ -377,3 +377,44 @@ def test_rejected_video_iot_request_never_changes_scope_or_route(
     if rejected_method == "PUT":
         expected.append(("PUT", url))
     assert [(request.method, request.url) for request in sent] == expected
+
+
+def test_mute_plan_preserves_schedule_on_selected_resource() -> None:
+    client = Mock()
+    channel = CameraChannel("Video_1", "2")
+    config = {"enabled": False, "plan": [{"day": 1}], "extra": 2}
+    client.get_device_feature_value.return_value = {"data": config}
+    settings.set_mute_plan_enabled(client, "SERIAL", True, channel=channel)
+    client.get_device_feature_value.assert_called_once_with(
+        "SERIAL", "Video_1", "SoundSetting", "MutePlan", local_index="2"
+    )
+    client.set_iot_feature.assert_called_once_with(
+        "SERIAL",
+        "Video_1",
+        "2",
+        "SoundSetting",
+        "MutePlan",
+        {"value": {**config, "enabled": True}},
+    )
+    assert config["enabled"] is False
+
+
+def test_missing_mute_schedule_does_not_write() -> None:
+    client = Mock()
+    client.get_device_feature_value.return_value = {"data": {"enabled": False}}
+    with pytest.raises(PyEzvizError, match="mute plan schedule"):
+        settings.set_mute_plan_enabled(client, "SERIAL", True, channel=CameraChannel("Video", "1"))
+    client.set_iot_feature.assert_not_called()
+
+
+def test_tracking_zoom_only_writes_zoom_field() -> None:
+    client = Mock()
+    settings.set_tracking_zoom_enabled(client, "SERIAL", False)
+    client.set_iot_feature.assert_called_once_with(
+        "SERIAL",
+        "Video",
+        "1",
+        "PTZTrace",
+        "AutoTraceParams",
+        {"value": {"trackZoomEnabled": False}},
+    )

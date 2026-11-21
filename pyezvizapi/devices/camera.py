@@ -52,6 +52,7 @@ class CameraStatus(TypedDict, total=False):
     mac_address: Any
     offline_notify: bool
     last_offline_time: Any
+    supports_local_rtsp: bool
     local_rtsp_port: str
     supported_channels: Any
     battery_level: Any
@@ -414,6 +415,11 @@ class EzvizCamera:
             "mac_address": self.fetch_key(["deviceInfos", "mac"]),
             "offline_notify": bool(self.fetch_key(["deviceInfos", "offlineNotify"])),
             "last_offline_time": self.fetch_key(["deviceInfos", "offlineTime"]),
+            "supports_local_rtsp": (
+                (reported_port := str(self.fetch_key(["CONNECTION", "localRtspPort"]))).isascii()
+                and reported_port.isdecimal()
+                and 0 < int(reported_port.lstrip("0")[:6] or "0") <= 65535
+            ),
             "local_rtsp_port": (
                 "554"
                 if (port := self.fetch_key(["CONNECTION", "localRtspPort"], "554"))

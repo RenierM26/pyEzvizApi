@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from enum import IntEnum
 import hashlib
@@ -343,6 +344,8 @@ class VtmStreamClient:
         self._pending_header = None
         self._read_inactivity_deadline = None
         if sock is not None:
+            with suppress(OSError, AttributeError):
+                sock.shutdown(socket.SHUT_RDWR)
             sock.close()
 
     def send_packet(

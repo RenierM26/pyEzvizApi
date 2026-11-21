@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 import errno
@@ -363,7 +363,7 @@ class AutoMediaStream:
         *,
         limits: CaptureLimits | None = None,
         monotonic: Callable[[], float] = time.monotonic,
-    ) -> Iterator[MediaPacket]:
+    ) -> Generator[MediaPacket, None, None]:
         """Select once, report a local stop reason, and own iterator/transport cleanup."""
         if self._closed or self._started:
             raise PyEzvizError("Automatic stream is closed or already consumed")

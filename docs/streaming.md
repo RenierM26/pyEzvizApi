@@ -693,3 +693,27 @@ decodes without diagnostics, and all 835 video plus 437 AAC packets overlapping
 the official-app export match payloads and source timing. A previously clean
 preflight remains byte-for-byte unchanged. No camera media or keys are included
 in the repository, and this does not measure physical screen/speaker latency.
+
+## Live MPEG-TS for integrations
+
+`CameraStatus.supports_local_rtsp` indicates that the camera reports a valid
+local RTSP port, not that the port is reachable. The legacy
+`local_rtsp_port` field and its default are unchanged.
+
+With FFmpeg installed, an integration can use a synchronous reader:
+
+```python
+from pyezvizapi.streaming.live import open_live_mpegts_stream
+
+with open_live_mpegts_stream(client, serial) as stream:
+    while chunk := stream.read(65536):
+        write_to_viewer(chunk)
+```
+
+Run blocking reads off the event loop. Call `close()` from another thread
+on disconnect or unload. The stream owns the selected transport and FFmpeg,
+not the account client. Source selection follows `AutoMediaStream`; only
+clear MPEG-PS is supported. Encrypted packets and local ECDH/RTP input raise
+`EzvizUnsupportedMediaError`. There is no transport switch once packets
+have been selected. Viewer authentication, HTTP and snapshot policy remain
+the integration's responsibility.

@@ -91,6 +91,7 @@ def test_camera_status_extracts_integration_facing_keys_without_refresh() -> Non
     assert status["offline_notify"] is True
     assert status["last_offline_time"] == "2026-04-26 10:00:00"
     assert status["local_rtsp_port"] == "554"
+    assert status["supports_local_rtsp"] is False
     assert status["supported_channels"] == 2
     assert status["battery_level"] == 87
     assert status["PIR_Status"] == 1

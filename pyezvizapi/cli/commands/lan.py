@@ -34,15 +34,23 @@ _PTZ_DIRECTIONS = {
 _PTZ_MAX_DURATION = 5.0
 _PTZ_STOP_ATTEMPTS = 2
 _PTZ_SPEED_RANGE = range(1, 8)
+_SERVICE_ACTIONS = ("status", "enable", "disable")
 
 
 def add_lan_arguments(subparsers: Any) -> None:
-    """Add discoverable RTSP controls with explicit local credentials."""
+    """Add device controls with explicit local credentials."""
     parser = subparsers.add_parser("lan", help="Local device controls (no account login)")
     commands = parser.add_subparsers(dest="lan_action", required=True)
     rtsp = commands.add_parser("rtsp", help="Read or change the local RTSP service switch")
-    rtsp.add_argument("rtsp_action", choices=("status", "enable", "disable"))
+    rtsp.add_argument("rtsp_action", choices=_SERVICE_ACTIONS)
     _add_endpoint_arguments(rtsp)
+    service = commands.add_parser("service", help="Read or change a named local service switch")
+    service.add_argument("service_name", choices=("hiksdk", "web"))
+    service.add_argument("service_action", choices=_SERVICE_ACTIONS)
+    _add_endpoint_arguments(service)
+    wdr = commands.add_parser("wdr", help="Read local WDR/backlight or change WDR")
+    wdr.add_argument("wdr_action", choices=_SERVICE_ACTIONS)
+    _add_endpoint_arguments(wdr)
     ptz = commands.add_parser("ptz", help="Move the camera for a bounded time, then stop")
     ptz.add_argument("direction", choices=tuple(_PTZ_DIRECTIONS))
     ptz.add_argument(
@@ -69,13 +77,13 @@ def _add_endpoint_arguments(parser: Any) -> None:
     )
 
 
-def _rtsp_value(state: EzvizLanServicesSwitchState) -> int:
+def _service_value(state: EzvizLanServicesSwitchState, service: str) -> int:
     """Reject absent/unknown/malformed switches before any device write."""
     services = state.raw.get("servicesSwitch") if state.raw is not None else None
-    value = services.get("rtsp") if isinstance(services, Mapping) else None
+    value = services.get(service) if isinstance(services, Mapping) else None
     if (type(value) is int and value in (0, 1)) or (isinstance(value, str) and value in ("0", "1")):
         return int(value)
-    raise PyEzvizError("Device does not expose a recognized RTSP service switch")
+    raise PyEzvizError("Device does not expose a recognized service switch")
 
 
 def _local_client(args: argparse.Namespace) -> HcNetSdkPurePythonClient:
@@ -107,7 +115,11 @@ def handle_lan(args: argparse.Namespace) -> int:
     """Dispatch one explicit LAN-only action."""
     if args.lan_action == "ptz":
         return _handle_ptz(args)
-    return _handle_rtsp(args)
+    if args.lan_action == "wdr":
+        return _handle_wdr(args)
+    if args.lan_action == "service":
+        return _handle_service(args, args.service_name, args.service_action)
+    return _handle_service(args, "rtsp", args.rtsp_action)
 
 
 def _ptz_acknowledged(response: HcNetSdkCommandPortControlResponse) -> bool:
@@ -223,8 +235,8 @@ def _handle_ptz(args: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_rtsp(args: argparse.Namespace) -> int:
-    """Read, optionally update RTSP alone, then verify device configuration.
+def _handle_service(args: argparse.Namespace, service: str, action: str) -> int:
+    """Read a named switch, optionally update it, then verify device configuration.
 
     No automatic write retry: firmware can restart services before acknowledging
     a write. A failed write/read-back has an unknown outcome, not proven rollback.
@@ -235,25 +247,30 @@ def _handle_rtsp(args: argparse.Namespace) -> int:
         client = _local_client(args)
         stage = "read"
         before = client.services_switch_state()
-        current = _rtsp_value(before)
-        desired = {"enable": 1, "disable": 0}.get(args.rtsp_action, current)
+        current = _service_value(before, service)
+        desired = {"enable": 1, "disable": 0}.get(action, current)
         if desired != current:
             stage = "write"
             write_attempted = True
-            response = client.services_switch_set(before.raw, rtsp=desired)
+            response = client.services_switch_set(
+                before.raw,
+                hiksdk=desired if service == "hiksdk" else None,
+                web=desired if service == "web" else None,
+                rtsp=desired if service == "rtsp" else None,
+            )
             status = response.json().get("statusCode") if response.succeeded else None
             if type(status) is not int or status != 1:
-                raise PyEzvizError("Device refused the RTSP switch update")
+                raise PyEzvizError("Device refused the service switch update")
             stage = "read-back"
-            current = _rtsp_value(client.services_switch_state())
+            current = _service_value(client.services_switch_state(), service)
             if current != desired:
-                raise PyEzvizError("RTSP configuration read-back did not match")
+                raise PyEzvizError("Service switch read-back did not match")
     except (PyEzvizError, OSError, ValueError) as error:
         # Never expose response bodies, password paths or arbitrary socket errors.
         message = str(error) if type(error) is PyEzvizError else "LAN operation failed"
         # Transport PyEzvizError messages may include device-controlled data too.
         if stage != "arguments":
-            message = "RTSP switch unavailable, refused, or not verified"
+            message = f"{service.upper()} switch unavailable, refused, or not verified"
         print(
             json.dumps(
                 {
@@ -269,9 +286,46 @@ def _handle_rtsp(args: argparse.Namespace) -> int:
         json.dumps(
             {
                 "ok": True,
-                "rtsp": current,
+                service: current,
                 "enabled": current == 1,
                 "changed": write_attempted,
+                "verified": "configuration",
+            }
+        )
+    )
+    return 0
+
+
+def _handle_wdr(args: argparse.Namespace) -> int:
+    """Read imaging fields or apply an explicit WDR change."""
+    stage = "arguments"
+    try:
+        client = _local_client(args)
+        stage = "read"
+        if args.wdr_action == "status":
+            state = client.camera_param_config()
+        else:
+            stage = "update"
+            state = client.set_camera_wdr(args.wdr_action == "enable")
+        wdr_enabled = state.wdr_enabled
+        backlight_mode = state.backlight_mode
+        if wdr_enabled is None and backlight_mode is None:
+            raise PyEzvizError("Device did not return WDR/backlight fields")
+    except (PyEzvizError, OSError, ValueError) as error:
+        message = "WDR/backlight configuration unavailable"
+        if stage == "arguments":
+            message = str(error) if type(error) is PyEzvizError else "LAN operation failed"
+        if stage == "update":
+            message = "WDR update could not be verified; read status before retrying"
+        print(json.dumps({"ok": False, "stage": stage, "message": message}))
+        return 1
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "channel": 1,
+                "wdr_enabled": wdr_enabled,
+                "backlight_mode": backlight_mode,
                 "verified": "configuration",
             }
         )

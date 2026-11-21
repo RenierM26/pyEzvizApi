@@ -106,6 +106,49 @@ The low-level API remains unchanged; consumers own validation, errors and
 read-back. Run these blocking SDK operations off an async event loop. Old flat
 `pyezvizapi.hcnetsdk` imports have been removed; see [compatibility changes](ha-compatibility.md).
 
+### lan service
+
+Read or update a named local service switch with the same endpoint and password
+options as `lan rtsp`. The CLI updates only the requested switch and verifies
+it by reading it back. These are local services, not EZVIZ numbered cloud
+switches.
+
+```bash
+pyezvizapi lan service hiksdk status --host 192.0.2.10 --serial CAMERA_SERIAL \
+  --lan-password-file /private/device-password
+pyezvizapi lan service web disable --host 192.0.2.10 --serial CAMERA_SERIAL \
+  --lan-password-file /private/device-password
+```
+
+Both `web` and `hiksdk` take `status`, `enable` or `disable`. Setting
+`hiksdk` to disabled can close the very command port used for read-back or
+re-enabling. If the port closes, verification can fail with an unknown outcome;
+the CLI does not retry. Use an independent recovery path (such as the EZVIZ app)
+if you intend to disable local SDK access.
+
+### lan wdr
+
+Read channel 1's local WDR and backlight mode without making a change:
+
+```bash
+pyezvizapi lan wdr status --host 192.0.2.10 --serial CAMERA_SERIAL \
+  --lan-password-file /private/device-password
+```
+
+The command uses `HcNetSdkPurePythonClient.camera_param_config()`. It returns the
+firmware's raw `wdr_enabled` and `backlight_mode` values, with `null` for an
+omitted field. It reports an error if neither field is present. A returned field
+does not by itself establish capability support or parity with cloud switch
+604.
+
+Use `lan wdr enable` or `lan wdr disable` with the same connection options.
+The SDK method `set_camera_wdr(enabled)` requires the native 152-byte layout
+and a binary starting value. It preserves backlight mode and the other bytes
+in the outgoing configuration, sends at most one write, and verifies WDR and
+backlight by reading back. Avoid concurrent imaging configuration changes.
+If verification fails, read status before retrying. Writes were verified on
+an H9c; other models are unverified.
+
 ### lan ptz
 
 Moves the camera over the local command port with the same credentials and

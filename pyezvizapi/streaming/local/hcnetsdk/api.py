@@ -5062,6 +5062,31 @@ class HcNetSdkPurePythonClient:
             self.dvr_config(ezviz_lan_video_effect_get_config_request(1, channel))
         )
 
+    def set_camera_wdr(self, enabled: bool) -> EzvizLanCameraParamConfig:
+        """Set WDR on the default camera configuration and verify by reading back."""
+        if not isinstance(enabled, bool):
+            raise PyEzvizError("WDR enabled must be a boolean")
+        before = self.camera_param_config()
+        # The native 1068 dispatcher uses a complete 152-byte wire structure.
+        wire_size = 152
+        if len(before.raw) != wire_size or int.from_bytes(before.raw[:4], "big") != wire_size:
+            raise PyEzvizError("Unsupported camera configuration layout for WDR writes")
+        if before.wdr_enabled not in (0, 1):
+            raise PyEzvizError("Device did not report a binary WDR state")
+        if before.wdr_enabled == int(enabled):
+            return before
+        payload = bytearray(before.raw)
+        payload[HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET] = int(enabled)
+        self.execute_template(
+            HcNetSdkCommandPortControlTemplate(
+                command_id=0x111095, body_tail=bytes(payload), name="SET_CAMERA_PARAM_CFG"
+            )
+        )
+        after = self.camera_param_config()
+        if after.wdr_enabled != int(enabled) or after.backlight_mode != before.backlight_mode:
+            raise PyEzvizError("WDR configuration read-back did not match")
+        return after
+
     def wifi_connect_status(self, channel: int = 0) -> EzvizLanWifiConnectStatus:
         """Read and parse traced ``NET_DVR_WIFI_CONNECT_STATUS`` output."""
         return ezviz_lan_wifi_connect_status(

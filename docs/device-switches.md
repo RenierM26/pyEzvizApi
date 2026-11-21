@@ -110,3 +110,11 @@ This broader player predicate is not the storage screen’s switch-29 gate.
   `ha-ezviz` switch definitions and are not vendor rules.
 
 No live settings were changed to qualify this reference.
+
+## LAN controls
+
+The local command port does not take cloud switch IDs. It exposes named
+`web` and `hiksdk` service settings and a separate channel 1 imaging
+configuration read. See [LAN service controls](cli.md#lan-service) and
+[WDR status](cli.md#lan-wdr). A local WDR read is not evidence that it
+corresponds to cloud switch 604 on every device.

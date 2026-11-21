@@ -531,23 +531,18 @@ COMMAND_PORT_TRACE_BODY_TAIL = b"trace-tail"
 DEVICE_ABILITY_EMPTY_BUFFER = b""
 EXPECTED_TEST_WIFI_SSID_BYTES = b"Test WiFi"
 EXPECTED_EZVIZ_RU_DOMAIN_BYTES = b"api.ezvizru.com"
-EXPECTED_PTZ_ABILITY_XML = (
-    b'<PTZAbility version="2.0"><channelNO>1</channelNO></PTZAbility>'
-)
+EXPECTED_PTZ_ABILITY_XML = b'<PTZAbility version="2.0"><channelNO>1</channelNO></PTZAbility>'
 EXPECTED_AUDIO_VIDEO_COMPRESS_INFO_XML = (
-    b"<AudioVideoCompressInfo><VideoChannelNumber>2</VideoChannelNumber>"
-    b"</AudioVideoCompressInfo>"
+    b"<AudioVideoCompressInfo><VideoChannelNumber>2</VideoChannelNumber></AudioVideoCompressInfo>"
 )
 EXPECTED_IMAGE_DISPLAY_PARAM_ABILITY_XML = (
-    b'<ImageDisplayParamAbility version="2.0"><channelNO>3</channelNO>'
-    b"</ImageDisplayParamAbility>"
+    b'<ImageDisplayParamAbility version="2.0"><channelNO>3</channelNO></ImageDisplayParamAbility>'
 )
 EXPECTED_VIDEO_PIC_ABILITY_XML = (
     b'<VideoPicAbility version="2.0"><channelNO>4</channelNO></VideoPicAbility>'
 )
 EXPECTED_ACCESS_PROTOCOL_ABILITY_XML = (
-    b'<AccessProtocolAbility version="2.0"><channelNO>0xff</channelNO>'
-    b"</AccessProtocolAbility>"
+    b'<AccessProtocolAbility version="2.0"><channelNO>0xff</channelNO></AccessProtocolAbility>'
 )
 SADP_TEST_IPV4_ADDRESS = "192.0.2.10"
 EXPECTED_SADP_LOG_DIR_BUFFER = b"/tmp/sadp/\x00"
@@ -566,9 +561,7 @@ def _record_config_v30_payload() -> bytes:
     payload[8:12] = (1).to_bytes(2, "big") + b"\x02\x00"
     day_3_segment_2 = 36 + (3 * 8 + 2) * 8
     payload[36:44] = bytes([8, 30, 9, 45, 3, 0, 0, 0])
-    payload[day_3_segment_2 : day_3_segment_2 + 8] = bytes(
-        [22, 0, 23, 30, 4, 0, 0, 0]
-    )
+    payload[day_3_segment_2 : day_3_segment_2 + 8] = bytes([22, 0, 23, 30, 4, 0, 0, 0])
     payload[484:488] = (7).to_bytes(4, "big")
     payload[488:492] = (5).to_bytes(4, "big")
     payload[492:496] = (30).to_bytes(4, "big")
@@ -789,11 +782,11 @@ EXPECTED_STRUCTURED_PREVIEW_XML = (
     b"\t<Channel>1</Channel>\n"
     b"\t<Identifier>ident</Identifier>\n"
     b"\t<ReceiverInfo>\n"
-        b"\t\t<NatAddress>192.0.2.10</NatAddress>\n"
+    b"\t\t<NatAddress>192.0.2.10</NatAddress>\n"
     b"\t\t<NatPort>9010</NatPort>\n"
     b"\t\t<UPnPAddress></UPnPAddress>\n"
     b"\t\t<UPnPPort>0</UPnPPort>\n"
-        b"\t\t<InnerAddress>192.0.2.20</InnerAddress>\n"
+    b"\t\t<InnerAddress>192.0.2.20</InnerAddress>\n"
     b"\t\t<InnerPort>9020</InnerPort>\n"
     b"\t\t<StreamType>MAIN</StreamType>\n"
     b"\t</ReceiverInfo>\n"
@@ -1266,26 +1259,10 @@ def test_hcnetsdk_playback_by_time_control_and_stop_shapes() -> None:
     assert HcNetSdkPlaybackControlCommand.RESTART == HCNETSDK_PLAYRESTART == 4
     assert HcNetSdkPlaybackControlCommand.FAST == HCNETSDK_PLAYFAST == 5
     assert HcNetSdkPlaybackControlCommand.SLOW == HCNETSDK_PLAYSLOW == 6
-    assert (
-        HcNetSdkPlaybackControlCommand.START_AUDIO
-        == HCNETSDK_PLAYSTARTAUDIO
-        == 9
-    )
-    assert (
-        HcNetSdkPlaybackControlCommand.STOP_AUDIO
-        == HCNETSDK_PLAYSTOPAUDIO
-        == 10
-    )
-    assert (
-        HcNetSdkPlaybackControlCommand.AUDIO_VOLUME
-        == HCNETSDK_PLAYAUDIOVOLUME
-        == 11
-    )
-    assert (
-        HcNetSdkPlaybackControlCommand.SET_TRANS_TYPE
-        == HCNETSDK_SET_TRANS_TYPE
-        == 32
-    )
+    assert HcNetSdkPlaybackControlCommand.START_AUDIO == HCNETSDK_PLAYSTARTAUDIO == 9
+    assert HcNetSdkPlaybackControlCommand.STOP_AUDIO == HCNETSDK_PLAYSTOPAUDIO == 10
+    assert HcNetSdkPlaybackControlCommand.AUDIO_VOLUME == HCNETSDK_PLAYAUDIOVOLUME == 11
+    assert HcNetSdkPlaybackControlCommand.SET_TRANS_TYPE == HCNETSDK_SET_TRANS_TYPE == 32
     assert HcNetSdkPlaybackControlCommand.PLAY_CONVERT == HCNETSDK_PLAY_CONVERT == 33
     assert condition == HcNetSdkPlayCond(
         channel=1,
@@ -1401,10 +1378,7 @@ def test_hcnetsdk_playback_callback_and_secret_key_shapes() -> None:
 
     assert HCNETSDK_SET_PLAY_DATA_CALLBACK == "NET_DVR_SetPlayDataCallBack"
     assert HCNETSDK_SET_PLAY_DATA_CALLBACK_V40 == "NET_DVR_SetPlayDataCallBack_V40"
-    assert (
-        HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK
-        == "NET_DVR_SetPlaybackResponseCallBack"
-    )
+    assert HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK == "NET_DVR_SetPlaybackResponseCallBack"
     assert HCNETSDK_SET_PLAYBACK_ES_CALLBACK == "NET_DVR_SetPlayBackESCallBack"
     assert HCNETSDK_SET_PLAYBACK_SECRET_KEY == "NET_DVR_SetPlayBackSecretKey"
     assert HCNETSDK_SECRET_KEY_TYPE_AES == 1
@@ -1419,8 +1393,7 @@ def test_hcnetsdk_playback_callback_and_secret_key_shapes() -> None:
         "fPlayDataCallBack": "play_cb",
         "dwUser": 7,
         "callbackSignature": (
-            "void(int playHandle, uint dataType, byte* buffer, "
-            "uint length, uint user)"
+            "void(int playHandle, uint dataType, byte* buffer, uint length, uint user)"
         ),
     }
     assert callback_v40 == HcNetSdkPlayDataCallbackRequest(
@@ -1436,8 +1409,7 @@ def test_hcnetsdk_playback_callback_and_secret_key_shapes() -> None:
         "fPlayDataCallBack_V40": "play_cb_v40",
         "pUser": "ctx",
         "callbackSignature": (
-            "void(int playHandle, int dataType, byte* buffer, "
-            "uint length, void* user)"
+            "void(int playHandle, int dataType, byte* buffer, uint length, void* user)"
         ),
     }
     assert response_callback == HcNetSdkPlaybackCallbackRequest(
@@ -1528,9 +1500,10 @@ def test_hcnetsdk_playback_download_request_shapes() -> None:
         "sSavedFileName": "/tmp/record001.mp4",
         "failureHandle": HCNETSDK_GET_FILE_FAILED,
     }
-    assert name_download.to_native_args_hint(include_buffers=True)[
-        "sDVRFileName"
-    ] == EXPECTED_PLAYBACK_FIND_FILE_NAME
+    assert (
+        name_download.to_native_args_hint(include_buffers=True)["sDVRFileName"]
+        == EXPECTED_PLAYBACK_FIND_FILE_NAME
+    )
     assert time_download == HcNetSdkGetFileByTimeRequest(
         login_id=42,
         channel=1,
@@ -1636,9 +1609,7 @@ def test_sadp_lifecycle_log_and_v40_network_request_shapes() -> None:
     assert SADP_STOP == "SADP_Stop"
     assert SADP_CLEARUP == "SADP_Clearup"
     assert SADP_SEND_INQUIRY == "SADP_SendInquiry"
-    assert sadp_get_last_error_request() == SadpNoArgRequest(
-        api=SADP_GET_LAST_ERROR
-    )
+    assert sadp_get_last_error_request() == SadpNoArgRequest(api=SADP_GET_LAST_ERROR)
     assert sadp_get_sadp_version_request().to_native_args_hint() == {
         "api": SADP_GET_VERSION,
     }
@@ -1869,11 +1840,14 @@ def test_build_encrypted_ezviz_local_sdk_frame_wraps_encrypted_body() -> None:
     assert parsed.header.command == 0x3105
     assert parsed.header.sequence == 19
     assert parsed.header.body_length == 16
-    assert decrypt_ezviz_local_sdk_body_aes_cbc(
-        parsed.body,
-        key="0123456789abcdef",
-        iv="abcdef0123456789",
-    ) == body
+    assert (
+        decrypt_ezviz_local_sdk_body_aes_cbc(
+            parsed.body,
+            key="0123456789abcdef",
+            iv="abcdef0123456789",
+        )
+        == body
+    )
 
 
 def test_build_ezviz_local_sdk_ssl_frame_appends_ciphertext_md5_trailer() -> None:
@@ -1891,15 +1865,18 @@ def test_build_ezviz_local_sdk_ssl_frame_appends_ciphertext_md5_trailer() -> Non
     assert parsed.header.command == 0x2011
     assert parsed.header.sequence == 16
     assert parsed.header.body_length == 16
-    assert parsed.trailer == hashlib.md5(
-        parsed.body, usedforsecurity=False
-    ).hexdigest().encode("ascii")
+    assert parsed.trailer == hashlib.md5(parsed.body, usedforsecurity=False).hexdigest().encode(
+        "ascii"
+    )
     assert len(frame) == 32 + parsed.header.body_length + 32
-    assert decrypt_ezviz_local_sdk_body_aes_cbc(
-        parsed.body,
-        key=LOCAL_SDK_TEST_KEY,
-        iv=LOCAL_SDK_SSL_IV,
-    ) == body
+    assert (
+        decrypt_ezviz_local_sdk_body_aes_cbc(
+            parsed.body,
+            key=LOCAL_SDK_TEST_KEY,
+            iv=LOCAL_SDK_SSL_IV,
+        )
+        == body
+    )
 
 
 def test_ezviz_cas_device_info_derives_local_sdk_iv() -> None:
@@ -1950,11 +1927,14 @@ def test_build_ezviz_cas_encrypted_local_sdk_frame_uses_device_info() -> None:
 
     assert parsed.header.command == EZVIZ_LOCAL_SDK_STREAM_SETUP_COMMAND
     assert parsed.header.sequence == 21
-    assert decrypt_ezviz_local_sdk_body_aes_cbc(
-        parsed.body,
-        key=device_info.key_bytes,
-        iv=device_info.iv_bytes,
-    ) == body.encode()
+    assert (
+        decrypt_ezviz_local_sdk_body_aes_cbc(
+            parsed.body,
+            key=device_info.key_bytes,
+            iv=device_info.iv_bytes,
+        )
+        == body.encode()
+    )
 
 
 def test_build_ezviz_cas_ssl_local_sdk_frame_uses_cas_key_and_md5_trailer() -> None:
@@ -1976,14 +1956,17 @@ def test_build_ezviz_cas_ssl_local_sdk_frame_uses_cas_key_and_md5_trailer() -> N
 
     assert parsed.header.command == EZVIZ_LOCAL_SDK_STREAM_SETUP_COMMAND
     assert parsed.header.sequence == 17
-    assert parsed.trailer == hashlib.md5(
-        parsed.body, usedforsecurity=False
-    ).hexdigest().encode("ascii")
-    assert decrypt_ezviz_local_sdk_body_aes_cbc(
-        parsed.body,
-        key=device_info.key_bytes,
-        iv=LOCAL_SDK_SSL_IV,
-    ) == body.encode()
+    assert parsed.trailer == hashlib.md5(parsed.body, usedforsecurity=False).hexdigest().encode(
+        "ascii"
+    )
+    assert (
+        decrypt_ezviz_local_sdk_body_aes_cbc(
+            parsed.body,
+            key=device_info.key_bytes,
+            iv=LOCAL_SDK_SSL_IV,
+        )
+        == body.encode()
+    )
 
 
 def test_build_ezviz_local_preview_request_body_uses_observed_tag_order() -> None:
@@ -2196,9 +2179,7 @@ def test_classify_ezviz_local_sdk_body_detects_xml_tags_only() -> None:
 
 
 def test_classify_ezviz_local_sdk_body_detects_prefixed_xml() -> None:
-    shape = classify_ezviz_local_sdk_body(
-        b"\x01\x02\x00\x00<?xml version=\"1.0\"?><Response/>"
-    )
+    shape = classify_ezviz_local_sdk_body(b'\x01\x02\x00\x00<?xml version="1.0"?><Response/>')
 
     assert shape.kind == "prefixed_xml"
     assert shape.xml_offset == 4
@@ -2303,8 +2284,7 @@ def test_parse_hcnetsdk_tcp_shape_log_line_ignores_other_lines() -> None:
 
 def test_parse_hcnetsdk_semantic_log_line_from_login_event() -> None:
     event = parse_hcnetsdk_semantic_log_line(
-        "[hcnetsdk-semantic] HCNETUtil.s enter "
-        "ip=192.0.2.10 port=8000 user=admin pwdLen=6"
+        "[hcnetsdk-semantic] HCNETUtil.s enter ip=192.0.2.10 port=8000 user=admin pwdLen=6"
     )
 
     assert event is not None
@@ -2333,8 +2313,7 @@ def test_parse_hcnetsdk_semantic_log_line_ignores_other_lines() -> None:
     assert parse_hcnetsdk_semantic_log_line("[hcnetsdk-send] fd=1") is None
     assert (
         parse_hcnetsdk_semantic_log_line(
-            "[hcnetsdk-semantic] waiting for Core_SimpleCommandToDvr "
-            "symbol=Core_SimpleCommandToDvr"
+            "[hcnetsdk-semantic] waiting for Core_SimpleCommandToDvr symbol=Core_SimpleCommandToDvr"
         )
         is None
     )
@@ -2350,10 +2329,7 @@ def test_parse_hcnetsdk_semantic_log_line_ignores_other_lines() -> None:
 def test_summarize_hcnetsdk_command_trace_correlates_semantic_boundaries() -> None:
     summary = summarize_hcnetsdk_command_trace(
         [
-            (
-                "[hcnetsdk-semantic] HCNETUtil.s enter "
-                "ip=192.0.2.10 port=8000 user=admin pwdLen=6"
-            ),
+            ("[hcnetsdk-semantic] HCNETUtil.s enter ip=192.0.2.10 port=8000 user=admin pwdLen=6"),
             (
                 "[hcnetsdk-send] fd=296 192.0.2.10:8000 "
                 "tcpKind=opaque_binary tcpLen=224 captured=224 fp128=128:93276c8d "
@@ -2528,15 +2504,11 @@ def test_parse_hcnetsdk_tcp_frame_header_matches_split_response() -> None:
 
 
 def test_parse_hcnetsdk_tcp_frame_round_trips_generic_wrapper() -> None:
-    frame_bytes = build_hcnetsdk_tcp_frame(
-        HCNETSDK_TCP_TEST_BODY, field_4=99, field_8=1
-    )
+    frame_bytes = build_hcnetsdk_tcp_frame(HCNETSDK_TCP_TEST_BODY, field_4=99, field_8=1)
 
     frame = parse_hcnetsdk_tcp_frame(frame_bytes)
 
-    assert frame.header.total_length == HCNETSDK_TCP_HEADER_LENGTH + len(
-        HCNETSDK_TCP_TEST_BODY
-    )
+    assert frame.header.total_length == HCNETSDK_TCP_HEADER_LENGTH + len(HCNETSDK_TCP_TEST_BODY)
     assert frame.header.field_4 == 99
     assert frame.header.field_8 == 1
     assert frame.header.field_12 == 0
@@ -2642,9 +2614,7 @@ def test_read_ezviz_interleaved_rtp_frame_timeout_raises_device_exception() -> N
 
 
 def test_read_ezviz_interleaved_rtp_frame_after_prefix_keeps_local_preface() -> None:
-    prefix = bytes.fromhex(
-        "01 00 01 01 00 28 00 00 00 00 27 29 45 38 37 32"
-    )
+    prefix = bytes.fromhex("01 00 01 01 00 28 00 00 00 00 27 29 45 38 37 32")
     payload = b"rtp-payload"
     sock = _FragmentedSocket(
         [
@@ -2743,19 +2713,30 @@ def test_hcnetsdk_command_port_login_proof_uses_native_digest_branches() -> None
     )
 
     # These expected values mirror the device's native command-port handshake.
-    assert digest == hashlib.sha256(  # codeql[py/weak-sensitive-data-hashing]
-        b"admin" + seed + b"123456"
-    ).hexdigest().encode()
-    assert primary == hmac.new(  # codeql[py/weak-sensitive-data-hashing,py/weak-cryptographic-algorithm]
-        challenge,
-        b"admin",
-        hashlib.md5,
-    ).digest()
-    assert secondary == hmac.new(  # codeql[py/weak-sensitive-data-hashing,py/weak-cryptographic-algorithm]
-        challenge,
-        digest,
-        hashlib.md5,
-    ).digest()
+    assert (
+        digest
+        == hashlib.sha256(  # codeql[py/weak-sensitive-data-hashing]
+            b"admin" + seed + b"123456"
+        )
+        .hexdigest()
+        .encode()
+    )
+    assert (
+        primary
+        == hmac.new(  # codeql[py/weak-sensitive-data-hashing,py/weak-cryptographic-algorithm]
+            challenge,
+            b"admin",
+            hashlib.md5,
+        ).digest()
+    )
+    assert (
+        secondary
+        == hmac.new(  # codeql[py/weak-sensitive-data-hashing,py/weak-cryptographic-algorithm]
+            challenge,
+            digest,
+            hashlib.md5,
+        ).digest()
+    )
 
 
 def test_hcnetsdk_command_port_login_proof_frame_shape() -> None:
@@ -2789,9 +2770,7 @@ def test_hcnetsdk_command_port_login_proof_frame_shape() -> None:
 def test_hcnetsdk_command_port_auth_word_matches_native_trace_vectors() -> None:
     session_id = bytes.fromhex("71f872b7")
     auth_seed = 0x143D7840
-    key = bytes.fromhex(
-        "3630343531663636393865353862623134313139323936386361333030663431"
-    )
+    key = bytes.fromhex("3630343531663636393865353862623134313139323936386361333030663431")
 
     assert (
         hcnetsdk_command_port_auth_word(
@@ -2827,9 +2806,7 @@ def test_hcnetsdk_command_port_auth_word_matches_native_trace_vectors() -> None:
 def test_hcnetsdk_command_port_auth_word_includes_native_mask_seed() -> None:
     session_id = bytes.fromhex("71f872b7")
     auth_seed = 0x143D7840
-    key = bytes.fromhex(
-        "3630343531663636393865353862623134313139323936386361333030663431"
-    )
+    key = bytes.fromhex("3630343531663636393865353862623134313139323936386361333030663431")
 
     assert (
         hcnetsdk_command_port_auth_word(
@@ -2844,9 +2821,7 @@ def test_hcnetsdk_command_port_auth_word_includes_native_mask_seed() -> None:
 
 
 def test_hcnetsdk_command_port_control_frame_builds_native_post_login_header() -> None:
-    key = bytes.fromhex(
-        "3630343531663636393865353862623134313139323936386361333030663431"
-    )
+    key = bytes.fromhex("3630343531663636393865353862623134313139323936386361333030663431")
 
     frame = hcnetsdk_command_port_control_frame(
         session_id=bytes.fromhex("71f872b7"),
@@ -2863,9 +2838,7 @@ def test_hcnetsdk_command_port_control_frame_builds_native_post_login_header() -
 
 
 def test_hcnetsdk_command_port_control_frame_appends_command_tail() -> None:
-    key = bytes.fromhex(
-        "3630343531663636393865353862623134313139323936386361333030663431"
-    )
+    key = bytes.fromhex("3630343531663636393865353862623134313139323936386361333030663431")
 
     frame = hcnetsdk_command_port_control_frame(
         session_id=HCNETSDK_COMMAND_PORT_TEST_SESSION_ID,
@@ -2879,15 +2852,11 @@ def test_hcnetsdk_command_port_control_frame_appends_command_tail() -> None:
 
     assert parsed.header.field_4 == 0x63000000
     assert parsed.header.field_12 == 0x11000
-    assert parsed.body == bytes.fromhex(
-        "380200c012345678000000000000000000000001"
-    )
+    assert parsed.body == bytes.fromhex("380200c012345678000000000000000000000001")
 
 
 def test_hcnetsdk_command_port_control_template_strips_session_bound_fields() -> None:
-    key = bytes.fromhex(
-        "3630343531663636393865353862623134313139323936386361333030663431"
-    )
+    key = bytes.fromhex("3630343531663636393865353862623134313139323936386361333030663431")
     first_frame = hcnetsdk_command_port_control_frame(
         session_id=bytes.fromhex("71f872b7"),
         auth_seed=0x143D7840,
@@ -2919,13 +2888,9 @@ def test_hcnetsdk_command_port_control_template_strips_session_bound_fields() ->
 
 
 def test_hcnetsdk_command_port_control_template_rebuilds_native_frame() -> None:
-    key = bytes.fromhex(
-        "3630343531663636393865353862623134313139323936386361333030663431"
-    )
+    key = bytes.fromhex("3630343531663636393865353862623134313139323936386361333030663431")
     template = hcnetsdk_command_port_control_template_from_frame(
-        bytes.fromhex(
-            "0000002063000000bbd883cc00111050030012ac71f872b70000000000000000"
-        ),
+        bytes.fromhex("0000002063000000bbd883cc00111050030012ac71f872b70000000000000000"),
         addend=0x71F872B9,
     )
 
@@ -2934,19 +2899,13 @@ def test_hcnetsdk_command_port_control_template_rebuilds_native_frame() -> None:
         auth_seed=0x143D7840,
         key=key,
         local_ip="172.18.0.3",
-    ) == bytes.fromhex(
-        "0000002063000000bbd883cc00111050030012ac71f872b70000000000000000"
-    )
+    ) == bytes.fromhex("0000002063000000bbd883cc00111050030012ac71f872b70000000000000000")
 
 
 def test_hcnetsdk_command_port_control_template_infers_session_relative_addend() -> None:
-    key = bytes.fromhex(
-        "3630343531663636393865353862623134313139323936386361333030663431"
-    )
+    key = bytes.fromhex("3630343531663636393865353862623134313139323936386361333030663431")
     template = hcnetsdk_command_port_control_template_from_frame(
-        bytes.fromhex(
-            "0000002063000000bbd883cc00111050030012ac71f872b70000000000000000"
-        ),
+        bytes.fromhex("0000002063000000bbd883cc00111050030012ac71f872b70000000000000000"),
         auth_seed=0x143D7840,
         key=key,
     )
@@ -2971,9 +2930,7 @@ def test_hcnetsdk_command_port_control_template_infers_session_relative_addend()
 def test_hcnetsdk_command_port_control_template_can_refresh_play_login_date() -> None:
     stale_tail = bytearray(148)
     stale_tail[36:48] = bytes.fromhex("000007ea000000050000001f")
-    stale_tail[60:84] = bytes.fromhex(
-        "000007ea000000050000001f000000120000002200000038"
-    )
+    stale_tail[60:84] = bytes.fromhex("000007ea000000050000001f000000120000002200000038")
 
     patched = hcnetsdk_command_port_play_login_body_tail_for_today(
         bytes(stale_tail),
@@ -2981,20 +2938,14 @@ def test_hcnetsdk_command_port_control_template_can_refresh_play_login_date() ->
     )
 
     assert patched[36:48] == bytes.fromhex("000007ea000000060000000d")
-    assert patched[60:84] == bytes.fromhex(
-        "000007ea000000060000000d000000170000003b0000003b"
-    )
+    assert patched[60:84] == bytes.fromhex("000007ea000000060000000d000000170000003b0000003b")
 
 
 def test_hcnetsdk_command_port_control_template_renders_dynamic_play_login_tail() -> None:
-    key = bytes.fromhex(
-        "3630343531663636393865353862623134313139323936386361333030663431"
-    )
+    key = bytes.fromhex("3630343531663636393865353862623134313139323936386361333030663431")
     stale_tail = bytearray(148)
     stale_tail[36:48] = bytes.fromhex("000007ea000000050000001f")
-    stale_tail[60:84] = bytes.fromhex(
-        "000007ea000000050000001f000000120000002200000038"
-    )
+    stale_tail[60:84] = bytes.fromhex("000007ea000000050000001f000000120000002200000038")
     template = HcNetSdkCommandPortControlTemplate(
         command_id=0x111040,
         body_tail=bytes(stale_tail),
@@ -3017,9 +2968,7 @@ def test_hcnetsdk_command_port_control_template_renders_dynamic_play_login_tail(
         + today.month.to_bytes(4, "big")
         + today.day.to_bytes(4, "big")
     )
-    assert parsed.body[16 + 72 : 16 + 84] == bytes.fromhex(
-        "000000170000003b0000003b"
-    )
+    assert parsed.body[16 + 72 : 16 + 84] == bytes.fromhex("000000170000003b0000003b")
 
 
 def test_hcnetsdk_command_port_control_template_rejects_conflicting_addends() -> None:
@@ -3045,8 +2994,7 @@ def test_hcnetsdk_command_port_client_runs_generated_login() -> None:
     encrypted_challenge = PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge)
     first_response = build_hcnetsdk_tcp_frame(encrypted_challenge + seed)
     second_response_body = (
-        HCNETSDK_COMMAND_PORT_TEST_SESSION_ID
-        + b"CS-CV310-A0-1B2WFR0120200927CCRRE87288805\x00"
+        HCNETSDK_COMMAND_PORT_TEST_SESSION_ID + b"CS-CV310-A0-1B2WFR0120200927CCRRE87288805\x00"
     )
     second_response = build_hcnetsdk_tcp_frame(
         second_response_body,
@@ -3098,30 +3046,30 @@ def test_hcnetsdk_device_ability_command_port_template_matches_native_tail() -> 
 
 def test_hcnetsdk_command_port_response_payload_strips_text_padding() -> None:
     empty_response = build_hcnetsdk_tcp_frame(b"\x00\x00ignored\x00")
-    json_response = build_hcnetsdk_tcp_frame(b"\x00\x00{\"statusCode\":1}\x00tail")
+    json_response = build_hcnetsdk_tcp_frame(b'\x00\x00{"statusCode":1}\x00tail')
     xml_response = build_hcnetsdk_tcp_frame(b"\x00\xff<BasicCapability/>\x00")
     json_before_xml_marker_response = build_hcnetsdk_tcp_frame(
         b"\x00" + COMMAND_PORT_JSON_WITH_XML_MARKER_OUTPUT + b"\x00tail"
     )
     json_after_binary_xml_marker_response = build_hcnetsdk_tcp_frame(
-        b"\x00<\xff\x00{\"statusCode\":1}\x00tail"
+        b'\x00<\xff\x00{"statusCode":1}\x00tail'
     )
 
-    assert hcnetsdk_command_port_response_payload(empty_response) == (
-        COMMAND_PORT_EMPTY_OUTPUT
-    )
+    assert hcnetsdk_command_port_response_payload(empty_response) == (COMMAND_PORT_EMPTY_OUTPUT)
     assert hcnetsdk_command_port_response_payload(json_response) == (
         COMMAND_PORT_JSON_STATUS_OUTPUT
     )
     assert hcnetsdk_command_port_response_payload(xml_response) == (
         COMMAND_PORT_BASIC_ABILITY_OUTPUT
     )
-    assert hcnetsdk_command_port_response_payload(
-        json_before_xml_marker_response
-    ) == COMMAND_PORT_JSON_WITH_XML_MARKER_OUTPUT
-    assert hcnetsdk_command_port_response_payload(
-        json_after_binary_xml_marker_response
-    ) == COMMAND_PORT_JSON_STATUS_OUTPUT
+    assert (
+        hcnetsdk_command_port_response_payload(json_before_xml_marker_response)
+        == COMMAND_PORT_JSON_WITH_XML_MARKER_OUTPUT
+    )
+    assert (
+        hcnetsdk_command_port_response_payload(json_after_binary_xml_marker_response)
+        == COMMAND_PORT_JSON_STATUS_OUTPUT
+    )
 
 
 def test_hcnetsdk_command_port_execute_template_uses_fresh_control_socket() -> None:
@@ -3166,9 +3114,7 @@ def test_hcnetsdk_command_port_execute_template_uses_fresh_control_socket() -> N
     assert login_sock.closed is True
     assert control_sock.closed is True
     assert sent_control.header.field_12 == 0x11000
-    assert sent_control.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
-        request
-    )
+    assert sent_control.body[16:] == hcnetsdk_device_ability_command_port_body_tail(request)
 
 
 def test_hcnetsdk_get_device_ability_command_port_wraps_executor() -> None:
@@ -3250,9 +3196,7 @@ def test_hcnetsdk_pure_python_client_wraps_device_ability_and_stdxml() -> None:
     assert client.device_ability(ezviz_lan_record_ability_request(42)) == (
         COMMAND_PORT_RECORD_ABILITY_OUTPUT
     )
-    assert client.dvr_config(ezviz_lan_hd_config_request(42)) == (
-        COMMAND_PORT_HD_CONFIG_OUTPUT
-    )
+    assert client.dvr_config(ezviz_lan_hd_config_request(42)) == (COMMAND_PORT_HD_CONFIG_OUTPUT)
     stdxml_response = client.stdxml_config(stdxml_request, stdxml_template)
     assert stdxml_response == HcNetSdkStdXmlConfigResponse(
         succeeded=True,
@@ -3307,9 +3251,7 @@ def test_hcnetsdk_pure_python_client_wraps_ability_convenience_parsers() -> None
     )
     access_control = _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + access_xml)])
     video_control = _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + video_xml)])
-    audio_video_control = _FakeSocket(
-        [build_hcnetsdk_tcp_frame(b"\x00" + audio_video_xml)]
-    )
+    audio_video_control = _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + audio_video_xml)])
     sockets = [
         _FakeSocket([first_login_response, second_login_response]),
         access_control,
@@ -3352,12 +3294,8 @@ def test_hcnetsdk_pure_python_client_wraps_ability_convenience_parsers() -> None
     assert audio_video.video_channels[0].main_stream is not None
     assert audio_video.video_channels[0].main_stream.resolution_indexes == (2,)
     assert audio_video.video_channels[0].sub_streams[0].index == 1
-    assert access_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
-        access_request
-    )
-    assert video_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
-        video_request
-    )
+    assert access_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(access_request)
+    assert video_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(video_request)
     assert audio_video_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
         audio_video_request
     )
@@ -3392,8 +3330,7 @@ def test_hcnetsdk_pure_python_client_wraps_safe_ability_helpers() -> None:
         b"</PTZAbility>",
     )
     controls = tuple(
-        _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + xml)])
-        for xml in response_xmls
+        _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + xml)]) for xml in response_xmls
     )
     sockets: list[_FakeSocket] = []
     for control in controls:
@@ -3425,9 +3362,7 @@ def test_hcnetsdk_pure_python_client_wraps_safe_ability_helpers() -> None:
         ezviz_lan_record_ability_request(1),
         ezviz_lan_ptz_ability_request(1, 1),
     )
-    sent_bodies = tuple(
-        parse_hcnetsdk_tcp_frame(control.sent[0]).body for control in controls
-    )
+    sent_bodies = tuple(parse_hcnetsdk_tcp_frame(control.sent[0]).body for control in controls)
 
     assert soft_hardware.success is True
     assert soft_hardware.max_preview_num == 4
@@ -3456,12 +3391,8 @@ def test_hcnetsdk_pure_python_client_wraps_ipc_front_parameter_ability() -> None
         b"<ContrastLevel><Min>0</Min><Max>100</Max></ContrastLevel>"
         b"<Mirror><Range>0,1,2,3</Range></Mirror></CAMERAPARA>"
     )
-    front_parameter_control = _FakeSocket(
-        [build_hcnetsdk_tcp_frame(b"\x00" + front_parameter_xml)]
-    )
-    image_display_control = _FakeSocket(
-        [build_hcnetsdk_tcp_frame(b"\x00" + front_parameter_xml)]
-    )
+    front_parameter_control = _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + front_parameter_xml)])
+    image_display_control = _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + front_parameter_xml)])
     sockets = [
         _FakeSocket([first_login_response, second_login_response]),
         front_parameter_control,
@@ -3492,13 +3423,11 @@ def test_hcnetsdk_pure_python_client_wraps_ipc_front_parameter_ability() -> None
     assert front_parameter.brightness_level.default == 50
     assert front_parameter.mirror_options == ("0", "1", "2", "3")
     assert image_display.contrast_level.maximum == 100
-    assert (
-        front_parameter_sent.body[16:]
-        == hcnetsdk_device_ability_command_port_body_tail(front_parameter_request)
+    assert front_parameter_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
+        front_parameter_request
     )
-    assert (
-        image_display_sent.body[16:]
-        == hcnetsdk_device_ability_command_port_body_tail(front_parameter_request)
+    assert image_display_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
+        front_parameter_request
     )
 
 
@@ -3514,17 +3443,9 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:  
         + (84).to_bytes(4, "big")
         + (150).to_bytes(4, "big")
     )
-    camera_param = (
-        (152).to_bytes(4, "big")
-        + b"2342"
-        + b"\x33"
-        + b"\x00" * 143
-    )
+    camera_param = (152).to_bytes(4, "big") + b"2342" + b"\x33" + b"\x00" * 143
     compression = _compression_config_v30_payload()
-    time_config = b"".join(
-        value.to_bytes(4, "big")
-        for value in (2026, 6, 21, 15, 47, 8)
-    )
+    time_config = b"".join(value.to_bytes(4, "big") for value in (2026, 6, 21, 15, 47, 8))
     ntp_config = (
         b"time.example.net".ljust(64, b"\x00")
         + (60).to_bytes(2, "big")
@@ -3570,9 +3491,7 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:  
             (12).to_bytes(4, "big") + b"\x01\x00\x00\x00" + (7).to_bytes(4, "big")
         ),
         HcNetSdkDvrCommand.GET_AUDIO_INPUT_PARAM: bytes.fromhex("0050000000000000"),
-        HcNetSdkDvrCommand.GET_AUDIOOUT_VOLUME: (
-            (8).to_bytes(4, "big") + b"\x50\x00\x00\x00"
-        ),
+        HcNetSdkDvrCommand.GET_AUDIOOUT_VOLUME: ((8).to_bytes(4, "big") + b"\x50\x00\x00\x00"),
         HcNetSdkDvrCommand.GET_COMPRESSION_CFG_V30: compression,
         HcNetSdkDvrCommand.GET_PIC_CFG_V30: _picture_config_v40_payload(b"Legacy"),
         HcNetSdkDvrCommand.GET_PIC_CFG_V40: _picture_config_v40_payload(b"Front"),
@@ -3618,10 +3537,7 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:  
     assert parsed_picture_v30.channel_name == "Legacy"
     assert parsed_picture_v30.show_osd == 1
     assert client.wifi_config_summary().structure == "NET_DVR_WIFI_CFG"
-    assert (
-        client.ezviz_access_config_summary().structure
-        == "NET_DVR_EZVIZ_ACCESS_CFG"
-    )
+    assert client.ezviz_access_config_summary().structure == "NET_DVR_EZVIZ_ACCESS_CFG"
     assert client.ezviz_access_config().domain_name == "dev.ezvizlife.com"
     assert client.user_config_v30_summary().structure == "NET_DVR_USER_V30"
     decoded_user_config = client.user_config_v30()
@@ -3661,9 +3577,7 @@ def test_hcnetsdk_stdxml_config_command_port_body_tail_matches_native_trace() ->
     assert tail == b"".join(
         (
             b"\x00" * HCNETSDK_STDXML_COMMAND_PORT_EXTRA_RESERVED_SIZE,
-            (
-                HCNETSDK_STDXML_COMMAND_PORT_PREFIX_SIZE + len(request_bytes)
-            ).to_bytes(4, "big"),
+            (HCNETSDK_STDXML_COMMAND_PORT_PREFIX_SIZE + len(request_bytes)).to_bytes(4, "big"),
             len(request_bytes).to_bytes(4, "big"),
             HCNETSDK_STDXML_COMMAND_PORT_FLAGS,
             request_bytes,
@@ -3686,9 +3600,7 @@ def test_hcnetsdk_stdxml_config_command_port_template_uses_native_trace() -> Non
 
     assert template.command_id == HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID
     assert template.name == "stdxml"
-    assert template.body_tail == hcnetsdk_stdxml_config_command_port_body_tail(
-        request
-    )
+    assert template.body_tail == hcnetsdk_stdxml_config_command_port_body_tail(request)
     assert traced_template.command_id == 0x22222
     assert traced_template.name == "explicit-trace"
     assert traced_template.body_tail == b"PREFIX:" + STDXML_TEST_REQUEST
@@ -3702,9 +3614,7 @@ def test_hcnetsdk_stdxml_config_command_port_from_trace_builds_template() -> Non
     seed = b"s" * 64
     login_sock = _FakeSocket(
         [
-            build_hcnetsdk_tcp_frame(
-                PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge) + seed
-            ),
+            build_hcnetsdk_tcp_frame(PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge) + seed),
             build_hcnetsdk_tcp_frame(
                 HCNETSDK_COMMAND_PORT_TEST_SESSION_ID + b"CAM123\x00",
                 field_4=0x10A24BF1,
@@ -3864,9 +3774,7 @@ def test_ezviz_lan_services_switch_command_port_helpers_preserve_values() -> Non
         web=True,
     )
 
-    expected_get = hcnetsdk_stdxml_config_command_port_body_tail(
-        HCNETSDK_EZVIZ_SERVICES_SWITCH_GET
-    )
+    expected_get = hcnetsdk_stdxml_config_command_port_body_tail(HCNETSDK_EZVIZ_SERVICES_SWITCH_GET)
     expected_put = hcnetsdk_stdxml_config_command_port_body_tail(
         HCNETSDK_EZVIZ_SERVICES_SWITCH_PUT
         + '{"servicesSwitch":{"rtsp":1,"upnp":1,"web":1,"hiksdk":1}}'
@@ -3947,9 +3855,7 @@ def test_hcnetsdk_pure_python_client_services_switch_methods() -> None:
         {"enabled": True},
     )
 
-    expected_get = hcnetsdk_stdxml_config_command_port_body_tail(
-        HCNETSDK_EZVIZ_SERVICES_SWITCH_GET
-    )
+    expected_get = hcnetsdk_stdxml_config_command_port_body_tail(HCNETSDK_EZVIZ_SERVICES_SWITCH_GET)
     expected_put = hcnetsdk_stdxml_config_command_port_body_tail(
         HCNETSDK_EZVIZ_SERVICES_SWITCH_PUT
         + '{"servicesSwitch":{"rtsp":1,"upnp":1,"web":1,"hiksdk":1}}'
@@ -3977,10 +3883,7 @@ def test_hcnetsdk_command_port_client_bootstraps_first_media() -> None:
     prefix = b"preface"
     media_payload = b"\x80\x60\x00\x01" + (b"\x00" * 8) + b"\x00\x00\x01\xbaabc"
     media_frame = (
-        prefix
-        + b"\x24\x00"
-        + (len(media_payload) + 4).to_bytes(2, "little")
-        + media_payload
+        prefix + b"\x24\x00" + (len(media_payload) + 4).to_bytes(2, "little") + media_payload
     )
     sock = _FakeSocket([response_1, response_2, media_frame])
 
@@ -4084,11 +3987,7 @@ def test_hcnetsdk_command_port_allows_keepalive_during_media_read() -> None:
     read_started = Event()
     errors: list[Exception] = []
     media_payload = b"\x80\x60\x00\x01" + (b"\x00" * 8) + b"\x00\x00\x01\xbaabc"
-    media_frame = (
-        b"\x24\x00"
-        + (len(media_payload) + 4).to_bytes(2, "little")
-        + media_payload
-    )
+    media_frame = b"\x24\x00" + (len(media_payload) + 4).to_bytes(2, "little") + media_payload
     client_sock, peer_sock = socket.socketpair()
     client_sock.settimeout(expected_timeout)
     peer_sock.settimeout(1.0)
@@ -4148,18 +4047,27 @@ def test_hcnetsdk_command_port_write_obeys_deadline_under_backpressure() -> None
 
 
 def test_ezviz_local_sdk_client_bootstraps_preview_and_first_media() -> None:
-    pre_start_response = build_ezviz_local_sdk_frame(
-        command=0x2014,
-        body="<Response><Result>0</Result></Response>",
-    ) + LOCAL_SDK_RESPONSE_TRAILER
-    command_response = build_ezviz_local_sdk_frame(
-        command=0x2012,
-        body="<Response><Result>0</Result><Session>1</Session></Response>",
-    ) + LOCAL_SDK_RESPONSE_TRAILER
-    stream_response = build_ezviz_local_sdk_frame(
-        command=0x3106,
-        body="<Response><Result>0</Result></Response>",
-    ) + LOCAL_SDK_RESPONSE_TRAILER
+    pre_start_response = (
+        build_ezviz_local_sdk_frame(
+            command=0x2014,
+            body="<Response><Result>0</Result></Response>",
+        )
+        + LOCAL_SDK_RESPONSE_TRAILER
+    )
+    command_response = (
+        build_ezviz_local_sdk_frame(
+            command=0x2012,
+            body="<Response><Result>0</Result><Session>1</Session></Response>",
+        )
+        + LOCAL_SDK_RESPONSE_TRAILER
+    )
+    stream_response = (
+        build_ezviz_local_sdk_frame(
+            command=0x3106,
+            body="<Response><Result>0</Result></Response>",
+        )
+        + LOCAL_SDK_RESPONSE_TRAILER
+    )
     media_prefix = bytes.fromhex("01 00 01 01")
     media_payload = b"rtp-payload"
     command_sock = _FakeSocket([pre_start_response, command_response])
@@ -4233,24 +4141,33 @@ def test_ezviz_local_sdk_client_bootstraps_preview_and_first_media() -> None:
     assert stream_request.trailer == hashlib.md5(
         stream_request.body, usedforsecurity=False
     ).hexdigest().encode("ascii")
-    assert decrypt_ezviz_local_sdk_body_aes_cbc(
-        stream_request.body,
-        key=device_info.key_bytes,
-        iv=LOCAL_SDK_SSL_IV,
-    ) == STREAM_SETUP_BODY
+    assert (
+        decrypt_ezviz_local_sdk_body_aes_cbc(
+            stream_request.body,
+            key=device_info.key_bytes,
+            iv=LOCAL_SDK_SSL_IV,
+        )
+        == STREAM_SETUP_BODY
+    )
     assert command_sock.closed is True
     assert stream_sock.closed is True
 
 
 def test_ezviz_local_sdk_client_builds_stream_setup_from_preview_session() -> None:
-    command_response = build_ezviz_local_sdk_frame(
-        command=0x2012,
-        body="<Response><Result>0</Result><Session>765</Session></Response>",
-    ) + LOCAL_SDK_RESPONSE_TRAILER
-    stream_response = build_ezviz_local_sdk_frame(
-        command=0x3106,
-        body="<Response><Result>0</Result></Response>",
-    ) + LOCAL_SDK_RESPONSE_TRAILER
+    command_response = (
+        build_ezviz_local_sdk_frame(
+            command=0x2012,
+            body="<Response><Result>0</Result><Session>765</Session></Response>",
+        )
+        + LOCAL_SDK_RESPONSE_TRAILER
+    )
+    stream_response = (
+        build_ezviz_local_sdk_frame(
+            command=0x3106,
+            body="<Response><Result>0</Result></Response>",
+        )
+        + LOCAL_SDK_RESPONSE_TRAILER
+    )
     command_sock = _FakeSocket([command_response])
     stream_sock = _FakeSocket([stream_response])
 
@@ -4305,10 +4222,13 @@ def test_ezviz_local_sdk_client_builds_stream_setup_from_preview_session() -> No
 
 
 def test_ezviz_local_sdk_client_can_bind_command_source_port() -> None:
-    command_response = build_ezviz_local_sdk_frame(
-        command=0x2012,
-        body="<Response><Result>257</Result></Response>",
-    ) + LOCAL_SDK_RESPONSE_TRAILER
+    command_response = (
+        build_ezviz_local_sdk_frame(
+            command=0x2012,
+            body="<Response><Result>257</Result></Response>",
+        )
+        + LOCAL_SDK_RESPONSE_TRAILER
+    )
     command_sock = _FakeSocket([command_response])
     connect_calls: list[tuple[tuple[str, int], float | None, tuple[str, int] | None]] = []
 
@@ -4332,13 +4252,16 @@ def test_ezviz_local_sdk_client_can_bind_command_source_port() -> None:
         key="1234567890abcdef",
     )
 
-    with EzvizLocalSdkClient(
-        endpoint,
-        device_info,
-        socket_factory=socket_factory,
-        iv_factory=lambda _size: LOCAL_SDK_SSL_IV,
-        command_source_port=10103,
-    ) as client, pytest.raises(PyEzvizError, match="Result=257"):
+    with (
+        EzvizLocalSdkClient(
+            endpoint,
+            device_info,
+            socket_factory=socket_factory,
+            iv_factory=lambda _size: LOCAL_SDK_SSL_IV,
+            command_source_port=10103,
+        ) as client,
+        pytest.raises(PyEzvizError, match="Result=257"),
+    ):
         client.bootstrap_preview_from_fields(
             preview_request=EzvizLocalPreviewRequest(
                 operation_code="0123456",
@@ -4463,9 +4386,7 @@ def test_local_sdk_source_port_uses_exclusive_binding_on_windows(
     )
 
     assert result is exclusive_socket
-    assert exclusive_socket.option_calls == [
-        (socket.SOL_SOCKET, exclusive_option, 1)
-    ]
+    assert exclusive_socket.option_calls == [(socket.SOL_SOCKET, exclusive_option, 1)]
     assert exclusive_socket.bound_address == ("", 10103)
 
 
@@ -4510,11 +4431,14 @@ def test_windows_wildcard_source_retries_exclusive_bind_on_route_interface(
         ],
     )
 
-    assert _create_reusable_source_connection(
-        ("192.0.2.10", 9010),
-        1.0,
-        source_address=("", 10103),
-    ) is connected_socket
+    assert (
+        _create_reusable_source_connection(
+            ("192.0.2.10", 9010),
+            1.0,
+            source_address=("", 10103),
+        )
+        is connected_socket
+    )
     assert calls == [
         (("", 10103), True),
         (("192.0.2.25", 10103), True),
@@ -4561,13 +4485,16 @@ def test_source_connection_recomputes_timeout_between_addresses(
     )
     clock = iter((0.0, 0.0, 0.5)).__next__
 
-    assert _create_reusable_source_connection(
-        ("camera.example", 9010),
-        1.0,
-        source_address=("", 10103),
-        deadline=1.1,
-        monotonic=clock,
-    ) is connected_socket
+    assert (
+        _create_reusable_source_connection(
+            ("camera.example", 9010),
+            1.0,
+            source_address=("", 10103),
+            deadline=1.1,
+            monotonic=clock,
+        )
+        is connected_socket
+    )
     assert timeouts == pytest.approx([1.0, 0.6])
 
 
@@ -4819,7 +4746,6 @@ def test_local_sdk_source_port_maps_established_connection_conflict() -> None:
         def close(self) -> None:
             return
 
-
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(
             socket,
@@ -4887,10 +4813,13 @@ def test_local_sdk_source_port_reports_an_active_conflict() -> None:
 
 
 def test_ezviz_local_sdk_client_missing_session_reports_result() -> None:
-    command_response = build_ezviz_local_sdk_frame(
-        command=0x2012,
-        body="<Response><Result>257</Result></Response>",
-    ) + LOCAL_SDK_RESPONSE_TRAILER
+    command_response = (
+        build_ezviz_local_sdk_frame(
+            command=0x2012,
+            body="<Response><Result>257</Result></Response>",
+        )
+        + LOCAL_SDK_RESPONSE_TRAILER
+    )
     command_sock = _FakeSocket([command_response])
 
     endpoint = HcNetSdkLanEndpoint(
@@ -4905,13 +4834,14 @@ def test_ezviz_local_sdk_client_missing_session_reports_result() -> None:
         key="1234567890abcdef",
     )
 
-    with EzvizLocalSdkClient(
-        endpoint,
-        device_info,
-        socket_factory=lambda _address, _timeout: command_sock,
-        iv_factory=lambda _size: LOCAL_SDK_SSL_IV,
-    ) as client, pytest.raises(
-        PyEzvizError, match=r"missing Session \(Result=257\)"
+    with (
+        EzvizLocalSdkClient(
+            endpoint,
+            device_info,
+            socket_factory=lambda _address, _timeout: command_sock,
+            iv_factory=lambda _size: LOCAL_SDK_SSL_IV,
+        ) as client,
+        pytest.raises(PyEzvizError, match=r"missing Session \(Result=257\)"),
     ):
         client.bootstrap_preview_from_fields(
             preview_request=EzvizLocalPreviewRequest(
@@ -5023,11 +4953,14 @@ def test_ezviz_local_sdk_client_enforces_total_stream_read_deadline(
     )
     ticks = iter([0.0, 0.1, 0.6, 1.1])
 
-    with EzvizLocalSdkClient(
-        endpoint,
-        device_info,
-        socket_factory=lambda _address, _timeout: stream_sock,
-    ) as client, pytest.raises(EzvizLocalSdkDeadlineExpired):
+    with (
+        EzvizLocalSdkClient(
+            endpoint,
+            device_info,
+            socket_factory=lambda _address, _timeout: stream_sock,
+        ) as client,
+        pytest.raises(EzvizLocalSdkDeadlineExpired),
+    ):
         client.read_stream_frame_after_prefix(
             timeout=1.0,
             monotonic=lambda: next(ticks),
@@ -5069,11 +5002,14 @@ def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
         connect_timeouts.append(timeout)
         return command_sock
 
-    with EzvizLocalSdkClient(
-        endpoint,
-        device_info,
-        socket_factory=socket_factory,
-    ) as client, pytest.raises(EzvizLocalSdkDeadlineExpired):
+    with (
+        EzvizLocalSdkClient(
+            endpoint,
+            device_info,
+            socket_factory=socket_factory,
+        ) as client,
+        pytest.raises(EzvizLocalSdkDeadlineExpired),
+    ):
         client.send_encrypted_command(
             EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
             b"<Request/>",
@@ -5087,10 +5023,13 @@ def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
 
 @pytest.mark.parametrize("read_kind", ("command_response", "stream_media"))
 def test_local_deadline_read_invalidates_socket(read_kind: str) -> None:
-    response = build_ezviz_local_sdk_frame(
-        command=EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
-        body=b"<Response><Result>0</Result></Response>",
-    ) + LOCAL_SDK_RESPONSE_TRAILER
+    response = (
+        build_ezviz_local_sdk_frame(
+            command=EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+            body=b"<Response><Result>0</Result></Response>",
+        )
+        + LOCAL_SDK_RESPONSE_TRAILER
+    )
     media_payload = b"media"
     media = b"\x24\x00" + len(media_payload).to_bytes(2, "big") + media_payload
     first_data = response[:1] if read_kind == "command_response" else media[:2]
@@ -5146,11 +5085,7 @@ def test_command_port_deadline_read_invalidates_socket(read_kind: str) -> None:
     tcp_payload = b"ok"
     tcp_frame = build_hcnetsdk_tcp_frame(tcp_payload)
     media_payload = b"media"
-    media_frame = (
-        b"\x24\x00"
-        + (len(media_payload) + 4).to_bytes(2, "little")
-        + media_payload
-    )
+    media_frame = b"\x24\x00" + (len(media_payload) + 4).to_bytes(2, "little") + media_payload
     expected_frame = tcp_frame if read_kind == "tcp" else media_frame
     interrupted_sock = _FakeSocket(
         [expected_frame[:1] if read_kind == "tcp" else expected_frame[:2]]
@@ -5232,11 +5167,7 @@ def test_deadline_aware_command_port_login_requires_pre_generated_key() -> None:
 
 def test_command_port_partial_expected_media_timeout_invalidates_socket() -> None:
     media_payload = b"media"
-    media_frame = (
-        b"\x24\x00"
-        + (len(media_payload) + 4).to_bytes(2, "little")
-        + media_payload
-    )
+    media_frame = b"\x24\x00" + (len(media_payload) + 4).to_bytes(2, "little") + media_payload
     interrupted_sock = _FakeSocket([media_frame[:2]])
     replacement_sock = _FakeSocket([media_frame])
     sockets = iter([interrupted_sock, replacement_sock])
@@ -5609,12 +5540,8 @@ def test_hcnetsdk_stdxml_response_json_accepts_mapping_text_and_bytes() -> None:
     assert hcnetsdk_stdxml_response_json({"statusCode": 1}) == {"statusCode": 1}
     assert hcnetsdk_stdxml_response_json('{"statusCode":1}') == {"statusCode": 1}
     assert hcnetsdk_stdxml_response_json(b'{"statusCode":1}') == {"statusCode": 1}
-    assert hcnetsdk_stdxml_response_json(b'{"statusCode":1}\x00\x00') == {
-        "statusCode": 1
-    }
-    assert hcnetsdk_stdxml_response_json('{"statusCode":1}\x00\x00') == {
-        "statusCode": 1
-    }
+    assert hcnetsdk_stdxml_response_json(b'{"statusCode":1}\x00\x00') == {"statusCode": 1}
+    assert hcnetsdk_stdxml_response_json('{"statusCode":1}\x00\x00') == {"statusCode": 1}
 
 
 def test_hcnetsdk_stdxml_response_json_rejects_invalid_payload() -> None:
@@ -5663,9 +5590,7 @@ def test_ezviz_lan_services_switch_payload_matches_settings_checkbox() -> None:
     )
 
     assert ezviz_lan_services_switch_get_request() == HCNETSDK_EZVIZ_SERVICES_SWITCH_GET
-    assert ezviz_lan_services_switch_get_config().request == (
-        HCNETSDK_EZVIZ_SERVICES_SWITCH_GET
-    )
+    assert ezviz_lan_services_switch_get_config().request == (HCNETSDK_EZVIZ_SERVICES_SWITCH_GET)
     assert HCNETSDK_EZVIZ_SERVICES_SWITCH_GET == (
         "GET /ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json\r\n"
     )
@@ -5698,9 +5623,7 @@ def test_ezviz_lan_services_switch_put_request_matches_hcnetutil() -> None:
     assert ezviz_lan_services_switch_update_config(
         {"servicesSwitch": {"hiksdk": 0, "web": 0}},
         enabled=True,
-    ).request == ezviz_lan_services_switch_put_request(
-        {"servicesSwitch": {"hiksdk": 1, "web": 1}}
-    )
+    ).request == ezviz_lan_services_switch_put_request({"servicesSwitch": {"hiksdk": 1, "web": 1}})
 
 
 def test_ezviz_lan_services_switch_set_payload_updates_named_switches() -> None:
@@ -5734,9 +5657,7 @@ def test_ezviz_lan_services_switch_set_payload_rejects_invalid_values() -> None:
 
 
 def test_ezviz_lan_services_switch_state_parses_values() -> None:
-    state = ezviz_lan_services_switch_state(
-        '{"servicesSwitch":{"hiksdk":1,"web":0,"rtsp":1}}'
-    )
+    state = ezviz_lan_services_switch_state('{"servicesSwitch":{"hiksdk":1,"web":0,"rtsp":1}}')
 
     assert state.hiksdk == 1
     assert state.hiksdk_enabled is True
@@ -5773,9 +5694,7 @@ def test_ezviz_lan_connect_mode_put_request_matches_leave_local_connect() -> Non
     assert ezviz_lan_connect_mode_put_request() == (
         HCNETSDK_EZVIZ_CONNECT_MODE_PUT + '{"ConnectMode":{"mode":1}}' + "\r\n"
     )
-    assert ezviz_lan_connect_mode_put_config().request == (
-        ezviz_lan_connect_mode_put_request()
-    )
+    assert ezviz_lan_connect_mode_put_config().request == (ezviz_lan_connect_mode_put_request())
 
 
 def test_ezviz_lan_net_config_upload_request_matches_hcnetutil() -> None:
@@ -5817,14 +5736,17 @@ def test_ezviz_lan_net_config_upload_request_matches_hcnetutil() -> None:
         + '"passwd":"encrypted-pass","security":4}}'
         + "\r\n"
     )
-    assert ezviz_lan_net_config_and_voice_upload_put_config(
-        ip="192.0.2.20",
-        port=4567,
-        bssid="00:11:22:33:44:55",
-        ssid="Test WiFi",
-        passwd="encrypted-pass",
-        security=4,
-    ).request == request
+    assert (
+        ezviz_lan_net_config_and_voice_upload_put_config(
+            ip="192.0.2.20",
+            port=4567,
+            bssid="00:11:22:33:44:55",
+            ssid="Test WiFi",
+            passwd="encrypted-pass",
+            security=4,
+        ).request
+        == request
+    )
 
 
 def test_hcnetsdk_dvr_config_request_models_get_and_set_shapes() -> None:
@@ -5878,12 +5800,8 @@ def test_hcnetsdk_dvr_config_request_models_get_and_set_shapes() -> None:
 def test_hcnetsdk_dvr_config_command_port_template_uses_traced_hd_config() -> None:
     request = ezviz_lan_hd_config_request(42)
     template = hcnetsdk_dvr_config_command_port_template(request)
-    ap_template = hcnetsdk_dvr_config_command_port_template(
-        ezviz_lan_wifi_ap_info_list_request(42)
-    )
-    wifi_template = hcnetsdk_dvr_config_command_port_template(
-        ezviz_lan_wifi_get_config_request(42)
-    )
+    ap_template = hcnetsdk_dvr_config_command_port_template(ezviz_lan_wifi_ap_info_list_request(42))
+    wifi_template = hcnetsdk_dvr_config_command_port_template(ezviz_lan_wifi_get_config_request(42))
     camera_param_template = hcnetsdk_dvr_config_command_port_template(
         ezviz_lan_video_effect_get_config_request(42)
     )
@@ -6055,10 +5973,7 @@ def test_ezviz_lan_time_ntp_and_device_config_request_shapes() -> None:
     assert ntp_request.to_native_args_hint()["dwCommand"] == 224
     assert ntp_request.to_native_args_hint()["structure"] == "NET_DVR_NTPPARA"
     assert device_request.to_native_args_hint()["dwCommand"] == 1100
-    assert (
-        device_request.to_native_args_hint()["structure"]
-        == "NET_DVR_DEVICECFG_V40"
-    )
+    assert device_request.to_native_args_hint()["structure"] == "NET_DVR_DEVICECFG_V40"
     assert net_request.to_native_args_hint()["dwCommand"] == 1000
     assert net_request.to_native_args_hint()["structure"] == "NET_DVR_NETCFG_V30"
     assert record_request.to_native_args_hint()["dwCommand"] == 1004
@@ -6144,12 +6059,14 @@ def test_ezviz_lan_wifi_request_shapes_match_apk_setters() -> None:
         "wpa_psk.sKeyInfo": "<password-bytes>",
         "wpa_psk.sKeyInfoLength": 6,
     }
-    assert ezviz_lan_wifi_get_config_request(42).to_native_args_hint()[
-        "dwCommand"
-    ] == HcNetSdkDvrCommand.GET_WIFI_CFG
-    assert ezviz_lan_wifi_ap_info_list_request(42).to_native_args_hint()[
-        "structure"
-    ] == "NET_DVR_AP_INFO_LIST"
+    assert (
+        ezviz_lan_wifi_get_config_request(42).to_native_args_hint()["dwCommand"]
+        == HcNetSdkDvrCommand.GET_WIFI_CFG
+    )
+    assert (
+        ezviz_lan_wifi_ap_info_list_request(42).to_native_args_hint()["structure"]
+        == "NET_DVR_AP_INFO_LIST"
+    )
     assert ezviz_lan_wifi_connect_status_request(42).to_native_args_hint() == {
         "api": HCNETSDK_GET_DVR_CONFIG,
         "lUserID": 42,
@@ -6164,9 +6081,9 @@ def test_ezviz_lan_wifi_request_shapes_match_apk_setters() -> None:
     assert hint["readBeforeWrite"] is True
     assert hint["fieldUpdates"]["sEssid"] == EXPECTED_TEST_WIFI_SSID_BYTES
     assert hint["fieldUpdates"]["wpa_psk.sKeyInfo"] == "<password-bytes>"
-    assert ezviz_lan_wifi_work_mode_update_request(42, 1).to_native_args_hint()[
-        "fieldUpdates"
-    ] == {"dwMode": 1}
+    assert ezviz_lan_wifi_work_mode_update_request(42, 1).to_native_args_hint()["fieldUpdates"] == {
+        "dwMode": 1
+    }
 
 
 def test_ezviz_lan_wifi_ap_info_list_parses_native_buffer() -> None:
@@ -6288,15 +6205,11 @@ def test_ezviz_lan_hd_config_parses_disk_table() -> None:
 def test_ezviz_lan_hd_config_rejects_malformed_disk_tables() -> None:
     with pytest.raises(PyEzvizError, match="disk count"):
         ezviz_lan_hd_config(
-            (4760).to_bytes(4, "big")
-            + (34).to_bytes(4, "big")
-            + b"\x00" * (4760 - 8)
+            (4760).to_bytes(4, "big") + (34).to_bytes(4, "big") + b"\x00" * (4760 - 8)
         )
 
     with pytest.raises(PyEzvizError, match="disk table"):
-        ezviz_lan_hd_config(
-            (152).to_bytes(4, "big") + (2).to_bytes(4, "big") + b"\x00" * 144
-        )
+        ezviz_lan_hd_config((152).to_bytes(4, "big") + (2).to_bytes(4, "big") + b"\x00" * 144)
 
 
 def test_ezviz_lan_camera_param_config_parses_traced_native_buffer() -> None:
@@ -6383,10 +6296,7 @@ def test_ezviz_lan_camera_param_config_parses_traced_native_buffer() -> None:
 
 
 def test_ezviz_lan_time_ntp_and_device_config_parsers() -> None:
-    time_payload = b"".join(
-        value.to_bytes(4, "big")
-        for value in (2026, 6, 21, 15, 47, 8)
-    )
+    time_payload = b"".join(value.to_bytes(4, "big") for value in (2026, 6, 21, 15, 47, 8))
     ntp_payload = (
         b"time.example.net".ljust(64, b"\x00")
         + (60).to_bytes(2, "big")
@@ -6474,10 +6384,7 @@ def test_ezviz_lan_time_ntp_and_device_config_parsers() -> None:
         ezviz_lan_time_config(b"\x00")
     with pytest.raises(PyEzvizError, match="month"):
         ezviz_lan_time_config(
-            b"".join(
-                value.to_bytes(4, "big")
-                for value in (2026, 13, 21, 15, 47, 8)
-            )
+            b"".join(value.to_bytes(4, "big") for value in (2026, 13, 21, 15, 47, 8))
         )
     with pytest.raises(PyEzvizError, match="too short"):
         ezviz_lan_ntp_config(b"\x00")
@@ -6557,9 +6464,7 @@ def test_ezviz_lan_size_prefixed_dvr_parsers_accept_shifted_size_words() -> None
     device[0:4] = (180).to_bytes(4, "big")
     device[4:36] = b"ShiftedCam".ljust(32, b"\x00")
 
-    assert ezviz_lan_wifi_ap_info_list(
-        _shifted_size_word_payload(wifi_ap)
-    )[0].ssid == "LabWifi"
+    assert ezviz_lan_wifi_ap_info_list(_shifted_size_word_payload(wifi_ap))[0].ssid == "LabWifi"
     assert (
         ezviz_lan_net_config_v30(
             _shifted_size_word_payload(_net_config_v30_payload())
@@ -6567,9 +6472,7 @@ def test_ezviz_lan_size_prefixed_dvr_parsers_accept_shifted_size_words() -> None
         == 492
     )
     assert (
-        ezviz_lan_device_config_v40(
-            _shifted_size_word_payload(bytes(device))
-        ).device_name
+        ezviz_lan_device_config_v40(_shifted_size_word_payload(bytes(device))).device_name
         == "ShiftedCam"
     )
     assert (
@@ -6579,12 +6482,7 @@ def test_ezviz_lan_size_prefixed_dvr_parsers_accept_shifted_size_words() -> None
         == 508
     )
     assert ezviz_lan_hd_config(_shifted_size_word_payload(hd)).disk_count == 0
-    assert (
-        ezviz_lan_camera_param_config(
-            _shifted_size_word_payload(camera)
-        ).brightness
-        == 10
-    )
+    assert ezviz_lan_camera_param_config(_shifted_size_word_payload(camera)).brightness == 10
     assert (
         ezviz_lan_compression_config(
             _shifted_size_word_payload(_compression_config_v30_payload())
@@ -6624,9 +6522,7 @@ def test_ezviz_lan_sensitive_dvr_config_summaries_do_not_decode_values() -> None
         trailing_bytes=0,
         nonzero_bytes=5,
     )
-    assert ezviz_lan_ezviz_access_config_summary(
-        shifted_access
-    ) == EzvizLanDvrConfigSummary(
+    assert ezviz_lan_ezviz_access_config_summary(shifted_access) == EzvizLanDvrConfigSummary(
         command=HcNetSdkDvrCommand.GET_EZVIZ_ACCESS_CFG,
         structure="NET_DVR_EZVIZ_ACCESS_CFG",
         declared_size=516,
@@ -6661,9 +6557,7 @@ def test_ezviz_lan_sensitive_dvr_config_summaries_do_not_decode_values() -> None
     with pytest.raises(PyEzvizError, match="too short"):
         ezviz_lan_wifi_config_summary(b"\x00")
     with pytest.raises(PyEzvizError, match="truncated"):
-        ezviz_lan_ezviz_access_config_summary(
-            (516).to_bytes(4, "big") + b"\x00" * 32
-        )
+        ezviz_lan_ezviz_access_config_summary((516).to_bytes(4, "big") + b"\x00" * 32)
     with pytest.raises(PyEzvizError, match="too short"):
         ezviz_lan_user_config_v30_summary(b"\x00")
 
@@ -6701,9 +6595,7 @@ def test_ezviz_lan_ezviz_access_config_parser_decodes_redacted_fields() -> None:
     empty_verification = bytearray(raw)
     empty_verification[72:104] = b"\x00" * 32
     assert (
-        ezviz_lan_ezviz_access_config(bytes(empty_verification))
-        .verification_code_present
-        is False
+        ezviz_lan_ezviz_access_config(bytes(empty_verification)).verification_code_present is False
     )
 
     with pytest.raises(PyEzvizError, match="too short"):
@@ -6763,9 +6655,7 @@ def test_ezviz_lan_user_config_v30_parser_decodes_sensitive_values() -> None:
     with pytest.raises(PyEzvizError, match="truncated"):
         ezviz_lan_user_config_v30(len(raw).to_bytes(4, "big") + b"\x00" * 64)
     with pytest.raises(PyEzvizError, match="misaligned"):
-        ezviz_lan_user_config_v30(
-            (len(raw) + 1).to_bytes(4, "big") + raw[4:] + b"\x00"
-        )
+        ezviz_lan_user_config_v30((len(raw) + 1).to_bytes(4, "big") + raw[4:] + b"\x00")
 
 
 def test_ezviz_lan_record_config_v30_parser_matches_traced_layout() -> None:
@@ -6933,9 +6823,7 @@ def test_ezviz_lan_dvr_config_parsers_use_traced_native_offsets() -> None:
     assert parsed_picture.alignment == 6
     assert parsed_picture.osd_millisecond_enabled == 1
 
-    short_picture = ezviz_lan_picture_config(
-        (36).to_bytes(4, "big") + b"EZVIZ".ljust(32, b"\x00")
-    )
+    short_picture = ezviz_lan_picture_config((36).to_bytes(4, "big") + b"EZVIZ".ljust(32, b"\x00"))
     assert short_picture.video_format is None
     assert short_picture.show_channel_name is None
     assert short_picture.osd_position is None
@@ -6999,9 +6887,7 @@ def test_ezviz_lan_ezviz_access_request_matches_local_add_rewrite() -> None:
         b"api.ezvizlife.com\x00\x00",
     )
 
-    assert ezviz_lan_ezviz_access_replacement_domain(
-        b"api.ezvizlife.com\x00"
-    ) == "api.ezvizru.com"
+    assert ezviz_lan_ezviz_access_replacement_domain(b"api.ezvizlife.com\x00") == "api.ezvizru.com"
     assert ezviz_lan_ezviz_access_replacement_domain(None) == "dev.ezvizru.com"
     assert get_request.to_native_args_hint()["dwCommand"] == 3398
     assert get_request.to_native_args_hint()["lChannel"] == 1
@@ -7009,9 +6895,10 @@ def test_ezviz_lan_ezviz_access_request_matches_local_add_rewrite() -> None:
         "byDomainName": b"dev.ezvizru.com",
         "byDomainNameLength": 15,
     }
-    assert replacement_request.to_native_args_hint()["fieldUpdates"][
-        "byDomainName"
-    ] == EXPECTED_EZVIZ_RU_DOMAIN_BYTES
+    assert (
+        replacement_request.to_native_args_hint()["fieldUpdates"]["byDomainName"]
+        == EXPECTED_EZVIZ_RU_DOMAIN_BYTES
+    )
 
 
 def test_ezviz_lan_audio_video_and_picture_request_shapes() -> None:
@@ -7043,9 +6930,7 @@ def test_ezviz_lan_audio_video_and_picture_request_shapes() -> None:
     assert audio_input.to_native_args_hint()["dwCommand"] == 3201
     assert audio_output.to_native_args_hint()["dwCommand"] == 3237
     assert input_volume.to_native_args_hint()["fieldUpdates"] == {"byVolume": 7}
-    assert output_volume.to_native_args_hint()["fieldUpdates"] == {
-        "byAudioOutVolume": 8
-    }
+    assert output_volume.to_native_args_hint()["fieldUpdates"] == {"byAudioOutVolume": 8}
     assert video_get.to_native_args_hint()["structure"] == "NET_DVR_COMPRESSIONCFG_V30"
     assert video_set.to_native_args_hint()["fieldUpdates"] == {
         "struNormHighRecordPara.byVideoEncType": 1,
@@ -7129,15 +7014,21 @@ def test_ezviz_lan_storage_format_request_shapes_match_rn_module() -> None:
         status=1,
         done=True,
     )
-    assert ezviz_lan_sd_format_progress_result(
-        native_succeeded=True,
-        status=7,
-        last_error=0,
-    ).code == -1
-    assert ezviz_lan_sd_format_progress_result(
-        native_succeeded=False,
-        last_error=23,
-    ).code == 23
+    assert (
+        ezviz_lan_sd_format_progress_result(
+            native_succeeded=True,
+            status=7,
+            last_error=0,
+        ).code
+        == -1
+    )
+    assert (
+        ezviz_lan_sd_format_progress_result(
+            native_succeeded=False,
+            last_error=23,
+        ).code
+        == 23
+    )
     with pytest.raises(PyEzvizError, match="disk number"):
         ezviz_lan_sd_format_start_request(42, -1).to_native_args_hint()
     with pytest.raises(PyEzvizError, match="format handle"):
@@ -7209,9 +7100,7 @@ def test_hcnetsdk_set_sdk_local_cfg_shapes_match_jna_surface() -> None:
         field_updates={"dwAlarmMaxBlockNum": 32},
     )
     ability_parse = ezviz_hcnetsdk_local_ability_parse_request(enabled=True)
-    ptz_without_recv = ezviz_hcnetsdk_local_ptz_without_recv_request(
-        without_recv=False
-    )
+    ptz_without_recv = ezviz_hcnetsdk_local_ptz_without_recv_request(without_recv=False)
 
     assert HCNETSDK_SET_SDK_LOCAL_CFG == "NET_DVR_SetSDKLocalCfg"
     assert HcNetSdkLocalCfgType.TCP_PORT_BIND == 0
@@ -7416,20 +7305,14 @@ def test_hcnetsdk_device_ability_request_matches_device_ability_request() -> Non
 
 
 def test_hcnetsdk_device_ability_xml_builders_match_apk_shapes() -> None:
-    assert hcnetsdk_device_ability_xml("PTZAbility", channel=1) == (
-        EXPECTED_PTZ_ABILITY_XML
-    )
+    assert hcnetsdk_device_ability_xml("PTZAbility", channel=1) == (EXPECTED_PTZ_ABILITY_XML)
     assert ezviz_lan_ptz_ability_input(1) == EXPECTED_PTZ_ABILITY_XML
-    assert ezviz_lan_audio_video_compress_info_input(2) == (
-        EXPECTED_AUDIO_VIDEO_COMPRESS_INFO_XML
-    )
+    assert ezviz_lan_audio_video_compress_info_input(2) == (EXPECTED_AUDIO_VIDEO_COMPRESS_INFO_XML)
     assert ezviz_lan_image_display_param_ability_input(3) == (
         EXPECTED_IMAGE_DISPLAY_PARAM_ABILITY_XML
     )
     assert ezviz_lan_video_pic_ability_input(4) == EXPECTED_VIDEO_PIC_ABILITY_XML
-    assert ezviz_lan_access_protocol_ability_input() == (
-        EXPECTED_ACCESS_PROTOCOL_ABILITY_XML
-    )
+    assert ezviz_lan_access_protocol_ability_input() == (EXPECTED_ACCESS_PROTOCOL_ABILITY_XML)
 
 
 def test_ezviz_lan_soft_hardware_ability_request_matches_helper() -> None:
@@ -7547,7 +7430,7 @@ def test_ezviz_lan_ptz_ability_parses_handler_fields() -> None:
 
 def test_ezviz_lan_access_protocol_ability_parses_local_add_fields() -> None:
     ability = ezviz_lan_access_protocol_ability(
-        b"\x00<AccessProtocolAbility version=\"2.0\">"
+        b'\x00<AccessProtocolAbility version="2.0">'
         b"<channelNO>1</channelNO>"
         b"<EzvizParam>"
         b'<enable opt="true"/>'
@@ -7575,7 +7458,7 @@ def test_ezviz_lan_access_protocol_ability_parses_local_add_fields() -> None:
 
 def test_ezviz_lan_video_pic_ability_parses_safe_osd_and_grid_fields() -> None:
     ability = ezviz_lan_video_pic_ability(
-        b"<VideoPicAbility version=\"2.0\">"
+        b'<VideoPicAbility version="2.0">'
         b"<channelNO>1</channelNO>"
         b"<OSD>"
         b"<ChannelName><enabled>true</enabled></ChannelName>"
@@ -7616,7 +7499,7 @@ def test_ezviz_lan_video_pic_ability_parses_safe_osd_and_grid_fields() -> None:
 
 def test_ezviz_lan_ipc_front_parameter_ability_parses_camera_para_ranges() -> None:
     ability = ezviz_lan_ipc_front_parameter_ability(
-        b"<CAMERAPARA version=\"1.0\">"
+        b'<CAMERAPARA version="1.0">'
         b"<PowerLineFrequencyMode><Range>0,1</Range></PowerLineFrequencyMode>"
         b"<WhiteBalance><WhiteBalanceMode><Range>1,3</Range>"
         b"</WhiteBalanceMode></WhiteBalance>"
@@ -7664,40 +7547,22 @@ def test_ezviz_lan_ipc_front_parameter_ability_parses_camera_para_ranges() -> No
         exposure_mode_range="1",
         exposure_set_range="4,5,6,7",
         exposure_user_set=EzvizLanIpcFrontParameterRange(minimum=1, maximum=40000),
-        gain_level=EzvizLanIpcFrontParameterRange(
-            minimum=0, maximum=100, default=100
-        ),
-        brightness_level=EzvizLanIpcFrontParameterRange(
-            minimum=0, maximum=100, default=50
-        ),
-        contrast_level=EzvizLanIpcFrontParameterRange(
-            minimum=0, maximum=100, default=50
-        ),
-        sharpness_level=EzvizLanIpcFrontParameterRange(
-            minimum=0, maximum=100, default=50
-        ),
-        saturation_level=EzvizLanIpcFrontParameterRange(
-            minimum=0, maximum=100, default=50
-        ),
+        gain_level=EzvizLanIpcFrontParameterRange(minimum=0, maximum=100, default=100),
+        brightness_level=EzvizLanIpcFrontParameterRange(minimum=0, maximum=100, default=50),
+        contrast_level=EzvizLanIpcFrontParameterRange(minimum=0, maximum=100, default=50),
+        sharpness_level=EzvizLanIpcFrontParameterRange(minimum=0, maximum=100, default=50),
+        saturation_level=EzvizLanIpcFrontParameterRange(minimum=0, maximum=100, default=50),
         day_night_filter_type_range="0,1,2,3",
         switch_schedule_enabled_range="0,1",
         day_to_night_filter_level_range="0,1,2,3",
         night_to_day_filter_level_range="4,5,6,7",
-        day_night_filter_time=EzvizLanIpcFrontParameterRange(
-            minimum=0, maximum=120
-        ),
+        day_night_filter_time=EzvizLanIpcFrontParameterRange(minimum=0, maximum=120),
         backlight_mode_range="0,1,2,3,4,5",
         mirror_range="0,1,2,3",
         digital_noise_reduction_enable_range="0,1,2",
-        digital_noise_reduction_level=EzvizLanIpcFrontParameterRange(
-            minimum=0, maximum=100
-        ),
-        digital_noise_spectral_level=EzvizLanIpcFrontParameterRange(
-            minimum=0, maximum=80
-        ),
-        digital_noise_temporal_level=EzvizLanIpcFrontParameterRange(
-            minimum=10, maximum=90
-        ),
+        digital_noise_reduction_level=EzvizLanIpcFrontParameterRange(minimum=0, maximum=100),
+        digital_noise_spectral_level=EzvizLanIpcFrontParameterRange(minimum=0, maximum=80),
+        digital_noise_temporal_level=EzvizLanIpcFrontParameterRange(minimum=10, maximum=90),
     )
     assert ability.success is True
     assert ability.brightness_level.supported is True
@@ -7708,7 +7573,7 @@ def test_ezviz_lan_ipc_front_parameter_ability_parses_camera_para_ranges() -> No
 
 def test_ezviz_lan_ipc_front_parameter_ability_parses_channel_entry() -> None:
     ability = ezviz_lan_ipc_front_parameter_ability(
-        b"<CAMERAPARA version=\"1.0\"><ChannelList><ChannelEntry>"
+        b'<CAMERAPARA version="1.0"><ChannelList><ChannelEntry>'
         b"<PowerLineFrequencyMode><Range>0,1</Range></PowerLineFrequencyMode>"
         b"<BrightnessLevel><Min>1</Min><Max>99</Max><Default>50</Default>"
         b"</BrightnessLevel>"
@@ -7731,7 +7596,7 @@ def test_ezviz_lan_ipc_front_parameter_ability_parses_channel_entry() -> None:
 
 def test_ezviz_lan_audio_video_compress_info_parses_stream_fields() -> None:
     ability = ezviz_lan_audio_video_compress_info(
-        b"<AudioVideoCompressInfo version=\"2.0\">"
+        b'<AudioVideoCompressInfo version="2.0">'
         b"<VideoCompressInfo><ChannelList><ChannelEntry>"
         b"<ChannelNumber>1</ChannelNumber>"
         b"<MainChannel>"
@@ -7819,7 +7684,7 @@ def test_ezviz_lan_audio_video_compress_info_parses_stream_fields() -> None:
 
 def test_ezviz_lan_audio_video_compress_info_collects_v20_frame_rates() -> None:
     ability = ezviz_lan_audio_video_compress_info(
-        b"<AudioVideoCompressInfo version=\"2.0\">"
+        b'<AudioVideoCompressInfo version="2.0">'
         b"<VideoCompressInfo><ChannelList><ChannelEntry>"
         b"<ChannelNumber>1</ChannelNumber><MainChannel>"
         b"<VideoFrameRateN>12,25</VideoFrameRateN>"
@@ -7915,12 +7780,8 @@ def test_ezviz_ptz_command_mappings_match_player_constants() -> None:
     assert EZVIZ_CAS_PTZ_COMMAND_MAP[EzvizPtzCommand.UP] == "UP"
     assert ezviz_cas_ptz_command(EzvizPtzCommand.DOWN_RIGHT) == "DOWNRIGHT"
     assert ezviz_cas_ptz_command(EzvizPtzCommand.FLIP) == ""
-    assert ezviz_lan_ptz_native_command(EzvizPtzCommand.UP) == (
-        HcNetSdkPtzCommand.TILT_UP
-    )
-    assert ezviz_lan_ptz_native_command(EzvizPtzCommand.ZOOM_OUT) == (
-        HcNetSdkPtzCommand.ZOOM_OUT
-    )
+    assert ezviz_lan_ptz_native_command(EzvizPtzCommand.UP) == (HcNetSdkPtzCommand.TILT_UP)
+    assert ezviz_lan_ptz_native_command(EzvizPtzCommand.ZOOM_OUT) == (HcNetSdkPtzCommand.ZOOM_OUT)
     assert ezviz_lan_ptz_native_command(EzvizPtzCommand.ACTION_START) == 0
     assert ezviz_lan_ptz_native_command(EzvizPtzCommand.ACTION_STOP) == 1
 
@@ -8133,9 +7994,7 @@ def test_ezviz_lan_settings_error_code_matches_presenter_offset() -> None:
 
 def test_ezviz_lan_settings_error_clears_password_for_account_errors() -> None:
     assert (
-        ezviz_lan_settings_error_clears_password(
-            HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_ERROR
-        )
+        ezviz_lan_settings_error_clears_password(HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_ERROR)
         is True
     )
     assert (
@@ -8804,3 +8663,30 @@ def test_hcnetsdk_ptz_control_rejects_invalid_ack_timeout(ack_timeout: float) ->
     )
     with pytest.raises(PyEzvizError, match="ack_timeout"):
         client.ptz_control(EzvizPtzCommand.RIGHT, ack_timeout=ack_timeout)
+
+
+@pytest.mark.parametrize("result", ["changed", "unchanged", "unsupported", "mismatch"])
+def test_set_camera_wdr_preserves_configuration(monkeypatch, result):
+    client = HcNetSdkPurePythonClient(HcNetSdkLanEndpoint("CAM123", "192.0.2.10"), "password")
+    size = 86 if result == "unsupported" else 152
+    raw = bytearray(range(size))
+    raw[:4] = size.to_bytes(4, "big")
+    raw[52] = int(result == "unchanged")
+    before = ezviz_lan_camera_param_config(raw)
+    raw[52] = 1
+    after = ezviz_lan_camera_param_config(raw)
+    reads = iter([before, before if result == "mismatch" else after])
+    writes = []
+    monkeypatch.setattr(client, "camera_param_config", lambda: next(reads))
+    monkeypatch.setattr(client, "execute_template", writes.append)
+    if result in ("unsupported", "mismatch"):
+        with pytest.raises(PyEzvizError, match=r"Unsupported|read-back"):
+            client.set_camera_wdr(True)
+    else:
+        assert client.set_camera_wdr(True) == after
+    if result in ("unchanged", "unsupported"):
+        assert not writes
+    else:
+        assert len(writes) == 1
+        assert writes[0].command_id == 0x111095
+        assert writes[0].body_tail == bytes(raw)

@@ -5,6 +5,8 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.6.0 - 2026-11-21
+
 ### Added
 
 - Add immutable reported camera channels, app-backed point routing, explicit

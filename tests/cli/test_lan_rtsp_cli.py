@@ -1,4 +1,4 @@
-"""RTSP configuration is local-only, targeted and not a playback claim."""
+"""LAN service and image configuration use only the device command port."""
 
 import json
 from typing import Any
@@ -11,6 +11,7 @@ from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.streaming.local.hcnetsdk.api import (
     EzvizLanServicesSwitchState,
     HcNetSdkStdXmlConfigResponse,
+    ezviz_lan_camera_param_config,
     ezviz_lan_services_switch_set_payload,
 )
 
@@ -43,7 +44,9 @@ def setup(monkeypatch, tmp_path):
             return EzvizLanServicesSwitchState(raw=self.value)
 
         def services_switch_set(self, current_payload, **kwargs):
-            calls.append(("write", current_payload, kwargs))
+            calls.append(
+                ("write", current_payload, {k: v for k, v in kwargs.items() if v is not None})
+            )
             if self.write_error:
                 raise self.write_error
             if not self.ignore_write:
@@ -231,3 +234,74 @@ def test_transport_failure_is_redacted_and_writes_never_retried(
     assert "synthetic-secret" not in output.out + output.err
     assert json.loads(output.out)["stage"] == stage
     assert len([item for item in calls if not isinstance(item, str) and item[0] == "write"]) <= 1
+
+
+@pytest.mark.parametrize(
+    ("service", "action", "desired"), [("hiksdk", "disable", 0), ("web", "enable", 1)]
+)
+def test_named_service_write_preserves_other_fields(setup, capsys, service, action, desired):
+    args, client, calls, _ = setup
+    args[1:3] = ["service", service, action]
+    before = client.value
+    assert cli.main(args) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        service: desired,
+        "enabled": desired == 1,
+        "changed": True,
+        "verified": "configuration",
+    }
+    assert calls[2] == ("write", before, {service: desired})
+    assert client.value == {
+        **before,
+        "servicesSwitch": {**before["servicesSwitch"], service: desired},
+    }
+
+
+def test_hiksdk_disable_without_readback_does_not_claim_success(setup, capsys, monkeypatch):
+    args, client, calls, _ = setup
+    args[1:3] = ["service", "hiksdk", "disable"]
+    write = client.services_switch_set
+
+    def disable_command_port(*args, **kwargs):
+        result = write(*args, **kwargs)
+        client.read_error = ConnectionRefusedError()
+        return result
+
+    monkeypatch.setattr(client, "services_switch_set", disable_command_port)
+    assert cli.main(args) == 1
+    output = json.loads(capsys.readouterr().out)
+    assert (output["stage"], output["outcome"]) == ("read-back", "unknown")
+    assert [call[0] for call in calls if isinstance(call, tuple)] == ["client", "write"]
+
+
+@pytest.mark.parametrize("size", [12, 53, 86])
+def test_wdr_status_returns_reported_fields_only(setup, capsys, monkeypatch, size):
+    args, client, calls, _ = setup
+    args[1:3] = ["wdr", "status"]
+    payload = bytearray(size)
+    payload[:4] = size.to_bytes(4, "big")
+    if size > 52:
+        payload[52] = 1
+    if size > 84:
+        payload[84] = 2
+    monkeypatch.setattr(
+        client,
+        "camera_param_config",
+        lambda: ezviz_lan_camera_param_config(bytes(payload)),
+        raising=False,
+    )
+
+    assert cli.main(args) == (0 if size > 52 else 1)
+    output = json.loads(capsys.readouterr().out)
+    if size > 52:
+        assert output == {
+            "ok": True,
+            "channel": 1,
+            "wdr_enabled": 1,
+            "backlight_mode": 2 if size > 84 else None,
+            "verified": "configuration",
+        }
+    else:
+        assert output["stage"] == "read"
+    assert [call[0] for call in calls] == ["client"]

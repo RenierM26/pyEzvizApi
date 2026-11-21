@@ -106,6 +106,75 @@ The low-level API remains unchanged; consumers own validation, errors and
 read-back. Run these blocking SDK operations off an async event loop. Old flat
 `pyezvizapi.hcnetsdk` imports have been removed; see [compatibility changes](ha-compatibility.md).
 
+### lan service
+
+Read or update a named local service switch with the same endpoint and password
+options as `lan rtsp`. The CLI updates only the requested switch and verifies
+it by reading it back. These are local services, not EZVIZ numbered cloud
+switches.
+
+```bash
+pyezvizapi lan service hiksdk status --host 192.0.2.10 --serial CAMERA_SERIAL \
+  --lan-password-file /private/device-password
+pyezvizapi lan service web disable --host 192.0.2.10 --serial CAMERA_SERIAL \
+  --lan-password-file /private/device-password
+```
+
+Both `web` and `hiksdk` take `status`, `enable` or `disable`. Setting
+`hiksdk` to disabled can close the very command port used for read-back or
+re-enabling. If the port closes, verification can fail with an unknown outcome;
+the CLI does not retry. Use an independent recovery path (such as the EZVIZ app)
+if you intend to disable local SDK access.
+
+### lan wdr
+
+Read channel 1's local WDR and backlight mode without making a change:
+
+```bash
+pyezvizapi lan wdr status --host 192.0.2.10 --serial CAMERA_SERIAL \
+  --lan-password-file /private/device-password
+```
+
+The command uses `HcNetSdkPurePythonClient.camera_param_config()`. It returns the
+firmware's raw `wdr_enabled` and `backlight_mode` values, with `null` for an
+omitted field. It reports an error if neither field is present. A returned field
+does not by itself establish capability support or parity with cloud switch
+604.
+
+Use `lan wdr enable` or `lan wdr disable` with the same connection options.
+The SDK method `set_camera_wdr(enabled)` requires the native 152-byte layout
+and a binary starting value. It preserves backlight mode and the other bytes
+in the outgoing configuration, sends at most one write, and verifies the full
+configuration by reading back. Native setting writes through a single SDK
+client are serialized from the initial read through verification. This does
+not coordinate different clients or protect a service-switch payload that
+the caller read separately. Avoid concurrent configuration changes from
+another client.
+If verification fails, read status before retrying. Writes were verified on
+an H9c; other models are unverified.
+
+SDK callers can use `set_camera_video_effect(effect, level)` for brightness,
+contrast, sharpness or saturation, and `set_camera_day_night_mode(mode)` for
+the numeric native mode. Read the current values via `camera_param_config()`.
+The day/night writer preserves the existing schedule and is not the numbered
+cloud IR switch.
+
+SDK callers can also use `set_audio_input_volume(volume)` and
+`set_audio_output_volume(volume)` (integer 0-100). Each updates only its own
+configuration and verifies it by reading back. On the H9c, a change addressed
+to channel 1 was also visible when reading channel 2. These setters are not
+per-lens controls.
+
+For legacy picture configuration, use `osd_visible()` and
+`set_osd_visible(visible)`. These use the legacy wire field rather than the
+V40 picture model's OSD offset. The H9c shares OSD visibility across both
+reported channels; this is not a per-lens control.
+
+`set_camera_mirror_mode(mode)` updates the default camera’s native mirror
+configuration. Modes are numeric (0-3); this does not set the cloud ImageFlip
+property. On H9c the configuration was verified, not the rendered orientation
+or which physical lens changes.
+
 ### lan ptz
 
 Moves the camera over the local command port with the same credentials and

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 import errno
 import hashlib
@@ -8804,3 +8805,156 @@ def test_hcnetsdk_ptz_control_rejects_invalid_ack_timeout(ack_timeout: float) ->
     )
     with pytest.raises(PyEzvizError, match="ack_timeout"):
         client.ptz_control(EzvizPtzCommand.RIGHT, ack_timeout=ack_timeout)
+
+
+@pytest.mark.parametrize("result", ["changed", "unchanged", "unsupported", "mismatch"])
+def test_set_camera_wdr_preserves_configuration(monkeypatch, result):
+    client = HcNetSdkPurePythonClient(HcNetSdkLanEndpoint("CAM123", "192.0.2.10"), "password")
+    size = 86 if result == "unsupported" else 152
+    raw = bytearray(range(size))
+    raw[:4] = size.to_bytes(4, "big")
+    raw[52] = int(result == "unchanged")
+    before = ezviz_lan_camera_param_config(raw)
+    raw[52] = 1
+    after = ezviz_lan_camera_param_config(raw)
+    reads = iter([before, before if result == "mismatch" else after])
+    writes: list[HcNetSdkCommandPortControlTemplate] = []
+    monkeypatch.setattr(client, "camera_param_config", lambda: next(reads))
+    monkeypatch.setattr(client, "execute_template", writes.append)
+    if result in ("unsupported", "mismatch"):
+        with pytest.raises(PyEzvizError, match=r"Unsupported|read-back"):
+            client.set_camera_wdr(True)
+    else:
+        assert client.set_camera_wdr(True) == after
+    if result in ("unchanged", "unsupported"):
+        assert not writes
+    else:
+        assert len(writes) == 1
+        assert writes[0].command_id == 0x111095
+        assert writes[0].body_tail == bytes(raw)
+
+
+@pytest.mark.parametrize(
+    ("method", "args", "offset"),
+    [
+        ("set_camera_video_effect", ("brightness", 51), 4),
+        ("set_camera_video_effect", ("contrast", 51), 5),
+        ("set_camera_video_effect", ("sharpness", 51), 6),
+        ("set_camera_video_effect", ("saturation", 51), 7),
+        ("set_camera_day_night_mode", (1,), 72),
+        ("set_camera_mirror_mode", (3,), 118),
+    ],
+)
+def test_set_camera_imaging_field(monkeypatch, method, args, offset):
+    client = HcNetSdkPurePythonClient(HcNetSdkLanEndpoint("CAM123", "192.0.2.10"), "password")
+    raw = bytearray(152)
+    raw[:4] = len(raw).to_bytes(4, "big")
+    before = ezviz_lan_camera_param_config(raw)
+    raw[offset] = args[-1]
+    after = ezviz_lan_camera_param_config(raw)
+    reads = iter([before, after])
+    writes: list[HcNetSdkCommandPortControlTemplate] = []
+    monkeypatch.setattr(client, "camera_param_config", lambda: next(reads))
+    monkeypatch.setattr(client, "execute_template", writes.append)
+    assert getattr(client, method)(*args) == after
+    assert len(writes) == 1
+    assert writes[0].body_tail == bytes(raw)
+
+
+@pytest.mark.parametrize(
+    ("setter", "getter", "parser", "command", "size", "offset"),
+    [
+        ("set_audio_input_volume", "audio_input_param", ezviz_lan_audio_input_param, 0x113202, 8, 1),
+        ("set_audio_output_volume", "audioout_volume", ezviz_lan_audio_output_volume, 0x113027, 68, 4),
+    ],
+)
+def test_lan_audio_volume_write(monkeypatch, setter, getter, parser, command, size, offset):
+    client = HcNetSdkPurePythonClient(HcNetSdkLanEndpoint("CAM123", "192.0.2.10"), "password")
+    payload = bytearray(size)
+    if getter == "audioout_volume":
+        payload[:2] = size.to_bytes(2, "big")
+    before = parser(payload)
+    payload[offset] = 75
+    after = parser(payload)
+    reads = iter([before, after, after])
+    writes: list[HcNetSdkCommandPortControlTemplate] = []
+    monkeypatch.setattr(client, getter, lambda: next(reads))
+    monkeypatch.setattr(client, "execute_template", writes.append)
+    update = getattr(client, setter)
+    with pytest.raises(PyEzvizError, match="0 to 100"):
+        update(True)
+    assert update(75) == after
+    assert update(75) == after
+    assert len(writes) == 1
+    assert writes[0].command_id == command
+    assert writes[0].body_tail == b"\0\0\0\1" + payload
+
+
+def test_legacy_osd_visibility_round_trip(monkeypatch):
+    client = HcNetSdkPurePythonClient(HcNetSdkLanEndpoint("CAM123", "192.0.2.10"), "password")
+    payload = bytearray(1968)
+    payload[:4] = len(payload).to_bytes(4, "big")
+    payload[151] = 1  # The V40 offset has the opposite value.
+    before = ezviz_lan_picture_config(payload)
+    payload[0x78F] = 1
+    after = ezviz_lan_picture_config(payload)
+    reads = iter([before, before, after, after])
+    writes: list[HcNetSdkCommandPortControlTemplate] = []
+    monkeypatch.setattr(client, "picture_config_v30", lambda: next(reads))
+    monkeypatch.setattr(client, "execute_template", writes.append)
+    assert not client.osd_visible()
+    client.set_osd_visible(True)
+    client.set_osd_visible(True)
+    assert len(writes) == 1
+    assert writes[0].command_id == 0x110011
+    assert writes[0].body_tail == b"\0\0\0\1" + payload
+
+
+def test_camera_parameter_writes_cannot_interleave(monkeypatch):
+    client = HcNetSdkPurePythonClient(HcNetSdkLanEndpoint("CAM123", "192.0.2.10"), "password")
+    raw = (152).to_bytes(4, "big") + bytes(148)
+    first_write = Event()
+    second_attempt = Event()
+    release_first = Event()
+    reads: list[bytes] = []
+
+    def read():
+        reads.append(raw)
+        return ezviz_lan_camera_param_config(raw)
+
+    def write(template):
+        nonlocal raw
+        if not first_write.is_set():
+            first_write.set()
+            assert release_first.wait(5)
+        raw = template.body_tail
+
+    class ObservedLock:
+        def __init__(self):
+            self.lock = client._settings_lock  # noqa: SLF001
+            self.entries = 0
+
+        def __enter__(self):
+            self.entries += 1
+            if self.entries == 2:
+                second_attempt.set()
+            self.lock.acquire()
+
+        def __exit__(self, *args):
+            self.lock.release()
+
+    monkeypatch.setattr(client, "_settings_lock", ObservedLock())
+    monkeypatch.setattr(client, "camera_param_config", read)
+    monkeypatch.setattr(client, "execute_template", write)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(client.set_camera_wdr, True)
+        try:
+            assert first_write.wait(5)
+            second = pool.submit(client.set_camera_mirror_mode, 3)
+            assert second_attempt.wait(5)
+            assert len(reads) == 1
+        finally:
+            release_first.set()
+        assert first.result(timeout=5).wdr_enabled == 1
+        assert second.result(timeout=5).wdr_enabled == 1
+    assert raw[118] == 3

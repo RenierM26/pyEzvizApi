@@ -33,7 +33,7 @@ import ssl
 import sys
 from threading import Lock
 import time
-from typing import Any, cast
+from typing import Any, cast, Literal
 import xml.etree.ElementTree as ET
 
 from Crypto.Cipher import AES, PKCS1_v1_5
@@ -4854,6 +4854,21 @@ def hcnetsdk_stdxml_isapi_command_port(  # noqa: PLR0913
     )
 
 
+# Verified write layouts; the legacy OSD field is not the V40 field.
+_CAMERA_PARAM_WRITE_COMMAND = 0x111095
+_CAMERA_PARAM_WIRE_SIZE = 152
+_CAMERA_MIRROR_OFFSET = 0x76
+_VIDEO_EFFECT_OFFSETS = {"brightness": 4, "contrast": 5, "sharpness": 6, "saturation": 7}
+_AUDIO_INPUT_WRITE_COMMAND = 0x113202
+_AUDIO_INPUT_VOLUME_OFFSET = 1
+_AUDIO_OUTPUT_WRITE_COMMAND = 0x113027
+_AUDIO_OUTPUT_WIRE_SIZE = 68
+_AUDIO_OUTPUT_VOLUME_OFFSET = 4
+_LEGACY_PICTURE_WRITE_COMMAND = 0x110011
+_LEGACY_PICTURE_WIRE_SIZE = 0x7B0
+_LEGACY_PICTURE_OSD_OFFSET = 0x78C
+
+
 class HcNetSdkPurePythonClient:
     """Pure command-port HCNetSDK-compatible client with no native SDK library."""
 
@@ -4875,6 +4890,7 @@ class HcNetSdkPurePythonClient:
         self.timeout = timeout
         self.socket_factory = socket_factory
         self.rsa_key = rsa_key
+        self._settings_lock = Lock()
 
     def execute_template(
         self,
@@ -5062,11 +5078,122 @@ class HcNetSdkPurePythonClient:
             self.dvr_config(ezviz_lan_video_effect_get_config_request(1, channel))
         )
 
+    def set_camera_wdr(self, enabled: bool) -> EzvizLanCameraParamConfig:
+        """Set WDR on the default camera configuration and verify by reading back."""
+        if not isinstance(enabled, bool):
+            raise PyEzvizError("WDR enabled must be a boolean")
+        return self._set_camera_param_byte(HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET, int(enabled), 1)
+
+    def set_camera_video_effect(
+        self, effect: Literal["brightness", "contrast", "sharpness", "saturation"], level: int
+    ) -> EzvizLanCameraParamConfig:
+        """Set one default-camera video effect (0-100) and read it back."""
+        offsets = _VIDEO_EFFECT_OFFSETS
+        if effect not in offsets:
+            raise PyEzvizError("Unknown camera video effect")
+        return self._set_camera_param_byte(offsets[effect], level, 100)
+
+    def set_camera_day_night_mode(self, mode: int) -> EzvizLanCameraParamConfig:
+        """Set the native day/night mode (0-3), preserving the existing schedule."""
+        return self._set_camera_param_byte(HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET, mode, 3)
+
+    def set_camera_mirror_mode(self, mode: int) -> EzvizLanCameraParamConfig:
+        """Set the default camera's native mirror mode (0-3) and read it back."""
+        return self._set_camera_param_byte(_CAMERA_MIRROR_OFFSET, mode, 3)
+
+    def _set_camera_param_byte(
+        self, offset: int, value: int, maximum: int
+    ) -> EzvizLanCameraParamConfig:
+        if type(value) is not int or not 0 <= value <= maximum:
+            raise PyEzvizError(f"Camera configuration value must be an integer from 0 to {maximum}")
+        with self._settings_lock:
+            before = self.camera_param_config()
+            # The native 1068 dispatcher uses the complete 152-byte wire structure.
+            wire_size = _CAMERA_PARAM_WIRE_SIZE
+            if len(before.raw) != wire_size or int.from_bytes(before.raw[:4], "big") != wire_size:
+                raise PyEzvizError("Unsupported camera configuration layout for writes")
+            if before.raw[offset] > maximum:
+                raise PyEzvizError("Device did not report a recognized starting value")
+            if before.raw[offset] == value:
+                return before
+            payload = bytearray(before.raw)
+            payload[offset] = value
+            return self._write_verified_config(
+                _CAMERA_PARAM_WRITE_COMMAND,
+                bytes(payload),
+                self.camera_param_config,
+                "Camera configuration read-back did not match",
+                name="SET_CAMERA_PARAM_CFG",
+            )
+
     def wifi_connect_status(self, channel: int = 0) -> EzvizLanWifiConnectStatus:
         """Read and parse traced ``NET_DVR_WIFI_CONNECT_STATUS`` output."""
         return ezviz_lan_wifi_connect_status(
             self.dvr_config(ezviz_lan_wifi_connect_status_request(1, channel=channel))
         )
+
+    def set_audio_input_volume(self, volume: int) -> EzvizLanAudioInputParam:
+        """Set local microphone volume; the device may share it across lenses."""
+        _validate_lan_audio_volume(volume)
+        with self._settings_lock:
+            before = self.audio_input_param()
+            if before.volume == volume:
+                return before
+            offset = _AUDIO_INPUT_VOLUME_OFFSET
+            payload = before.raw[:offset] + bytes([volume]) + before.raw[offset + 1 :]
+            return self._write_verified_config(
+                _AUDIO_INPUT_WRITE_COMMAND,
+                payload,
+                self.audio_input_param,
+                "Microphone configuration read-back did not match",
+                channel=1,
+            )
+
+    def set_audio_output_volume(self, volume: int) -> EzvizLanAudioOutputVolume:
+        """Set local speaker volume; the device may share it across lenses."""
+        _validate_lan_audio_volume(volume)
+        with self._settings_lock:
+            before = self.audioout_volume()
+            wire_size = _AUDIO_OUTPUT_WIRE_SIZE
+            if len(before.raw) != wire_size or before.raw[:4] != (wire_size << 16).to_bytes(
+                4, "big"
+            ):
+                raise PyEzvizError("Unsupported audio-output configuration layout")
+            if before.volume == volume:
+                return before
+            offset = _AUDIO_OUTPUT_VOLUME_OFFSET
+            payload = before.raw[:offset] + bytes([volume]) + before.raw[offset + 1 :]
+            return self._write_verified_config(
+                _AUDIO_OUTPUT_WRITE_COMMAND,
+                payload,
+                self.audioout_volume,
+                "Speaker configuration read-back did not match",
+                channel=1,
+            )
+
+    def _write_verified_config[
+        Config: (
+            EzvizLanCameraParamConfig,
+            EzvizLanAudioInputParam,
+            EzvizLanAudioOutputVolume,
+            EzvizLanPictureConfig,
+        )
+    ](
+        self,
+        command_id: int,
+        payload: bytes,
+        read: Callable[[], Config],
+        mismatch_message: str,
+        *,
+        channel: int | None = None,
+        name: str | None = None,
+    ) -> Config:
+        body = payload if channel is None else channel.to_bytes(4, "big") + payload
+        self.execute_template(HcNetSdkCommandPortControlTemplate(command_id, body, name=name))
+        after = read()
+        if after.raw != payload:
+            raise PyEzvizError(mismatch_message)
+        return after
 
     def audio_input_param(self, channel: int = 1) -> EzvizLanAudioInputParam:
         """Read and parse traced ``NET_DVR_AUDIO_INPUT_PARAM`` output."""
@@ -5110,6 +5237,39 @@ class HcNetSdkPurePythonClient:
         return ezviz_lan_picture_config(
             self.dvr_config(ezviz_lan_pic_config_v30_get_request(1, channel))
         )
+
+    def osd_visible(self) -> bool:
+        """Read OSD visibility from the default channel's legacy picture configuration."""
+        return bool(self._legacy_osd_value(self.picture_config_v30().raw))
+
+    def set_osd_visible(self, visible: bool) -> None:
+        """Set legacy OSD visibility; firmware may share this across lenses."""
+        if type(visible) is not bool:
+            raise PyEzvizError("OSD visibility must be a boolean")
+        with self._settings_lock:
+            before = self.picture_config_v30().raw
+            if self._legacy_osd_value(before) == visible:
+                return
+            offset = _LEGACY_PICTURE_OSD_OFFSET
+            payload = before[:offset] + int(visible).to_bytes(4, "big") + before[offset + 4 :]
+            self._write_verified_config(
+                _LEGACY_PICTURE_WRITE_COMMAND,
+                payload,
+                self.picture_config_v30,
+                "OSD configuration read-back did not match",
+                channel=1,
+            )
+
+    @staticmethod
+    def _legacy_osd_value(raw: bytes) -> int:
+        wire_size = _LEGACY_PICTURE_WIRE_SIZE
+        if len(raw) != wire_size or int.from_bytes(raw[:4], "big") != wire_size:
+            raise PyEzvizError("Unsupported legacy picture configuration layout")
+        offset = _LEGACY_PICTURE_OSD_OFFSET
+        value = int.from_bytes(raw[offset : offset + 4], "big")
+        if value not in (0, 1):
+            raise PyEzvizError("Device did not report binary OSD visibility")
+        return value
 
     def wifi_config_summary(self) -> EzvizLanDvrConfigSummary:
         """Read a traced ``NET_DVR_WIFI_CFG`` buffer as a non-secret summary."""
@@ -5278,24 +5438,25 @@ class HcNetSdkPurePythonClient:
         upnp: int | bool | None = None,
     ) -> HcNetSdkStdXmlConfigResponse:
         """Set named ``servicesSwitch`` values through pure command-port STDXML."""
-        return ezviz_lan_services_switch_set_command_port(
-            self.endpoint,
-            self.password,
-            current_payload,
-            command_id=command_id,
-            body_prefix=body_prefix,
-            addend_delta=addend_delta,
-            addend=addend,
-            username=self.username,
-            local_ip=self.local_ip,
-            timeout=self.timeout,
-            socket_factory=self.socket_factory,
-            rsa_key=self.rsa_key,
-            hiksdk=hiksdk,
-            web=web,
-            rtsp=rtsp,
-            upnp=upnp,
-        )
+        with self._settings_lock:
+            return ezviz_lan_services_switch_set_command_port(
+                self.endpoint,
+                self.password,
+                current_payload,
+                command_id=command_id,
+                body_prefix=body_prefix,
+                addend_delta=addend_delta,
+                addend=addend,
+                username=self.username,
+                local_ip=self.local_ip,
+                timeout=self.timeout,
+                socket_factory=self.socket_factory,
+                rsa_key=self.rsa_key,
+                hiksdk=hiksdk,
+                web=web,
+                rtsp=rtsp,
+                upnp=upnp,
+            )
 
 
 def _parse_local_device_content(value: Any) -> EzvizLocalDeviceContent | None:
@@ -5312,6 +5473,12 @@ def _hcnetsdk_time_value(
 
 def _native_string_bytes(label: str, value: str) -> bytes:
     return _impl_requests._native_string_bytes(label, value, _owner=_sys.modules[__name__])
+
+
+def _validate_lan_audio_volume(volume: int) -> None:
+    maximum = 100
+    if type(volume) is not int or not 0 <= volume <= maximum:
+        raise PyEzvizError("Audio volume must be an integer from 0 to 100")
 
 
 def _services_switch_value(label: str, value: int | bool) -> int:

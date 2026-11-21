@@ -9,6 +9,7 @@ import math
 from types import MappingProxyType
 from typing import Any, Literal
 
+from pyezvizapi.devices.channels import CameraChannel, camera_channels
 from pyezvizapi.devices.intercom_events import IntercomEvent
 from pyezvizapi.devices.observation import power_state
 from pyezvizapi.exceptions import PyEzvizError
@@ -130,6 +131,11 @@ class DeviceState:
 
 @dataclass(frozen=True)
 class CameraState(DeviceState):
+    @property
+    def channels(self) -> tuple[CameraChannel, ...]:
+        """Expose immutable, reported video identities without acquiring data."""
+        return camera_channels(self.values)
+
     @property
     def motion(self) -> bool | None:
         value = self.values.get("Motion_Trigger")

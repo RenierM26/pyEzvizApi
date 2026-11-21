@@ -7,6 +7,12 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Added
 
+- Add immutable reported camera channels, app-backed point routing, explicit
+  notification-channel normalization and strict batch image-channel selection.
+  Keep routing/framing out of Home Assistant adapters, with no implicit I/O,
+  background consumers, guessed RTSP paths or last-lens image fallback. Existing
+  positional image APIs remain compatible. See [camera channels](docs/camera-channels.md).
+
 - Local PTZ over the command port: `HCNETSDK_COMMAND_PORT_PTZ_CONTROL_COMMAND_ID`
   (`0x00030203`), `hcnetsdk_ptz_control_command_port_template`,
   `HcNetSdkPurePythonClient.ptz_control` and `lan ptz up|down|left|right`. The body

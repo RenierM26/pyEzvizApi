@@ -17,6 +17,7 @@ from pyezvizapi._shared.image_records import (
     decode_image_records as _decode_image_payload,
     is_image_envelope,
 )
+from pyezvizapi.devices.channels import CameraChannel
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.utils import decrypt_image
 
@@ -25,17 +26,51 @@ JPEG_SOI = b"\xff\xd8"
 JPEG_EOI = b"\xff\xd9"
 
 
+def process_channel_images(
+    image_data: bytes,
+    password: str | None,
+    channels: Sequence[CameraChannel],
+    *,
+    source_channel: CameraChannel | None = None,
+) -> dict[str, bytes]:
+    """Decode once and select explicit image channels, with no last-lens fallback.
+
+    Unindexed images have no proven lens identity. A sole JPEG returned from a
+    channel-targeted capture or explicitly channel-tagged notification belongs to that requested channel; otherwise it is
+    accepted only when the camera has exactly one reported channel. The legacy
+    positional/composite API remains available separately for existing callers.
+    """
+    records = decode_image_records(image_data, password, preserve_zero_channel=True)
+    indexed = any(record.channel_id is not None for record in records)
+    result: dict[str, bytes] = {}
+    if indexed:
+        for channel in channels:
+            match = next((r for r in records if r.channel_id == channel.channel_no), None)
+            if match is not None:
+                result[channel.key] = match.image_data
+    elif len(records) == 1:
+        target = source_channel or (channels[0] if len(channels) == 1 else None)
+        if target is not None and target in channels:
+            result[target.key] = records[0].image_data
+    return result
+
+
 def decode_image_records(
     image_data: bytes,
     password: str | None = None,
     *,
     key_mode: ImageKeyMode | str = ImageKeyMode.TEXT,
     key_candidates: Sequence[str] = (),
+    preserve_zero_channel: bool = False,
 ) -> tuple[ImageRecord, ...]:
     """Return ordered, channel-aware decoded images and retained auxiliary data."""
     result: list[ImageRecord] = []
     for record in _decode_image_payload(
-        image_data, password, key_mode=key_mode, key_candidates=key_candidates
+        image_data,
+        password,
+        key_mode=key_mode,
+        key_candidates=key_candidates,
+        preserve_zero_channel=preserve_zero_channel,
     ):
         segments = (
             extract_jpeg_segments(record.image_data)

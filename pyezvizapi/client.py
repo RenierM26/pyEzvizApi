@@ -50,11 +50,6 @@ from pyezvizapi.cloud.auth import (
     fetch_login_public_key,
     refresh_credentials,
 )
-from pyezvizapi.cloud.endpoints import (
-    API_ENDPOINT_CAPTCHA,
-    API_ENDPOINT_MFA_CHANNELS,
-    API_ENDPOINT_SEND_CODE_CHANNEL,
-)
 from pyezvizapi.cloud.challenges import (
     CaptchaChallenge,
     CaptchaState,
@@ -65,7 +60,6 @@ from pyezvizapi.cloud.challenges import (
     PHONE_CHANNELS,
     parse_channels,
 )
-from pyezvizapi.cloud.deadline import request_deadline
 from pyezvizapi.cloud.login import (
     LoginVerification,
     _MfaChannelPolicy,
@@ -86,12 +80,16 @@ import pyezvizapi.cloud.deadline as _compat_module_2
 
 bounded_request_timeout = _compat_module_2.bounded_request_timeout
 request_budget_lock = _compat_module_2.request_budget_lock
+request_deadline = _compat_module_2.request_deadline
 import pyezvizapi.cloud.token as _compat_module_3
 
 ClientToken = _compat_module_3.ClientToken
 validate_feature_code = _compat_module_3.validate_feature_code
 import pyezvizapi.cloud.endpoints as _compat_module_4
 
+API_ENDPOINT_CAPTCHA = _compat_module_4.API_ENDPOINT_CAPTCHA
+API_ENDPOINT_MFA_CHANNELS = _compat_module_4.API_ENDPOINT_MFA_CHANNELS
+API_ENDPOINT_SEND_CODE_CHANNEL = _compat_module_4.API_ENDPOINT_SEND_CODE_CHANNEL
 API_ENDPOINT_2FA_VALIDATE_POST_AUTH = _compat_module_4.API_ENDPOINT_2FA_VALIDATE_POST_AUTH
 API_ENDPOINT_ALARM_DEVICE_CHIME = _compat_module_4.API_ENDPOINT_ALARM_DEVICE_CHIME
 API_ENDPOINT_ALARM_GET_WHISTLE_STATUS_BY_CHANNEL = (

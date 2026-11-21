@@ -10,7 +10,8 @@ import pytest
 import requests
 
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.cloud.challenges import CaptchaState
+from pyezvizapi.cloud.challenges import CaptchaState, _CaptchaContext, _CaptchaPurpose
+from pyezvizapi.cloud.login import _MfaChannelPolicy
 from pyezvizapi.constants import ANDROID_PROFILE
 from pyezvizapi.exceptions import (
     EzvizAuthTokenExpired,
@@ -62,8 +63,7 @@ def form(call):
 @pytest.mark.parametrize('channel', [1, 2, 6, 7])
 def test_missing_bound_phone_has_actionable_notice_without_delivery(wire, channel):
     client, calls = wire([{'meta': {'code': 6002}, 'loginUser': {'email': 'bound@example.test'}}])
-    client._login_verification.configured_channels = (1, 2, 3, 6, 7)
-    client._login_verification.config_region = 'region.example.test'
+    client._mfa_channel_policy = _MfaChannelPolicy((1, 2, 3, 6, 7), 'region.example.test')
     with pytest.raises(EzvizAuthVerificationCode) as caught:
         client.login(mfa_channel=channel)
     assert caught.value.reason == 'verification_phone_unavailable'
@@ -91,7 +91,7 @@ def test_channel_discovery_uses_country_business_order_and_unknown_channel(wire)
     channels = client.get_mfa_channels('27')
     assert [(item.channel, item.supported) for item in channels] == [(99, False), (1, True), (6, True)]
     assert calls[0].url == 'https://region.example.test/v3/ezsms/channel/config?countryCode=27'
-    assert client._login_verification.configured_channels == (1, 3, 6)
+    assert client._mfa_channel_policy.channels == (1, 3, 6)
     assert 'countryCode' not in json.dumps(client.export_token())
 
 
@@ -138,8 +138,7 @@ def test_discovery_failure_revokes_prior_extra_channel_and_region_change_require
     with pytest.raises(PyEzvizError):
         client.login(mfa_channel=6)
     assert len(calls) == 2
-    client._login_verification.configured_channels = (1, 3, 6)
-    client._login_verification.config_region = 'different.example.test'
+    client._mfa_channel_policy = _MfaChannelPolicy((1, 3, 6), 'different.example.test')
     with pytest.raises(EzvizLoginError):
         client.login(mfa_channel=6)
     assert len(calls) == 2
@@ -161,7 +160,7 @@ def test_successful_policy_refresh_revokes_retained_channel_before_transport(wir
     client.get_mfa_channels('27')
     state = client._login_verification
     before = deepcopy(state)
-    assert channel not in state.available_channels('region.example.test')
+    assert channel not in state.available_channels('region.example.test', client._mfa_channel_policy)
     with pytest.raises(PyEzvizError, match='MFA channel'):
         getattr(client, operation)()
     assert len(calls) == 4
@@ -320,10 +319,11 @@ def test_image_redirect_requires_new_regional_challenge_not_replay(wire):
 
 def test_challenge_state_repr_and_bad_input_are_nonmutating():
     state = CaptchaState()
-    image = state.issue(PNG, ('private-contact',))
+    context = _CaptchaContext('region.example.test', 'feature', 'private-contact', _CaptchaPurpose.LOGIN)
+    image = state.issue(PNG, context)
     before = deepcopy(state)
     with pytest.raises(EzvizLoginError):
-        state.consume(image, 'bad', ('private-contact',))
+        state.consume(image, 'bad', context)
     assert state.context == before.context and state.challenge is image
     assert 'private-contact' not in repr(state)
 
@@ -368,3 +368,32 @@ def test_real_cli_client_image_request_then_otp(monkeypatch, wire):
     assert form(calls[3])['imageCode'] == ['aB01']
     assert form(calls[4])['smsCode'] == ['001234']
     assert client._captcha_state.challenge is None
+
+
+@pytest.mark.parametrize('saved_identity', [None, 'previous-web-identity'])
+def test_web_profile_captcha_migration_intentionally_replaces_saved_identity(wire, saved_identity):
+    token = {'api_url': 'region.example.test', 'session_id': 'web-session', 'rf_session_id': 'web-refresh', 'push_state': {'old': 7}, 'service_urls': {'old': 'discovery'}}
+    if saved_identity:
+        token['feature_code'] = saved_identity
+    client, calls = wire([PNG, OK], token=token)
+    image = client.get_captcha()
+    client.enable_channel99(captcha=image, captcha_code='aB01')
+    assert len(calls) == 2 and form(calls[-1])['imageCode'] == ['aB01']
+    assert token['feature_code'] == client.feature_code
+    assert token['push_profile'] == ANDROID_PROFILE.name
+    assert 'push_state' not in token and token['service_urls'] == {}
+    assert token['session_id'] != 'web-session'
+
+
+def test_successful_login_resets_contacts_without_resetting_regional_policy(wire):
+    policy_reply = {'meta': {'code': 200}, 'data': {'TERMINAL_BIND': [{'channel': 6, 'title': 'WhatsApp', 'order': 0}]}}
+    client, calls = wire([policy_reply, OK])
+    client.get_mfa_channels('27')
+    policy = client._mfa_channel_policy
+    client._login_verification.update(CONTACT)
+    client._login_verification.mark_sent('bound@example.test')
+    client.login(mfa_channel=6, request_mfa=False)
+    assert client._mfa_channel_policy is policy
+    assert not client._login_verification.contacts and not client._login_verification.sent
+    assert client._login_verification.channel == 6
+    assert len(calls) == 2

@@ -299,13 +299,13 @@ def test_send_mfa_code_success_and_failure(monkeypatch) -> None:
         calls.append(kwargs)
         return _response({"meta": {"code": 200}})
 
-    monkeypatch.setattr(client._session, "post", fake_post)
+    monkeypatch.setattr(requests.Session, "post", lambda _session, **kwargs: fake_post(**kwargs))
 
     assert client.send_mfa_code() is True
     assert calls[0]["data"] == {"from": "user@example.test", "bizType": "TERMINAL_BIND"}
     assert calls[0]["allow_redirects"] is False
 
-    monkeypatch.setattr(client._session, "post", lambda **kwargs: _response({"meta": {"code": 500}}))
+    monkeypatch.setattr(requests.Session, "post", lambda _session, **kwargs: _response({"meta": {"code": 500}}))
 
     with pytest.raises(PyEzvizError, match="Could not request MFA code"):
         client.send_mfa_code()

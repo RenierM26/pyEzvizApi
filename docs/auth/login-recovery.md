@@ -180,9 +180,44 @@ stops with `captcha_region_changed` instead of replaying the answer elsewhere.
 Expiry is server-owned; no undocumented lifetime is invented.
 
 Image fetch uses `GET /v3/captcha` with the app's `account`/`featureCode` binding,
-no redirects, bounded HTTP deadline/body and a 1MiB supported-image limit. PNG,
+no redirects, a bounded HTTP deadline and a 1 MiB decoded supported-image limit.
+The worker enforces this per request while streaming, including gzip/chunked
+responses: it stops at the first excess chunk (at most one 16 KiB chunk is read
+past the limit and is not retained). Exactly 1 MiB remains accepted. This is
+limit hardening compared with buffering up to the shared 8 MiB bootstrap cap
+before rejection; other scoped HTTP calls keep that 8 MiB cap. Rejection closes
+the response without retrying, accepting its cookies or creating an answer handle;
+it does not close the caller-owned session. PNG,
 JPEG and GIF signatures are accepted, not HTML or arbitrary URLs. A non-image
 response stops with app-recovery guidance; it is not treated as a browser token.
+
+### Auxiliary request deadlines and cleanup
+
+Channel discovery, image fetch and code requests each use one total client
+`timeout` budget, including token-lock contention, connection/DNS and decoded-body
+reads. An enclosing request deadline can shorten this budget, never extend it.
+Response processing counts against it: synchronous parsing is not preempted, but
+an expired deadline rejects the result before reporting a successful request or
+installing a channel grant. An image issued during expired processing is discarded.
+All acquired responses are closed on success, HTTP rejection, parsing failure or
+cancellation; borrowed adapters and the caller's session remain caller-owned.
+
+This is explicit deadline/redaction hardening, not behavior-neutral extraction.
+Non-2xx statuses (including redirects) fail without following, refreshing login,
+retrying or selecting another delivery method. Discovery and code requests retain
+Requests timeout/connection exception families with redacted messages; CAPTCHA
+retains SDK `HTTPError` transport failures. Total-budget exhaustion raises
+`TimeoutError`. A timed-out code request may have reached the server: do not infer
+non-delivery or retry automatically. No new automatic delivery is introduced.
+
+Normal login and push migration share channel/region, CAPTCHA-context and saved
+identity preflight. Fresh web-to-Android migration still intentionally replaces a
+legacy identity; existing Android tokens must match the caller's selected feature
+identity. Immutable regional channel policy is independent of contact/request
+state, so contact resets cannot grant a withdrawn method or erase a regional grant.
+Private typed CAPTCHA contexts distinguish login from delivery. CLI transitions
+move only from initial login to an optional login image, then an optional OTP;
+a delivery image proceeds directly to OTP. There is no retry edge from submitted OTP.
 
 Both CLI login and MQTT migration show a private temporary image file path and
 accept a human answer. The file is removed on answer/cancellation. There is at

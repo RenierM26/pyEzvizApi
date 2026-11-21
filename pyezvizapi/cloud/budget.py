@@ -60,6 +60,7 @@ class _HttpJob:
     session: requests.Session
     operation: str
     kwargs: dict[str, Any]
+    max_body_bytes: int = MAX_BOOTSTRAP_BODY_BYTES
     cancelled: Event = field(default_factory=Event)
     result: Queue[tuple[bool, Any]] = field(default_factory=lambda: Queue(maxsize=1))
     lock: Lock = field(default_factory=Lock)
@@ -102,13 +103,13 @@ class _HttpJob:
                     if self.cancelled.is_set():
                         raise TimeoutError("Cloud bootstrap HTTP job cancelled")
                     size += len(chunk)
-                    if size > MAX_BOOTSTRAP_BODY_BYTES:
+                    if size > self.max_body_bytes:
                         raise PyEzvizError("Cloud bootstrap response exceeds its byte limit")
                     parts.append(chunk)
                 content = b"".join(parts)
                 response._content = content  # noqa: SLF001
                 response.__dict__["_content_consumed"] = True
-            if len(content) > MAX_BOOTSTRAP_BODY_BYTES:
+            if len(content) > self.max_body_bytes:
                 raise PyEzvizError("Cloud bootstrap response exceeds its byte limit")
             if self.cancelled.is_set():
                 raise TimeoutError("Cloud bootstrap HTTP job cancelled")
@@ -167,21 +168,32 @@ _WORKER = _HttpWorker()
 
 
 def budgeted_http_call(
-    session: requests.Session, operation: str, **kwargs: Any
+    session: requests.Session,
+    operation: str,
+    *,
+    max_body_bytes: int = MAX_BOOTSTRAP_BODY_BYTES,
+    **kwargs: Any,
 ) -> requests.Response:
     """Bound the caller even if system DNS or server reads ignore socket totals.
 
     Borrow a detached session state, never mutate shared headers/cookies from a
     worker, and never spawn unbounded replacements for stuck system resolvers.
+    Scoped calls may lower the decoded-body limit; reject on the first chunk
+    crossing it (at most one 16 KiB chunk beyond the limit is read, not retained).
+    A custom limit requires a deadline. Ordinary unscoped calls stay synchronous.
     """
+    if type(max_body_bytes) is not int or not 0 < max_body_bytes <= MAX_BOOTSTRAP_BODY_BYTES:
+        raise ValueError("HTTP body limit must be a positive integer no larger than 8 MiB")
     remaining = remaining_request_budget()
     if remaining is None:
+        if max_body_bytes != MAX_BOOTSTRAP_BODY_BYTES:
+            raise ValueError("A custom HTTP body limit requires a request deadline")
         return getattr(session, operation)(**kwargs)
     borrowed = isolated_session(session)
     initial_cookies = borrowed.cookies.copy()
     if operation == "send" and isinstance(kwargs.get("request"), requests.PreparedRequest):
         kwargs["request"] = kwargs["request"].copy()
-    job = _HttpJob(borrowed, operation, {**kwargs, "stream": True})
+    job = _HttpJob(borrowed, operation, {**kwargs, "stream": True}, max_body_bytes)
     _WORKER.submit(job)
     try:
         succeeded, value = job.result.get(timeout=remaining)

@@ -20,6 +20,10 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ### Fixed
 
+- Enforce the 1 MiB CAPTCHA decoded-body limit during HTTP streaming, stopping
+  on the first excess chunk instead of buffering against the shared 8 MiB
+  bootstrap cap. Other scoped requests keep their 8 MiB limit. This is response
+  limit hardening, not behavior-neutral cleanup; no retries or delivery are added.
 - Explain when no usable bound phone is reported for SMS/phone verification,
   without sending a message or silently switching to email.
 - Revalidate retained MFA delivery selections after channel discovery refreshes,
@@ -60,6 +64,16 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
   not automatically resend a code.
 
 ### Changed
+
+- Share login/push-migration authentication preflight while preserving intentional
+  web-to-Android identity replacement. Keep immutable regional channel grants
+  separate from ephemeral contacts/request receipts; use typed CAPTCHA contexts
+  and named forward-only CLI challenge stages with the same image/OTP limits.
+- Harden channel discovery, CAPTCHA and code requests with one-attempt HTTP
+  cleanup/redaction and total deadlines including token-lock wait and response
+  processing. Reject HTTP redirects without following them; no new retries or
+  message delivery are introduced. See the authentication guide for exception
+  compatibility and deadline semantics.
 
 - Share CLI verification handling between account login and push migration,
   separate challenge actions from side-effect-free login error classification,

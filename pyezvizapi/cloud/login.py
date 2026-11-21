@@ -100,6 +100,29 @@ def verification_request_error(code: int | None, result: dict[str, Any]) -> Ezvi
     return login_error(code, result)
 
 
+@dataclass(frozen=True)
+class _MfaChannelPolicy:
+    """An immutable regional grant, independent of contact and request state."""
+
+    channels: tuple[int, ...] = (1, 3)
+    region: str | None = field(default=None, repr=False)
+
+    def validate(self, channel: int, region: str | None) -> None:
+        if type(channel) is not int or channel not in CHANNEL_NAMES:
+            raise PyEzvizError(
+                "MFA channel must be SMS 1 or email 3, or an explicitly discovered supported channel"
+            )
+        if channel in (2, 6, 7) and self.region != region:
+            raise EzvizLoginError(
+                "Discover verification channels for this region before selecting this method.",
+                reason="verification_channel_unavailable",
+            )
+        if channel not in self.channels:
+            raise PyEzvizError(
+                "MFA channel must be SMS 1 or email 3, or an explicitly discovered supported channel"
+            )
+
+
 @dataclass
 class LoginVerification:
     """Do not persist contacts, expose them in repr/errors, or infer channel from username."""
@@ -110,8 +133,6 @@ class LoginVerification:
     recipient: str | None = field(default=None, repr=False)
     metadata_present: bool = False
     app_required: bool = False
-    configured_channels: tuple[int, ...] = (1, 3)
-    config_region: str | None = field(default=None, repr=False)
 
     def contact_error(self) -> tuple[str, str]:
         if self.channel in PHONE_CHANNELS:
@@ -132,10 +153,12 @@ class LoginVerification:
         # The app requests WhatsApp/Zalo delivery with 6/7, then logs in with 1.
         return 1 if self.channel in (6, 7) else self.channel
 
-    def available_channels(self, region: str) -> tuple[int, ...]:
+    def available_channels(
+        self, region: str, policy: _MfaChannelPolicy = _MfaChannelPolicy()
+    ) -> tuple[int, ...]:
         reported = set(self.contacts)
-        if 1 in self.contacts and self.config_region == region:
-            reported.update(code for code in self.configured_channels if code in PHONE_CHANNELS)
+        if 1 in self.contacts and policy.region == region:
+            reported.update(code for code in policy.channels if code in PHONE_CHANNELS)
         return tuple(sorted(reported))
 
     @property
@@ -155,17 +178,17 @@ class LoginVerification:
         """Report acceptance for the current channel/contact, not an older contact."""
         return self._requested_contact == (self.channel, self.destination(account))
 
-    def select(self, channel: int | None, recipient: str | None) -> None:
+    def select(
+        self,
+        channel: int | None,
+        recipient: str | None,
+        *,
+        policy: _MfaChannelPolicy = _MfaChannelPolicy(),
+        region: str | None = None,
+    ) -> None:
         # Revalidate retained selections too: an explicit refresh may revoke them.
         selected_channel = self.channel if channel is None else channel
-        if (
-            type(selected_channel) is not int
-            or selected_channel not in self.configured_channels
-            or selected_channel not in CHANNEL_NAMES
-        ):
-            raise PyEzvizError(
-                "MFA channel must be SMS 1 or email 3, or an explicitly discovered supported channel"
-            )
+        policy.validate(selected_channel, region)
         if recipient is not None and (not isinstance(recipient, str) or not recipient.strip()):
             raise PyEzvizError("MFA recipient must be nonempty text")
         selected_recipient = self.recipient if selected_channel == self.channel else None

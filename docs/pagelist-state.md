@@ -84,6 +84,16 @@ write back. Treat reboot, upgrade, and format as actions, not switches.
 | Firmware upgrade | `UPGRADE.isNeedUpgrade` reports availability; `STATUS.upgradeStatus` and `upgradeProcess` report progress. Capability `10` is named Upgrade; its presence alone is not an update offer or a verified app visibility rule. | `upgrade_device` initiates the cloud upgrade on the device-level `/0/upgrade` route. Use fresh firmware status to observe progression and completion. The account auto-upgrade preference (`get_autoupgrade_switch` / `set_autoupgrade_switch`) is separate. |
 | Disk status and format | Pagelist reports `diskNum`, `diskState`, `diskStatus`, and optionals such as `diskCapacity` and `diskHealth`. Capability `4` is named Disk, not a sufficient format gate. | `get_storage_status` reads cloud storage status; `hd_config` reads native LAN disk configuration. Android's LAN module starts formatting with `NET_DVR_FormatDisk` and checks progress by handle. The SDK models start, progress, and close requests; these are not a high-level LAN format executor. The advertised IoT `HDD.FormatHDD` is a separate action, not a write to disk status. |
 
+For callers already polling, `pyezvizapi.devices.maintenance` provides
+read-only classifiers. Feed `reboot_recovery_observed` ordered online
+observations for one device after the request; use `None` for an
+unknown state. An offline-to-online transition shows recovery, not its cause.
+For `firmware_upgrade_outcome`, capture the installed version and the exact
+target before starting the upgrade. Pass a fresh report for the same device;
+completion requires the reported target and the current firmware phase.
+A failure phase is a device report, not correlation with a specific request.
+Neither helper issues requests or starts a polling loop.
+
 Trace sources: Android `PlayDataInfo.supportReboot`,
 `DeviceSettingActivity.onClickRebootDeviceView` / `rebootDevice`, and
 `EZRNLanDevModule` disk formatting; SDK [cloud controls](../pyezvizapi/cloud/operations/controls.py),

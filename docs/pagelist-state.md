@@ -331,6 +331,20 @@ and the [pagelist fixture](../tests/fixtures/page_list_response.json).
 - **Reported telemetry or metadata; no setter inferred:** `4G_Info`, `Battery_WorkStatus`, `DB_Chime_ConnInfo`, `OnlineStatus`, `Route_LinkageStatus`, `StorageFirstRecordTime`, `cloudChannelList`, `diskCapacity`, `diskCid`, `diskHealth`, `hfullViewURL`, `kms_version`, `lastUpgradeTime`, `latestUnbandTime`, `latestUnbindTime`, `networkingMode`, `powerRemaining`, `powerStatus`, `powerType`, `superState`, `updateCode`, `updateProcessExtend`, `wanIp`.
 - **Unmapped setting or ambiguous field:** `Alarm_Interval`, `Auto_night_vision`, `BodyDetectTimeInterval`, `CustomVoice`, `ICR`, `OneClickMute`, `PresetEffect`, `ROI`, `RecordCoverStorage`, `Remind_Way`, `SpeakerConfig`, `Temperature_Threshold`, `daylightSavingTime`, `device_auto_rouse`, `device_screen_lightness`, `device_screen_overtime`, `device_static_DNS`, `device_video_time`, `device_wifi_mode`, `gesture_remind_type`, `image_para`, `language`, `lightcamera_delay_off`, `preset`, `pri_cover_area`, `returnToPoint`, `sound_detect_type`, `talkMode`, `talk_speaker_volume`, `timeFormat`, `timeZone`, `tzCode`, `video_para`, `voiceIndex`.
 
+### Mute schedules and app tracking
+
+- `set_mute_plan_schedule` replaces and enables the schedule on a video
+  resource whose product profile advertises `SoundSetting.MutePlan`.
+  Pass up to four slots with local start/end times and ISO weekdays
+  (Monday 1 through Sunday 7). The app encodes duration in minutes,
+  wraps overnight intervals and uses one minute for equal times.
+- `set_app_auto_tracking` targets the app-scoped
+  `IntelligentAPP.ModifyAppFunctionCfgs` action on Video/1. Callers must
+  verify that the named app is enabled and advertises tracking.
+  It does not replace the device-wide tracking switch or tracking zoom.
+- `TimingRecord.ScheduleRecordParams` is reported in pagelist, but its
+  write route and gate remain unverified.
+
 ### Fixture coverage: feature domains
 
 Each row lists the property names observed for that resource/domain in the

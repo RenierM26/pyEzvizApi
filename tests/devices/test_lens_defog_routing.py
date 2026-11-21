@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from pyezvizapi.devices.channels import CameraChannel, CameraChannelError
-from pyezvizapi.devices.lens import set_lens_defog_option
+from pyezvizapi.devices.lens import has_lens_defog, set_lens_defog_option
 from pyezvizapi.exceptions import PyEzvizError
 
 
@@ -25,7 +25,9 @@ def test_explicit_route_updates_only_selected_configuration() -> None:
         },
     }
 
-    set_lens_defog_option(client, "CAM123", 2, data, channel=CameraChannel("Video", "2"))
+    channel = CameraChannel("Video", "2")
+    assert has_lens_defog(data, channel=channel)
+    set_lens_defog_option(client, "CAM123", 2, data, channel=channel)
 
     client.set_lens_defog_mode.assert_called_once_with("CAM123", 2, local_index="2")
     assert other == {"enabled": True, "defogMode": "open"}
@@ -37,6 +39,7 @@ def test_unproven_route_never_falls_back(channel: CameraChannel) -> None:
     client = Mock()
     data = {"resourceInfos": [{"resourceIdentifier": "Video_1", "localIndex": 1}]}
 
+    assert not has_lens_defog(data, channel=channel)
     with pytest.raises(CameraChannelError, match="unsupported"):
         set_lens_defog_option(client, "CAM123", 2, data, channel=channel)
 

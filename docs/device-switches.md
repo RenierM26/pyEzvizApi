@@ -39,9 +39,9 @@ relationship was established in this trace; it does not mean unsupported.
 | 23 | BABY_CARE | Unverified. |
 | 24 | LOGO | Unverified; do not equate with SDK switch 702. |
 | 25 | MOBILE_TRACKING | HA: `73` IntelligentTrack; distinct from switches 650 and 701. |
-| 26 | CHANNELOFFLINE | HA: `70` ChannelOffline. |
+| 26 | CHANNELOFFLINE | App: toggles offline notifications for the selected camera channel, defaulting to 1. HA associates `70` ChannelOffline; Android visibility predicate unverified. |
 | 29 | ALL_DAY_VIDEO | App: normal-disk storage view uses `88 = 1`; switch on means all-day recording, off means activity recording. |
-| 32 | AUTO_SLEEP | HA: `144` AutoSleep. |
+| 32 | AUTO_SLEEP | App: if `144 = 1` and this switch is off, both live and playback keep-alive helpers return disabled. Settings asks for confirmation before switching it off. |
 | 34 | ROAMING_STATUS | App operator settings read and change this state via a dedicated presenter action; specific support key unverified. |
 | 35 | DEVICE_4G | App operator settings read and change this state via a dedicated presenter action; specific support key unverified. |
 | 37 | ALARM_REMIND_MODE | Unverified. |
@@ -53,10 +53,10 @@ relationship was established in this trace; it does not mean unsupported.
 | 301 | LIGHT_FLICKER | App: DetectionAlertActivity uses `301 > 0` and switch state for its summary. HA associates `96` ActiveDefense; the checks are not equivalent. |
 | 303 | ALARM_LIGHT | App: LightSettingActivity selects this ID when `297 = 2`; `113` AlarmLight exists but is not the selector in this branch. |
 | 305 | ALARM_LIGHT_RELEVANCE | App: LightSettingActivity selects this ID when `297 = 1`. |
-| 306 | TAMPER_ALARM | HA: `327` TamperAlarm. |
+| 306 | TAMPER_ALARM | App: toggles tamper alarm using the selected camera channel, or 1 by default. HA associates `327` TamperAlarm; Android visibility predicate unverified. |
 | 451 | DETECTION_TYPE | App treats this as a detection mode in SelectDetectionTypeActivity; switch capability predicate unverified. |
 | 458 | REMOTE_UNLOCK | App enum ID; RemoteUnlock capability `648` is not proof that a generic switch controls unlocking. |
-| 600 | OUTLET_RECOVER | HA: `189` PoweroffRecovery. |
+| 600 | OUTLET_RECOVER | App: outlet power-loss recovery setting, separate from plug power (14). The off-to-on path asks for confirmation. HA associates `189` PoweroffRecovery; Android visibility predicate unverified. |
 | 611 | CHIME_INDICATOR_LIGHT | App: the observed ChimeSettingActivity branch uses `185 = 1` DeviceRing and online, despite the separate ChimeIndicatorLight capability `186`. |
 | 650 | TRACKING | App: PlayDataInfo reads state separately from `198 = 1` HumanTrack support. |
 | 651 | CRUISE_TRACKING | App: PlayDataInfo reads state separately from `197 = 1` CruiseTracking support. |
@@ -83,6 +83,17 @@ relationship was established in this trace; it does not mean unsupported.
 at least one of `88`, `219`, or `615` equal to 1, and acceptable disk status.
 This broader player predicate is not the storage screen’s switch-29 gate.
 
+## Gaps that remain
+
+- The Android capability getters establish numeric keys, but do not by
+  themselves prove when a control is shown. For switches 26, 40, 306 and 600,
+  the settings handlers are confirmed; the visibility predicates are not.
+- A handler passing a camera channel does not prove that firmware stores
+  independent state for each lens.
+- No reliable capability link was established for enum-only entries such as
+  stream adaptive (2), log upload (5), or baby care (23). Do not infer one
+  from matching IDs or similar names.
+
 ## Source trail
 
 - Android: `com.ezviz.devicemgr.model.filter.DeviceSwitchType` (wire IDs, not
@@ -92,7 +103,8 @@ This broader player predicate is not the storage screen’s switch-29 gate.
   `CameraSettingActivity`, `DetectionAlertActivity`, `LightSettingActivity`,
   `DeviceSettingActivity`, `BasestationDetailAdapter` and
   `PlayDataInfo`, `ResourceModel.switchPlug`, `ResourceSettingMenuDialog.initSleepSwitch`,
-  `StorageStateActivity` and `DetectionPeopleSettingActivity` (state reads and contextual gates).
+  `StorageStateActivity`, `DetectionPeopleSettingActivity`, and
+  `EZDeviceInfoExt.getKeepAlive` / `isPlaybackKeepAlive` (state reads and contextual gates).
 - SDK: [constants](../pyezvizapi/constants.py), especially `DeviceSwitchType`
   and `SupportExt`. HA associations come from the companion
   `ha-ezviz` switch definitions and are not vendor rules.

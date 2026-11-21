@@ -149,6 +149,23 @@ def test_legacy_ps_waits_for_pes_run_and_leaves_audio_intact(
         )
 
 
+def test_legacy_ps_releases_video_without_audio_at_aligned_nal() -> None:
+    transform = live.LegacyPsVideoTransform(b"test-camera-key!")
+    start = b"\x00\x00\x00\x01"
+    encrypted = bytes.fromhex("7bbf37a75901cc1819fcf84396208a2f")
+    clear = b"\x67" + b"0123456789abcde"
+    first = pes(0xE0, start + encrypted[:8], 0, aligned=True)
+    continuation = pes(0xE0, encrypted[8:])
+    pack = _pack_header(3600)
+    next_picture = pes(0xE0, start + encrypted, 3600, aligned=True)
+
+    assert transform.feed(first + pack + continuation) == b""
+    assert transform.feed(pack + next_picture[:-1]) == b""
+    assert transform.feed(next_picture[-1:]) == (
+        pes(0xE0, start + clear[:8], 0, aligned=True) + pack + pes(0xE0, clear[8:]) + pack
+    )
+
+
 def test_rtp_output_can_be_read_and_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
     entered = Event()
     release = Event()

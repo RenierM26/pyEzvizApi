@@ -6,6 +6,7 @@ from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.streaming.cloud.protocol import (
     _decrypt_hikvision_ps_video_packets,
     _MpegPsVideoDecryptState,
+    _whole_header_nal_start,
     decrypt_hikvision_ps_video,
 )
 from pyezvizapi.streaming.media.containers import (
@@ -17,6 +18,7 @@ from pyezvizapi.streaming.media.mpegps import (
     _mpeg_ps_complete_packet_ranges,
     _mpeg_ps_video_decrypt_ranges,
     _MpegPsPacketRange,
+    _pes_payload_start,
 )
 
 MAX_PENDING_PS_BYTES = 1024 * 1024
@@ -156,6 +158,8 @@ class LegacyPsVideoTransform:
         if not key:
             raise ValueError("Supply a nonempty media key")
         self._key = key
+        raw_key = key.encode() if isinstance(key, str) else key
+        self._aes_key = raw_key.ljust(16, b"\0")[:16]
         self._buffer = bytearray()
 
     def feed(self, data: bytes) -> bytes:
@@ -165,6 +169,17 @@ class LegacyPsVideoTransform:
         if len(self._buffer) >= 3 and self._buffer[:3] != _PS_START:
             raise PyEzvizError("Legacy video decryption requires MPEG-PS input")
         end = mpeg_ps_decryptable_prefix_length(self._buffer)
+        # A new aligned NAL can end the buffered video run without audio.
+        view = bytes(self._buffer)
+        for packet in reversed(_mpeg_ps_complete_packet_ranges(view, start_offset=end)):
+            if not _is_video_pes_stream_id(packet.stream_id) or not view[packet.start + 6] & 4:
+                continue
+            start = _pes_payload_start(view, packet.start)
+            if start is not None and _whole_header_nal_start(
+                view[start : packet.end], self._aes_key
+            ):
+                end = packet.start
+                break
         if not end:
             return b""
         run = bytes(self._buffer[:end])
@@ -174,3 +189,4 @@ class LegacyPsVideoTransform:
     def close(self) -> None:
         self._buffer.clear()
         self._key = b""
+        self._aes_key = b""

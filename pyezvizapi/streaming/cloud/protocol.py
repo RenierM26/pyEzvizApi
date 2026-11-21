@@ -1471,6 +1471,25 @@ def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
             decrypt_nal_body_segment(state, segment_start, payload_end)
 
 
+def _whole_header_nal_start(payload: bytes, aes_key: bytes) -> bool:
+    """Check Annex B framing and the decrypted first block at a PES boundary."""
+    if payload.startswith(b"\x00\x00\x00\x01"):
+        start = 4
+    elif payload.startswith(b"\x00\x00\x01"):
+        start = 3
+    else:
+        return False
+    block = payload[start : start + AES.block_size]
+    if len(block) != AES.block_size:
+        return False
+    header = _hikvision_aes_ecb_cipher(aes_key).decrypt(
+        block
+    )  # codeql[py/weak-cryptographic-algorithm]
+    return _is_plausible_hevc_header_bytes(header[:2]) or (
+        not header[0] & 0x80 and 1 <= header[0] & 0x1F <= 23
+    )
+
+
 def decrypt_hikvision_ps_video(  # noqa: PLR0915
     data: bytes,
     key: str | bytes,

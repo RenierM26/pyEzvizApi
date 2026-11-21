@@ -11,7 +11,7 @@ import subprocess
 import sys
 from threading import Event
 import time
-from typing import Any
+from typing import Any, TypedDict
 from unittest.mock import Mock
 
 import pytest
@@ -246,9 +246,14 @@ def test_close_interrupts_reader_and_input(monkeypatch: pytest.MonkeyPatch) -> N
     assert stopped.is_set()
 
 
+class QualityOptions(TypedDict, total=False):
+    cloud_stream_index: int
+
+
 @pytest.mark.parametrize("cloud_stream_index", [None, 2])
 def test_close_during_cloud_bootstrap_retains_owner_until_it_exits(
-    monkeypatch: pytest.MonkeyPatch, cloud_stream_index: int | None,
+    monkeypatch: pytest.MonkeyPatch,
+    cloud_stream_index: int | None,
 ) -> None:
     _process(monkeypatch, "import sys; sys.stdin.buffer.read()")
     entered = Event()
@@ -266,7 +271,9 @@ def test_close_during_cloud_bootstrap_retains_owner_until_it_exits(
         return transport
 
     monkeypatch.setattr(selection, "open_cloud_stream", open_cloud)
-    quality = {} if cloud_stream_index is None else {"cloud_stream_index": cloud_stream_index}
+    quality: QualityOptions = {}
+    if cloud_stream_index is not None:
+        quality["cloud_stream_index"] = cloud_stream_index
     stream = live.open_live_mpegts_stream(
         client,
         "CAMERA",
@@ -336,6 +343,7 @@ def test_close_releases_backpressure_from_a_full_child_pipe(
         assert entered.wait(2)
         stream.close()
         assert not stream._writer.is_alive()
+        assert stream._process is not None
         assert stream._process.poll() is not None
 
 

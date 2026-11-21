@@ -311,3 +311,23 @@ real transport, including separate regional keys, actual prepared forms,
 clock/key/lockout/rate-limit responses, zero-prefixed codes and request counts.
 They do not establish current 7.6/iOS behavior, v5/v6 acceptance for every region,
 real message delivery, live account lock recovery or actual UI rendering.
+
+## Explicit login host lookup
+
+Use a known EZVIZ area catalog ID to resolve a host before constructing a client:
+
+```python
+from pyezvizapi import EzvizClient
+from pyezvizapi.cloud.region import resolve_login_host
+
+host = resolve_login_host(314)  # EZVIZ's US area ID, not an ISO or dialing code.
+client = EzvizClient(account, password, url=host)
+```
+
+The lookup sends only the area ID to the global EZVIZ endpoint, requires no
+account or token, and does not modify an existing client. A successful response
+does not prove that the area belongs to an account; EZVIZ may return its
+global host even for unknown IDs. This is opt-in: the default host and normal
+`1100` redirect handling are unchanged. For `1102`, finish selection in the
+EZVIZ app: the forced region picker saves the region on the account, which
+this read-only lookup does not do.

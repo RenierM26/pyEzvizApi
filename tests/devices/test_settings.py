@@ -480,3 +480,42 @@ def test_doorlock_night_light_uses_lock_resource(enabled: bool) -> None:
     client.set_iot_feature.assert_called_once_with(
         "TEST", "DoorLock", "0", "LightCtrl", "NightLightCfg", {"value": {"enabled": enabled}}
     )
+
+
+@pytest.mark.parametrize(
+    ("mode", "value"),
+    [
+        (settings.DoorLockLightMode.DIM_LIGHT, {"enabled": True, "mode": 0}),
+        (settings.DoorLockLightMode.ALL_DAY, {"enabled": True, "mode": 1}),
+        (settings.DoorLockLightMode.OFF, {"enabled": False}),
+    ],
+)
+def test_doorlock_light_picker_payloads(
+    mode: settings.DoorLockLightMode, value: dict[str, bool | int]
+) -> None:
+    client = Mock()
+    settings.set_doorlock_night_light_mode(client, "TEST", mode)
+    client.set_iot_feature.assert_called_once_with(
+        "TEST", "DoorLock", "0", "LightCtrl", "NightLightCfg", {"value": value}
+    )
+    client.reset_mock()
+    settings.set_doorlock_welcome_light_mode(client, "TEST", mode)
+    client.set_iot_feature.assert_called_once_with(
+        "TEST", "DoorLock", "0", "RGBLightCtrl", "ProjectionLampCfg", {"value": value}
+    )
+
+
+def test_sensing_mode_is_only_for_welcome_light() -> None:
+    client = Mock()
+    with pytest.raises(PyEzvizError, match="only available"):
+        settings.set_doorlock_night_light_mode(client, "TEST", settings.DoorLockLightMode.SENSING)
+    client.set_iot_feature.assert_not_called()
+    settings.set_doorlock_welcome_light_mode(client, "TEST", settings.DoorLockLightMode.SENSING)
+    client.set_iot_feature.assert_called_once_with(
+        "TEST",
+        "DoorLock",
+        "0",
+        "RGBLightCtrl",
+        "ProjectionLampCfg",
+        {"value": {"enabled": True, "mode": 2}},
+    )

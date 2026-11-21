@@ -305,3 +305,50 @@ def set_doorlock_night_light_enabled(client: EzvizClient, serial: str, enabled: 
     client.set_iot_feature(
         serial, "DoorLock", "0", "LightCtrl", "NightLightCfg", {"value": {"enabled": enabled}}
     )
+
+
+class DoorLockLightMode(IntEnum):
+    """App picker options; off is sent without a mode field."""
+
+    DIM_LIGHT = 0
+    ALL_DAY = 1
+    SENSING = 2
+    OFF = 99
+
+
+def _doorlock_light_payload(mode: DoorLockLightMode) -> dict[str, bool | int]:
+    if not isinstance(mode, DoorLockLightMode):
+        raise PyEzvizError("Expected a DoorLockLightMode")
+    if mode is DoorLockLightMode.OFF:
+        return {"enabled": False}
+    return {"enabled": True, "mode": int(mode)}
+
+
+def set_doorlock_night_light_mode(
+    client: EzvizClient, serial: str, mode: DoorLockLightMode
+) -> None:
+    """Set the indoor night-light mode on a lock advertising that mode picker."""
+    if mode is DoorLockLightMode.SENSING:
+        raise PyEzvizError("Sensing mode is only available for the welcome light")
+    client.set_iot_feature(
+        serial,
+        "DoorLock",
+        "0",
+        "LightCtrl",
+        "NightLightCfg",
+        {"value": _doorlock_light_payload(mode)},
+    )
+
+
+def set_doorlock_welcome_light_mode(
+    client: EzvizClient, serial: str, mode: DoorLockLightMode
+) -> None:
+    """Set the welcome-light mode on a lock advertising the projection lamp picker."""
+    client.set_iot_feature(
+        serial,
+        "DoorLock",
+        "0",
+        "RGBLightCtrl",
+        "ProjectionLampCfg",
+        {"value": _doorlock_light_payload(mode)},
+    )

@@ -358,8 +358,8 @@ IoT methods alone do not qualify a property.
 | --- | --- |
 | `DoorLock.DoorLockMgr` | `MessagePlanCfg`, `WeatherReminderPlan` |
 | `DoorLock.LensPrivacyCover` | `LensPrivacyCoverModeParams` |
-| `DoorLock.LightCtrl` | `NightLightCfg` (binary app route: `devices.settings.set_doorlock_night_light_enabled` on `DoorLock/0`; requires the matching product-profile property. Mode-capable locks have a separate picker. Distinct from `Video.LightCtrl.NightLightEnable`) |
-| `DoorLock.RGBLightCtrl` | `ProjectionLampCfg` |
+| `DoorLock.LightCtrl` | `NightLightCfg` (binary app route: `devices.settings.set_doorlock_night_light_enabled` on `DoorLock/0`; requires the matching product-profile property. If its product-profile schema also advertises `mode`, use `set_doorlock_night_light_mode` for dim-light (0), all-day (1), or off. Off sends only `enabled: false`. Distinct from `Video.LightCtrl.NightLightEnable`) |
+| `DoorLock.RGBLightCtrl` | `ProjectionLampCfg`: `devices.settings.set_doorlock_welcome_light_mode` uses the same picker payload, with additional sensing mode (2). Requires the matching DoorLock/0 product-profile property and its `mode` field. |
 | `DoorLock.SensorLight` | `RadarFMCfg` |
 | `Video.AudioMgr` | `AudioSourceEnhancement`, `DirectionalPickup`, `MicAdaptive` |
 | `Video.BatCustomSpecial` | `WorkRecordMode` |

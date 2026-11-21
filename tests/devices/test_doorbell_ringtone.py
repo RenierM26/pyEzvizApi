@@ -5,7 +5,11 @@ from unittest.mock import Mock
 
 import pytest
 
-from pyezvizapi.devices.audio import set_doorbell_ringtone_tone, set_doorbell_ringtone_volume
+from pyezvizapi.devices.audio import (
+    set_doorbell_custom_ringtone,
+    set_doorbell_ringtone_tone,
+    set_doorbell_ringtone_volume,
+)
 from pyezvizapi.exceptions import PyEzvizError
 
 
@@ -56,3 +60,23 @@ def test_unavailable_standard_tone_is_rejected(tone: int) -> None:
     with pytest.raises(PyEzvizError):
         set_doorbell_ringtone_tone(client, "TEST", tone, {"supportExt": {"241": 1}})
     client.set_device_key_value.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("flag", "voice_id", "accepted"),
+    [(1, 23, True), (0, 23, False), (1, 0, False), (1, True, False)],
+)
+def test_custom_ringtone_selection(flag: int, voice_id: int, accepted: bool) -> None:
+    client = Mock()
+    config = {"Type": 2, "Volume": 4, "CustomRingIndex": 0}
+    data = {"supportExt": {"241": 1, "486": flag}, "optionals": {"device_bell": config}}
+    if not accepted:
+        with pytest.raises(PyEzvizError):
+            set_doorbell_custom_ringtone(client, "TEST", voice_id, data)
+        client.set_device_key_value.assert_not_called()
+        return
+    set_doorbell_custom_ringtone(client, "TEST", voice_id, data)
+    serial, channel, key, payload = client.set_device_key_value.call_args.args
+    assert (serial, channel, key) == ("TEST", 1, "device_bell")
+    assert json.loads(payload) == {"Type": 10, "Volume": 4, "CustomRingIndex": voice_id}
+    assert config == {"Type": 2, "Volume": 4, "CustomRingIndex": 0}

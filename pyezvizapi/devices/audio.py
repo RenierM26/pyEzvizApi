@@ -189,6 +189,20 @@ def set_doorbell_ringtone_tone(
     _write_doorbell_ringtone(client, serial, camera_data, config)
 
 
+def set_doorbell_custom_ringtone(
+    client: EzvizClient, serial: str, voice_id: int, camera_data: dict[str, Any]
+) -> None:
+    """Select an existing custom ringtone ID verified by the caller for this device."""
+    if type(voice_id) is not int or voice_id <= 0:
+        raise PyEzvizError("Custom ringtone ID must be a positive integer")
+    support = SupportExtView.from_camera_data(camera_data)
+    if not support.has("486", ("1",)):
+        raise PyEzvizError("Doorbell does not advertise custom ringtones")
+    config = _doorbell_ringtone_config(camera_data, support)
+    config.update(Type=10, CustomRingIndex=voice_id)
+    _write_doorbell_ringtone(client, serial, camera_data, config)
+
+
 def _doorbell_ringtone_config(
     camera_data: dict[str, Any], support: SupportExtView
 ) -> dict[str, Any]:

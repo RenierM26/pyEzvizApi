@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pyezvizapi._shared.utils import WILDCARD_STEP, decode_json, first_nested, iter_nested
 from pyezvizapi.devices.metadata import coerce_bool
+from pyezvizapi.exceptions import PyEzvizError
 
 if TYPE_CHECKING:
     from pyezvizapi.client import EzvizClient
@@ -164,3 +165,29 @@ def intelligent_app_available(camera_data: dict[str, Any], app_name: str) -> boo
     """Return True if the intelligent app is present in the payload."""
 
     return any(name == app_name for name, _enabled in iter_intelligent_apps(camera_data) or [])
+
+
+def set_app_auto_tracking(client: EzvizClient, serial: str, app_id: str, enabled: bool) -> None:
+    """Set tracking for an app the caller verified is enabled and supports tracking."""
+    if not isinstance(enabled, bool):
+        raise PyEzvizError("App tracking state must be boolean")
+    if not isinstance(app_id, str) or not app_id.strip():
+        raise PyEzvizError("App tracking requires a reported app ID")
+    client.set_iot_action(
+        serial,
+        "Video",
+        "1",
+        "IntelligentAPP",
+        "ModifyAppFunctionCfgs",
+        {
+            "value": {
+                "configLists": [
+                    {
+                        "appId": app_id,
+                        "path": "/PTZTrace/AutoTraceSwitch/prop",
+                        "payload": "true" if enabled else "false",
+                    }
+                ]
+            }
+        },
+    )

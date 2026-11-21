@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import time
 from enum import IntEnum
 import json
 from typing import TYPE_CHECKING, Any
@@ -255,4 +256,40 @@ def set_tracking_zoom_enabled(client: EzvizClient, serial: str, enabled: bool) -
         "PTZTrace",
         "AutoTraceParams",
         {"value": {"trackZoomEnabled": enabled}},
+    )
+
+
+def set_mute_plan_schedule(
+    client: EzvizClient,
+    serial: str,
+    slots: tuple[tuple[time, time, tuple[int, ...]], ...],
+    *,
+    channel: CameraChannel,
+) -> None:
+    """Replace and enable a supported mute plan, using ISO weekdays (1-7)."""
+    if len(slots) > 4:
+        raise PyEzvizError("A mute plan supports at most four slots")
+    plan = []
+    for start, end, days in slots:
+        if not days or any(type(day) is not int or not 1 <= day <= 7 for day in days):
+            raise PyEzvizError("Mute plan requires ISO weekdays from 1 to 7")
+        if any(t.second or t.microsecond or t.tzinfo is not None for t in (start, end)):
+            raise PyEzvizError("Mute plan requires local times at minute precision")
+        duration = ((end.hour - start.hour) * 60 + end.minute - start.minute) % 1440
+        plan.append(
+            {
+                "repeatPeriod": list(days),
+                "startTime": start.isoformat(),
+                "sustain": max(1, duration),
+                "enabled": True,
+                "action": [{"actionType": "MutePlan", "startValue": True}],
+            }
+        )
+    client.set_iot_feature(
+        serial,
+        channel.resource_identifier,
+        channel.local_index,
+        "SoundSetting",
+        "MutePlan",
+        {"value": {"plan": plan, "enabled": True}},
     )

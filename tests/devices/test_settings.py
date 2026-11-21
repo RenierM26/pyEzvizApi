@@ -1,6 +1,7 @@
 """Offline checks for the app-traced cloud settings."""
 
 from collections.abc import Callable, Iterator
+from datetime import time
 import json
 from typing import Any
 from unittest.mock import Mock
@@ -12,6 +13,7 @@ import requests
 from pyezvizapi import EzvizClient
 from pyezvizapi.devices import settings
 from pyezvizapi.devices.channels import CameraChannel, CameraChannelError
+from pyezvizapi.devices.tracking import set_app_auto_tracking
 from pyezvizapi.exceptions import PyEzvizError
 
 
@@ -417,4 +419,55 @@ def test_tracking_zoom_only_writes_zoom_field() -> None:
         "PTZTrace",
         "AutoTraceParams",
         {"value": {"trackZoomEnabled": False}},
+    )
+
+
+def test_replace_mute_schedule() -> None:
+    client = Mock()
+    settings.set_mute_plan_schedule(
+        client, "TEST", ((time(23), time(23, 45), (7,)),), channel=CameraChannel("Video_1", "2")
+    )
+    client.set_iot_feature.assert_called_once_with(
+        "TEST",
+        "Video_1",
+        "2",
+        "SoundSetting",
+        "MutePlan",
+        {
+            "value": {
+                "enabled": True,
+                "plan": [
+                    {
+                        "repeatPeriod": [7],
+                        "startTime": "23:00:00",
+                        "sustain": 45,
+                        "enabled": True,
+                        "action": [{"actionType": "MutePlan", "startValue": True}],
+                    }
+                ],
+            }
+        },
+    )
+
+
+def test_app_tracking_action() -> None:
+    client = Mock()
+    set_app_auto_tracking(client, "TEST", "app_human_detect", False)
+    client.set_iot_action.assert_called_once_with(
+        "TEST",
+        "Video",
+        "1",
+        "IntelligentAPP",
+        "ModifyAppFunctionCfgs",
+        {
+            "value": {
+                "configLists": [
+                    {
+                        "appId": "app_human_detect",
+                        "path": "/PTZTrace/AutoTraceSwitch/prop",
+                        "payload": "false",
+                    }
+                ]
+            }
+        },
     )

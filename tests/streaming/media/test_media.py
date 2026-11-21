@@ -59,6 +59,7 @@ class RecordingPacketStream[PacketT]:
         max_packets: int | None = None,
         duration_seconds: float | None = None,
         duration_from_start: bool = False,
+        first_packet_deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[PacketT]:
         """Yield packets using the bounds supported by existing stream classes."""
@@ -285,6 +286,7 @@ def test_vtm_adapter_applies_duration_from_iteration_start() -> None:
             max_packets: int | None = None,
             duration_seconds: float | None = None,
             duration_from_start: bool = False,
+            first_packet_deadline: float | None = None,
             monotonic: Callable[[], float] = time.monotonic,
         ) -> Iterator[VtmPacket]:
             del max_packets, duration_seconds, monotonic
@@ -351,6 +353,7 @@ def test_legacy_stream_adapter_does_not_read_past_exact_byte_limit() -> None:
             max_packets: int | None = None,
             duration_seconds: float | None = None,
             duration_from_start: bool = False,
+            first_packet_deadline: float | None = None,
             monotonic: Callable[[], float] = time.monotonic,
         ) -> Iterator[VtmPacket]:
             del max_packets, duration_seconds, duration_from_start, monotonic

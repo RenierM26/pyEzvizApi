@@ -99,6 +99,11 @@ Common light/smart-plug keys include:
 New keys are safe to add. Prefer adding keys over changing the meaning of
 existing keys.
 
+`reported_local_rtsp_port` preserves the distinction between a cloud-reported
+port, an explicit zero, and unavailable metadata. It is not a capability or
+availability check. Do not use it to suppress a user-configured local stream
+or to make cloud fallback depend on the reported port alone.
+
 ## Alarm timestamps and DST
 
 Motion calculations prefer a valid numeric UTC epoch (`alarmStartTime` or

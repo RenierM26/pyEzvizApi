@@ -293,6 +293,7 @@ def get_cloud_stream_info(
     client_type: int = 9,
     token_index: int = 0,
     refresh_vtm: bool = False,
+    stream_index: int = 1,
 ) -> JsonDict:
     """Build VTM stream bootstrap metadata for a camera.
 
@@ -352,6 +353,7 @@ def get_cloud_stream_info(
         vtdu_token,
         channel=stream_channel,
         client_type=client_type,
+        stream_index=stream_index,
     )
     return {
         "resource": resource,
@@ -362,7 +364,7 @@ def get_cloud_stream_info(
     }
 
 
-def open_cloud_stream(
+def open_cloud_stream(  # noqa: PLR0913 -- explicit VTM bootstrap options
     client: Any,
     serial: str,
     *,
@@ -374,6 +376,7 @@ def open_cloud_stream(
     socket_factory: SocketFactory | None = None,
     capture_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    stream_index: int = 1,
 ) -> VtmStreamClient:
     """Return a VTM TCP client bootstrapped from EZVIZ cloud metadata.
 
@@ -389,6 +392,7 @@ def open_cloud_stream(
             client_type=client_type,
             token_index=token_index,
             refresh_vtm=refresh_vtm,
+            stream_index=stream_index,
         )
     if socket_factory is None:
         return VtmStreamClient(info["stream_url"], timeout=timeout)
@@ -1445,6 +1449,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
     allow_encrypted: bool = False,
     startup_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    on_process: Callable[[subprocess.Popen[bytes]], None] | None = None,
 ) -> None:
     """Depacketize RTP video and optional descriptor-backed AAC to MPEG-TS."""
 
@@ -1839,11 +1844,14 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
 
     remux_error: BaseException | None = None
     try:
+        if on_process is not None:
+            on_process(process)
         copy_remuxed_output(
             process,
             output,
             write_input=_write_input,
             cancel_input=_cancel_inputs,
+            retain_input_owner=on_process is not None,
         )
     except BaseException as err:
         remux_error = err

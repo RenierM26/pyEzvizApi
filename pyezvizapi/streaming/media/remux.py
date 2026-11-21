@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import suppress
+from io import BufferedReader
 from pathlib import Path
 import subprocess
 from threading import Event, Lock, Thread
@@ -217,6 +218,7 @@ def copy_remuxed_output(  # noqa: PLR0912, PLR0915
     *,
     write_input: Callable[[BinaryIO], None],
     cancel_input: Callable[[], None] | None = None,
+    retain_input_owner: bool = False,
 ) -> None:
     """Run a streaming FFmpeg remux with coordinated cancellation and cleanup.
 
@@ -251,7 +253,9 @@ def copy_remuxed_output(  # noqa: PLR0912, PLR0915
     writer.start()
     output_error: Exception | None = None
     try:
-        while chunk := stdout.read(FFMPEG_IO_CHUNK_SIZE):
+        # Forward short writes without waiting for a full chunk or FFmpeg EOF.
+        read_output = stdout.read1 if isinstance(stdout, BufferedReader) else stdout.read
+        while chunk := read_output(FFMPEG_IO_CHUNK_SIZE):
             output.write(chunk)
             output.flush()
     except (BrokenPipeError, ConnectionResetError) as err:
@@ -271,6 +275,10 @@ def copy_remuxed_output(  # noqa: PLR0912, PLR0915
             with suppress(Exception):
                 cancel_input()
             writer.join(timeout=FFMPEG_STOP_TIMEOUT_SECONDS)
+        if retain_input_owner:
+            # The outer live owner bounds its own join and can await this same
+            # worker again. Do not return while the input iterator is executing.
+            writer.join()
         if not writer.is_alive():
             with suppress(OSError):
                 stdin.close()

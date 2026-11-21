@@ -27,6 +27,20 @@ DEFAULT_ALARM_IMAGE_URL = (
 UNIFIEDMSG_LOOKBACK_DAYS = 7
 
 
+def _reported_local_rtsp_port(value: object) -> int | None:
+    """Normalize the cloud's port hint without inferring RTSP support."""
+    if isinstance(value, str):
+        if not (value.isascii() and value.isdecimal()):
+            return None
+        digits = value.lstrip("0")
+        if len(digits) > 5:
+            return None
+        value = int(digits or "0")
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 65535:
+        return value
+    return None
+
+
 class CameraStatus(TypedDict, total=False):
     """Typed mapping for Ezviz camera status payload."""
 
@@ -52,6 +66,7 @@ class CameraStatus(TypedDict, total=False):
     mac_address: Any
     offline_notify: bool
     last_offline_time: Any
+    reported_local_rtsp_port: int | None
     local_rtsp_port: str
     supported_channels: Any
     battery_level: Any
@@ -385,6 +400,7 @@ class EzvizCamera:
         )
         conn = (self._record.connection if self._record else self._device.get("CONNECTION")) or {}
         wan_ip = conn.get("netIp") or self.fetch_key(["CONNECTION", "netIp"])
+        local_rtsp_port = self.fetch_key(["CONNECTION", "localRtspPort"])
 
         data: dict[str, Any] = {
             "serial": self._serial,
@@ -414,11 +430,9 @@ class EzvizCamera:
             "mac_address": self.fetch_key(["deviceInfos", "mac"]),
             "offline_notify": bool(self.fetch_key(["deviceInfos", "offlineNotify"])),
             "last_offline_time": self.fetch_key(["deviceInfos", "offlineTime"]),
+            "reported_local_rtsp_port": _reported_local_rtsp_port(local_rtsp_port),
             "local_rtsp_port": (
-                "554"
-                if (port := self.fetch_key(["CONNECTION", "localRtspPort"], "554"))
-                in (0, "0", None)
-                else str(port)
+                "554" if local_rtsp_port in (0, "0", None) else str(local_rtsp_port)
             ),
             "supported_channels": self.fetch_key(["deviceInfos", "channelNumber"]),
             "battery_level": self.fetch_key(["STATUS", "optionals", "powerRemaining"]),

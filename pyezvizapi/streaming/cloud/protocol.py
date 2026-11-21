@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from enum import IntEnum
 import hashlib
@@ -343,6 +344,8 @@ class VtmStreamClient:
         self._pending_header = None
         self._read_inactivity_deadline = None
         if sock is not None:
+            with suppress(OSError, AttributeError):
+                sock.shutdown(socket.SHUT_RDWR)
             sock.close()
 
     def send_packet(
@@ -896,6 +899,7 @@ def build_vtm_url(
     channel: int = 1,
     client_type: int = 9,
     timestamp_ms: int | None = None,
+    stream_index: int = 1,
 ) -> str:
     """Build the ysproto live URL used for the VTM stream-info request."""
 
@@ -906,7 +910,7 @@ def build_vtm_url(
         **biz,
         "dev": serial,
         "chn": str(channel),
-        "stream": "1",
+        "stream": str(stream_index),
         "cln": str(client_type),
         "isp": "0",
         "auth": "1",
@@ -1341,6 +1345,7 @@ def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
     states: dict[int, _MpegPsVideoDecryptState],
     data_offset: int = 0,
     output_offset: int = 0,
+    packet_ranges: list[_MpegPsPacketRange] | None = None,
 ) -> None:
     """Apply the shared per-PES-stream cipher state to newly parsed packets.
 
@@ -1390,7 +1395,9 @@ def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
         nal_type = _hevc_nal_type(data, start_code_pos, start_code_len)
         return nal_type is None or nal_type >= 32
 
-    for packet_range in _mpeg_ps_video_decrypt_ranges(data):
+    if packet_ranges is None:
+        packet_ranges = _mpeg_ps_video_decrypt_ranges(data)
+    for packet_range in packet_ranges:
         if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
             continue
         if not _is_video_pes_stream_id(packet_range.stream_id):

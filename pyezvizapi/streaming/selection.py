@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 import errno
@@ -13,6 +13,7 @@ from threading import Lock
 import time
 from typing import Any
 
+from pyezvizapi.cloud.deadline import request_deadline
 from pyezvizapi.exceptions import (
     EzvizLocalSdkDeadlineExpired,
     EzvizLocalSdkStreamClosed,
@@ -27,6 +28,7 @@ from pyezvizapi.streaming.capture import (
     LocalSdkEcdhClipSource,
 )
 from pyezvizapi.streaming.cloud.bootstrap import open_cloud_stream
+from pyezvizapi.streaming.cloud.protocol import VtmStreamClient
 from pyezvizapi.streaming.cloud.transport import vtm_media_packet_source
 from pyezvizapi.streaming.discovery import LocalStreamDiscovery
 from pyezvizapi.streaming.local.ecdh import (
@@ -85,6 +87,8 @@ def select_stream_source(
     _discovery_keys: list[str] | None = None,
 ) -> SelectedClipSource:
     """Resolve one playback candidate, never fetching account data offline."""
+    if options.mode == "cloud":
+        return CloudClipSource(timeout=options.timeout, smscode=options.smscode)
     device = options.device
     if device is None and options.mode == "auto":
         response = client.get_device_infos(serial)
@@ -197,6 +201,12 @@ def fallback_stream_source(
     return None
 
 
+def _connect_deadline(
+    monotonic: Callable[[], float], timeout: float, *deadlines: float | None
+) -> float:
+    return min([monotonic() + timeout, *(limit for limit in deadlines if limit is not None)])
+
+
 def _live_input_frame_limit(limits: CaptureLimits) -> int | None:
     """Allow bounded negotiation input independently of emitted packets/bytes."""
     counts = [value for value in (limits.max_packets, limits.max_bytes) if value is not None]
@@ -218,11 +228,13 @@ class AutoMediaStream:
         options: AutoClipSource,
         *,
         channel: int | None = None,
+        cloud_stream_index: int = 1,
     ) -> None:
         self._client = client
         self._serial = serial
         self._options = options
         self._channel = channel
+        self._cloud_stream_index = cloud_stream_index
         self._stream: Any = None
         self._transport_lock = Lock()
         self._transport_close_lock = Lock()
@@ -363,14 +375,17 @@ class AutoMediaStream:
         *,
         limits: CaptureLimits | None = None,
         monotonic: Callable[[], float] = time.monotonic,
-    ) -> Iterator[MediaPacket]:
+        startup_deadline: float | None = None,
+    ) -> Generator[MediaPacket, None, None]:
         """Select once, report a local stop reason, and own iterator/transport cleanup."""
         if self._closed or self._started:
             raise PyEzvizError("Automatic stream is closed or already consumed")
         self._started = True
         with self._cleanup_scope(self._close_owner):
             try:
-                yield from self._iter_selected_packets(limits=limits, monotonic=monotonic)
+                yield from self._iter_selected_packets(
+                    limits=limits, monotonic=monotonic, startup_deadline=startup_deadline
+                )
             except GeneratorExit:
                 self._stop("consumer_closed")
                 raise
@@ -388,16 +403,18 @@ class AutoMediaStream:
         *,
         limits: CaptureLimits | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        startup_deadline: float | None = None,
     ) -> Iterator[MediaPacket]:
         """Select once and stream within one duration budget, including fallback."""
         selected_limits = limits or CaptureLimits()
-        source = select_stream_source(
-            self._client,
-            self._serial,
-            self._options,
-            channel=1 if self._channel is None else self._channel,
-            _discovery_keys=self._discovery_keys,
-        )
+        with request_deadline(startup_deadline, monotonic):
+            source = select_stream_source(
+                self._client,
+                self._serial,
+                self._options,
+                channel=1 if self._channel is None else self._channel,
+                _discovery_keys=self._discovery_keys,
+            )
         # Account discovery is separate; subsequent LAN/cloud startup and retries
         # share the requested capture duration rather than restarting its budget.
         deadline = (
@@ -454,9 +471,9 @@ class AutoMediaStream:
                             )
                         )
                     else:
-                        cloud_deadline = monotonic() + self._options.timeout
-                        if deadline is not None:
-                            cloud_deadline = min(cloud_deadline, deadline)
+                        cloud_deadline = _connect_deadline(
+                            monotonic, self._options.timeout, deadline, startup_deadline
+                        )
                         self._stream = open_cloud_stream(
                             self._client,
                             self._serial,
@@ -464,20 +481,35 @@ class AutoMediaStream:
                             timeout=source.timeout,
                             capture_deadline=cloud_deadline,
                             monotonic=monotonic,
+                            stream_index=self._cloud_stream_index,
                         )
                         self._transports_opened += 1
                         if self._closed:
                             return
                         if not self._start_transport(deadline=cloud_deadline, monotonic=monotonic):
                             return
-                        adapter = vtm_media_packet_source(self._stream)
+                        if isinstance(self._stream, VtmStreamClient):
+                            reply = self._stream.stream_info
+                            if reply is not None and reply.result not in (None, 0):
+                                raise EzvizNoMediaError(
+                                    f"VTM stream negotiation rejected (result {reply.result})"
+                                )
+                            adapter = replace(
+                                vtm_media_packet_source(self._stream),
+                                first_packet_deadline=cloud_deadline
+                                if startup_deadline is not None
+                                else None,
+                            )
+                        else:
+                            adapter = vtm_media_packet_source(self._stream)
                     if self._closed:
                         return
-                    startup_deadline = monotonic() + self._options.timeout
-                    if deadline is not None:
-                        startup_deadline = min(startup_deadline, deadline)
                     if not isinstance(source, CloudClipSource) and not self._start_transport(
-                        read_first_media=False, deadline=startup_deadline, monotonic=monotonic
+                        read_first_media=False,
+                        deadline=_connect_deadline(
+                            monotonic, self._options.timeout, deadline, startup_deadline
+                        ),
+                        monotonic=monotonic,
                     ):
                         return
                     remaining = None if deadline is None else deadline - monotonic()

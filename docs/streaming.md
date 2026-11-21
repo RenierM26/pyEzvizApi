@@ -693,3 +693,58 @@ decodes without diagnostics, and all 835 video plus 437 AAC packets overlapping
 the official-app export match payloads and source timing. A previously clean
 preflight remains byte-for-byte unchanged. No camera media or keys are included
 in the repository, and this does not measure physical screen/speaker latency.
+
+## Live MPEG-TS for integrations
+
+`CameraStatus.reported_local_rtsp_port` is the cloud's `CONNECTION.localRtspPort`
+hint: a port from `1` to `65535`, `0` when the cloud explicitly reports zero,
+or `None` when the field is missing or invalid. Neither zero nor a positive
+port establishes whether RTSP is supported, enabled, or reachable. The legacy
+`local_rtsp_port` field and its `"554"` fallback are unchanged.
+
+Do not choose local RTSP versus cloud streaming solely from either field. Where
+available, a LAN service read reports whether RTSP is enabled on the device;
+successful local playback verifies that the configured stream is usable.
+
+With FFmpeg installed, an integration can use a synchronous reader:
+
+```python
+from pyezvizapi.streaming.capture import AutoClipSource
+from pyezvizapi.streaming.live import open_live_mpegts_stream
+
+with open_live_mpegts_stream(client, serial, source=AutoClipSource(mode="cloud")) as stream:
+    while chunk := stream.read(65536):
+        write_to_viewer(chunk)
+```
+
+Explicit cloud mode skips local SDK discovery. Omitting `source` retains
+automatic selection, which chooses EZVIZ SDK transports rather than RTSP.
+The reader supports MPEG-PS and supported VTM RTP/IDMX streams. To decrypt
+inner media encryption, use explicit cloud mode and pass the authorized camera
+key as `media_key`. For MPEG-PS, set `nalu_header_size=0` for encrypted NAL
+headers, `1` for clear H.264 headers, or `2` for clear HEVC headers. For RTP,
+the reader uses the detected codec and retains AAC when the camera supplies a
+supported descriptor and the key. A clear VTM transport flag does not establish
+that its video is clear. The reader does not fetch keys or guess encryption
+settings. It rejects transport-level encryption and local ECDH; transport
+selection does not change once media has started.
+
+Cloud viewing defaults to stream index 1. Pass `cloud_stream_index=2` to
+`open_live_mpegts_stream` to request a substream on cameras that support it
+(Standard on the C8W). This selects the stream for that session only: it does
+not change camera settings or retry automatically at another quality.
+
+Run blocking reads off the event loop. Call `close()` from another thread
+on disconnect or unload. The stream owns the transport and FFmpeg, not the
+account client. The source timeout bounds discovery, connection startup, and
+the first cloud media packet and first MPEG-TS output. If input arrives but
+produces no output by that deadline, the first read closes the stream and
+raises `EzvizNoMediaError` after cleanup. This does not guarantee that a viewer
+has decoded a frame. A read returning empty bytes
+after cancellation does not prove cleanup. Await `close()`; if it raises
+`LiveStreamShutdownTimeout`, retain the stream and call `close()` again to
+await the same teardown. Closing the VTM connection is not a camera-side
+stop acknowledgement.
+
+Viewer authentication, admission, HTTP and snapshot policy remain the
+integration's responsibility.

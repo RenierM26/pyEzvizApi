@@ -169,14 +169,14 @@ class CloudClipSource:
 
 @dataclass(frozen=True)
 class AutoClipSource:
-    """Metadata-first playback; offline mode never calls EZVIZ services.
+    """Metadata-first playback, with explicit cloud and offline policies.
 
     ``device`` is a cached per-device ``get_device_infos`` result. Offline
     callers must supply credentials; missing metadata is verified in-stream.
     """
 
     kind: Literal["auto"] = field(default="auto", init=False)
-    mode: Literal["auto", "offline"] = "auto"
+    mode: Literal["auto", "cloud", "offline"] = "auto"
     device: dict[str, Any] | None = field(default=None, repr=False)
     credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False)
     allow_cloud_fallback: bool = True
@@ -187,8 +187,8 @@ class AutoClipSource:
     smscode: str | int | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        if self.mode not in ("auto", "offline"):
-            raise PyEzvizError("Automatic stream mode must be auto or offline")
+        if self.mode not in ("auto", "cloud", "offline"):
+            raise PyEzvizError("Automatic stream mode must be auto, cloud or offline")
         if not math.isfinite(self.timeout) or self.timeout <= 0:
             raise PyEzvizError("Automatic stream timeout must be positive and finite")
         if self.receiver_port is not None and not 1 <= self.receiver_port <= 65535:

@@ -198,6 +198,7 @@ def test_build_and_parse_vtm_url_preserves_required_params() -> None:
     assert params["serial"] == "CAM123"
     assert params["streamtag"] == "abc"
     assert params["timestamp"] == "123456"
+    assert params["stream"] == "1"
 
 def test_build_vtm_url_keeps_required_params_authoritative() -> None:
     url = build_vtm_url(
@@ -1755,14 +1756,16 @@ def test_get_cloud_stream_info_builds_bootstrap(monkeypatch) -> None:
         lambda _client: {"retcode": 0, "tokens": ["token-1"]},
     )
 
-    info = get_cloud_stream_info(client, "CAM123")
+    info = get_cloud_stream_info(client, "CAM123", stream_index=2)
 
     assert info["vtdu_token"] == "token-1"
     assert info["resource"]["resourceId"] == "Video"
     assert info["vtm"]["externalIp"] == "1.2.3.4"
     assert info["vtm_public_key"].version == 2
     assert info["vtm_public_key"].key_bytes == PUBLIC_KEY_BYTES
-    assert parse_vtm_url(info["stream_url"])[3]["chn"] == "2"
+    params = parse_vtm_url(info["stream_url"])[3]
+    assert params["chn"] == "2"
+    assert params["stream"] == "2"
 
 def test_get_cloud_stream_info_can_refresh_vtm_from_app_endpoint(monkeypatch) -> None:
     client = _client()

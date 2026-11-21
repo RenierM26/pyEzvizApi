@@ -353,6 +353,23 @@ and the [pagelist fixture](../tests/fixtures/page_list_response.json).
   video route. These are schema-backed read helpers; the profile
   does not establish a working write or confirm hardware behavior.
 
+### Recording writes and custom ringtone discovery
+
+- The fixture's `TimingRecord` profile marks `RecordSchedule` as
+  read/write and advertises separate device actions:
+  `SearchScheduleRecordTaskList`, `AddScheduleRecordTask`, and
+  `OperateScheduleRecordTask`. The operate action takes an operation
+  type and task ID. These declarations do not establish which path the
+  consumer app uses to edit an existing schedule, or whether a property
+  write would replace existing blocks. No writer is provided here.
+- Android's standard ringtone picker hands off to
+  `pushCustomSoundBellSetting` and consumes `voiceName`, `voiceId`,
+  and `voiceInfos` from the callback. The retained UI bundle does not
+  show the native listing request. The SDK already has
+  `get_voice_info` for uploaded device voice prompts, but the trace
+  does not establish that its results are valid ringtone selections.
+  Use only a voice ID independently verified for that doorbell.
+
 ### Fixture coverage: feature domains
 
 Each row lists the property names observed for that resource/domain in the

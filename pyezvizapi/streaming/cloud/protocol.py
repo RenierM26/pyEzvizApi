@@ -1344,6 +1344,7 @@ def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
     states: dict[int, _MpegPsVideoDecryptState],
     data_offset: int = 0,
     output_offset: int = 0,
+    packet_ranges: list[_MpegPsPacketRange] | None = None,
 ) -> None:
     """Apply the shared per-PES-stream cipher state to newly parsed packets.
 
@@ -1393,7 +1394,9 @@ def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
         nal_type = _hevc_nal_type(data, start_code_pos, start_code_len)
         return nal_type is None or nal_type >= 32
 
-    for packet_range in _mpeg_ps_video_decrypt_ranges(data):
+    if packet_ranges is None:
+        packet_ranges = _mpeg_ps_video_decrypt_ranges(data)
+    for packet_range in packet_ranges:
         if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
             continue
         if not _is_video_pes_stream_id(packet_range.stream_id):

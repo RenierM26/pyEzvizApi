@@ -12,9 +12,31 @@ from pyezvizapi.streaming.media.containers import (
     mpeg_ps_complete_prefix_length,
     mpeg_ps_decryptable_prefix_length,
 )
+from pyezvizapi.streaming.media.mpegps import (
+    _is_video_pes_stream_id,
+    _mpeg_ps_complete_packet_ranges,
+    _mpeg_ps_video_decrypt_ranges,
+    _MpegPsPacketRange,
+)
 
 MAX_PENDING_PS_BYTES = 1024 * 1024
 _PS_START = b"\x00\x00\x01"
+
+
+def _cloud_ps_live_ranges(data: bytes) -> list[_MpegPsPacketRange]:
+    """Hold the last video PES until a successor or a pack anchors its end."""
+    strict = _mpeg_ps_complete_packet_ranges(data)
+    if not strict or not _is_video_pes_stream_id(strict[-1].stream_id):
+        return strict
+    if data.find(b"\x00\x00\x01\xba", strict[-1].end) >= 0:
+        recovered = _mpeg_ps_video_decrypt_ranges(data)
+        for index, packet in enumerate(recovered):
+            if index and packet.start != recovered[index - 1].end:
+                # A gap not owned by video is not recoverable.
+                break
+            if packet.stream_id == 0xBA and packet.start >= strict[-1].end:
+                return recovered[:index]
+    return strict[:-1]
 
 
 class NativePsTransform:
@@ -25,7 +47,13 @@ class NativePsTransform:
     Only an explicitly finite source may call finish; cancellation never flushes.
     """
 
-    def __init__(self, media_key: str | bytes | None = None, *, nalu_header_size: int = 2) -> None:
+    def __init__(
+        self,
+        media_key: str | bytes | None = None,
+        *,
+        nalu_header_size: int = 2,
+        recover_cloud_pes: bool = False,
+    ) -> None:
         if isinstance(nalu_header_size, bool) or nalu_header_size not in (1, 2):
             raise ValueError("Continuous decryption requires clear 1- or 2-byte NAL headers")
         if media_key is not None and (not isinstance(media_key, str | bytes) or not media_key):
@@ -33,6 +61,7 @@ class NativePsTransform:
         raw_key = media_key.encode() if isinstance(media_key, str) else media_key
         self._key = raw_key.ljust(16, b"\x00")[:16] if raw_key is not None else None
         self._header = nalu_header_size
+        self._recover_cloud_pes = recover_cloud_pes
         self._buffer = bytearray()
         self._output = bytearray()
         self._states: dict[int, _MpegPsVideoDecryptState] = {}
@@ -58,7 +87,12 @@ class NativePsTransform:
         self.peak_pending_bytes = max(self.peak_pending_bytes, self.pending_bytes)
         if len(self._buffer) >= 3 and self._buffer[:3] != _PS_START:
             raise PyEzvizError("Native stream requires MPEG-PS; IDMX/RTP is not supported here")
-        end = mpeg_ps_complete_prefix_length(self._buffer)
+        ranges = None
+        if self._recover_cloud_pes:
+            ranges = _cloud_ps_live_ranges(bytes(self._buffer))
+            end = ranges[-1].end if ranges else 0
+        else:
+            end = mpeg_ps_complete_prefix_length(self._buffer)
         if not end:
             return b""
         chunk = bytes(self._buffer[:end])
@@ -73,6 +107,7 @@ class NativePsTransform:
                 states=self._states,
                 data_offset=self._processed,
                 output_offset=self._emitted,
+                packet_ranges=ranges,
             )
         self._processed += len(chunk)
         # An incomplete AES block can straddle audio/other-lens PES packets.

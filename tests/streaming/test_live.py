@@ -83,6 +83,25 @@ def test_decrypts_inner_ps_video_with_clear_vtm_flag(
     assert stream._transform.pending_bytes == 0
 
 
+def test_cloud_live_recovers_short_video_pes_at_next_pack(monkeypatch: pytest.MonkeyPatch) -> None:
+    _process(monkeypatch, "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())")
+    source = _source()
+    key = b"test-camera-key!"
+    clear = b"0123456789abcdef" * 2
+    cipher = AES.new(key.ljust(16, b"\0"), AES.MODE_ECB).encrypt(clear)
+    prefix = _pack_header(0) + pes(0xE0, b"\x00\x00\x00\x01\x42\x01" + cipher[:16], 0)
+    next_pack = _pack_header(3600)
+    audio = pes(0xC0, b"unchanged audio", 3600)
+    wire = prefix + cipher[16:] + next_pack + audio
+    expected = prefix[:-16] + clear + next_pack + audio
+    source.iter_media_packets.return_value = _packets(
+        MediaPacket(wire[index : index + 7], MediaPacketMetadata(source="cloud_vtm"))
+        for index in range(0, len(wire), 7)
+    )
+    with live.LiveMpegtsStream(source, "ffmpeg", media_key=key) as stream:
+        assert b"".join(iter(stream.read, b"")) == expected
+
+
 def test_legacy_ps_waits_for_pes_run_and_leaves_audio_intact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

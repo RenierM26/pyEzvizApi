@@ -56,7 +56,9 @@ class LiveMpegtsStream:
             self._transform = (
                 LegacyPsVideoTransform(media_key)
                 if nalu_header_size == 0 and not isinstance(nalu_header_size, bool)
-                else NativePsTransform(media_key, nalu_header_size=nalu_header_size)
+                else NativePsTransform(
+                    media_key, nalu_header_size=nalu_header_size, recover_cloud_pes=True
+                )
             )
         self._media_key = media_key
         self._source = source

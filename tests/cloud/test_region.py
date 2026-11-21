@@ -5,7 +5,7 @@ import json
 import pytest
 import requests
 
-from pyezvizapi.cloud.region import resolve_login_host
+from pyezvizapi.cloud.region import list_login_areas, resolve_login_host
 from pyezvizapi.exceptions import PyEzvizError
 
 
@@ -71,3 +71,23 @@ def test_lookup_rejects_bad_responses_without_following_redirects(lookup, status
     with pytest.raises(PyEzvizError):
         resolve_login_host(314)
     assert len(calls) == 1
+
+
+def test_catalog_supports_selection_by_name_without_network(lookup):
+    calls = lookup({"resultCode": "0", "areaDomain": "apiieu.ezvizlife.com"})
+    areas = list_login_areas()
+    assert len(areas) > 200
+    assert len({area.area_id for area in areas}) == len(areas)
+    assert list(areas) == sorted(areas, key=lambda area: (area.name.casefold(), area.area_id))
+    area = next(area for area in areas if area.name == "South Africa")
+    assert area.area_id == 437
+    assert calls == []
+    assert resolve_login_host(area.area_id) == "apiieu.ezvizlife.com"
+    assert calls[0].body == "areaId=437"
+
+
+def test_russia_matches_app_special_route_without_lookup(lookup):
+    calls = lookup({})
+    russia = next(area for area in list_login_areas() if area.name == "Russia")
+    assert resolve_login_host(russia.area_id) == "api.ezvizru.com"
+    assert calls == []

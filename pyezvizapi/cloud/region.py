@@ -1,10 +1,12 @@
 """Explicit, credential-free lookup of an EZVIZ login API host."""
 
+from dataclasses import dataclass
 import re
 import time
 
 import requests
 
+from pyezvizapi.cloud._area_catalog import AREA_NAMES
 from pyezvizapi.cloud.budget import budgeted_http_call
 from pyezvizapi.cloud.deadline import bounded_request_timeout, request_deadline
 from pyezvizapi.exceptions import HTTPError, PyEzvizError
@@ -17,6 +19,22 @@ _VENDOR_HOST = re.compile(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class LoginArea:
+    """A named area in the EZVIZ login picker."""
+
+    area_id: int
+    name: str
+
+
+def list_login_areas() -> tuple[LoginArea, ...]:
+    """Return the bundled Android catalog, sorted by name, without network access."""
+    return _LOGIN_AREAS
+
+
+_LOGIN_AREAS = tuple(LoginArea(area_id, name) for area_id, name in AREA_NAMES)
+
+
 def resolve_login_host(area_id: int) -> str:
     """Resolve an EZVIZ catalog area ID (not a dialing code) to a bare API hostname.
 
@@ -25,6 +43,9 @@ def resolve_login_host(area_id: int) -> str:
     """
     if type(area_id) is not int or not 0 < area_id <= 2**31 - 1:
         raise ValueError("EZVIZ area ID must be a positive 32-bit integer")
+
+    if area_id == 114:  # The Android picker routes Russia separately.
+        return "api.ezvizru.com"
 
     with requests.Session() as session, request_deadline(time.monotonic() + 10):
         # A bootstrap lookup needs neither netrc credentials nor environment headers.

@@ -314,18 +314,23 @@ real message delivery, live account lock recovery or actual UI rendering.
 
 ## Explicit login host lookup
 
-Use a known EZVIZ area catalog ID to resolve a host before constructing a client:
+Use the offline Android 7.6.1 catalog snapshot to show named regions. Let the
+user choose their account's registered region, then pass its internal ID to the
+host resolver. The ID is not a country code or dialing prefix:
 
 ```python
 from pyezvizapi import EzvizClient
-from pyezvizapi.cloud.region import resolve_login_host
+from pyezvizapi.cloud.region import list_login_areas, resolve_login_host
 
-host = resolve_login_host(314)  # EZVIZ's US area ID, not an ISO or dialing code.
+area = next(area for area in list_login_areas() if area.name == "South Africa")
+host = resolve_login_host(area.area_id)
 client = EzvizClient(account, password, url=host)
 ```
 
 The lookup sends only the area ID to the global EZVIZ endpoint, requires no
-account or token, and does not modify an existing client. A successful response
+account or token, and does not modify an existing client. Russia uses the
+app’s dedicated host without a lookup. The bundled catalog is a versioned
+snapshot, not a live list of account eligibility. A successful response
 does not prove that the area belongs to an account; EZVIZ may return its
 global host even for unknown IDs. This is opt-in: the default host and normal
 `1100` redirect handling are unchanged. For `1102`, finish selection in the

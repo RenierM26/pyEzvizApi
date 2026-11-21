@@ -144,10 +144,16 @@ does not by itself establish capability support or parity with cloud switch
 Use `lan wdr enable` or `lan wdr disable` with the same connection options.
 The SDK method `set_camera_wdr(enabled)` requires the native 152-byte layout
 and a binary starting value. It preserves backlight mode and the other bytes
-in the outgoing configuration, sends at most one write, and verifies WDR and
-backlight by reading back. Avoid concurrent imaging configuration changes.
+in the outgoing configuration, sends at most one write, and verifies the full
+configuration by reading back. Avoid concurrent imaging configuration changes.
 If verification fails, read status before retrying. Writes were verified on
 an H9c; other models are unverified.
+
+SDK callers can use `set_camera_video_effect(effect, level)` for brightness,
+contrast, sharpness or saturation, and `set_camera_day_night_mode(mode)` for
+the numeric native mode. Read the current values via `camera_param_config()`.
+The day/night writer preserves the existing schedule and is not the numbered
+cloud IR switch.
 
 ### lan ptz
 

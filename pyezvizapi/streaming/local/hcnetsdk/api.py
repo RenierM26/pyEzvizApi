@@ -33,7 +33,7 @@ import ssl
 import sys
 from threading import Lock
 import time
-from typing import Any, cast
+from typing import Any, cast, Literal
 import xml.etree.ElementTree as ET
 
 from Crypto.Cipher import AES, PKCS1_v1_5
@@ -5066,25 +5066,45 @@ class HcNetSdkPurePythonClient:
         """Set WDR on the default camera configuration and verify by reading back."""
         if not isinstance(enabled, bool):
             raise PyEzvizError("WDR enabled must be a boolean")
+        return self._set_camera_param_byte(HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET, int(enabled), 1)
+
+    def set_camera_video_effect(
+        self, effect: Literal["brightness", "contrast", "sharpness", "saturation"], level: int
+    ) -> EzvizLanCameraParamConfig:
+        """Set one default-camera video effect (0-100) and read it back."""
+        offsets = {"brightness": 4, "contrast": 5, "sharpness": 6, "saturation": 7}
+        if effect not in offsets:
+            raise PyEzvizError("Unknown camera video effect")
+        return self._set_camera_param_byte(offsets[effect], level, 100)
+
+    def set_camera_day_night_mode(self, mode: int) -> EzvizLanCameraParamConfig:
+        """Set the native day/night mode (0-3), preserving the existing schedule."""
+        return self._set_camera_param_byte(HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET, mode, 3)
+
+    def _set_camera_param_byte(
+        self, offset: int, value: int, maximum: int
+    ) -> EzvizLanCameraParamConfig:
+        if type(value) is not int or not 0 <= value <= maximum:
+            raise PyEzvizError(f"Camera configuration value must be an integer from 0 to {maximum}")
         before = self.camera_param_config()
-        # The native 1068 dispatcher uses a complete 152-byte wire structure.
+        # The native 1068 dispatcher uses the complete 152-byte wire structure.
         wire_size = 152
         if len(before.raw) != wire_size or int.from_bytes(before.raw[:4], "big") != wire_size:
-            raise PyEzvizError("Unsupported camera configuration layout for WDR writes")
-        if before.wdr_enabled not in (0, 1):
-            raise PyEzvizError("Device did not report a binary WDR state")
-        if before.wdr_enabled == int(enabled):
+            raise PyEzvizError("Unsupported camera configuration layout for writes")
+        if before.raw[offset] > maximum:
+            raise PyEzvizError("Device did not report a recognized starting value")
+        if before.raw[offset] == value:
             return before
         payload = bytearray(before.raw)
-        payload[HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET] = int(enabled)
+        payload[offset] = value
         self.execute_template(
             HcNetSdkCommandPortControlTemplate(
                 command_id=0x111095, body_tail=bytes(payload), name="SET_CAMERA_PARAM_CFG"
             )
         )
         after = self.camera_param_config()
-        if after.wdr_enabled != int(enabled) or after.backlight_mode != before.backlight_mode:
-            raise PyEzvizError("WDR configuration read-back did not match")
+        if after.raw != payload:
+            raise PyEzvizError("Camera configuration read-back did not match")
         return after
 
     def wifi_connect_status(self, channel: int = 0) -> EzvizLanWifiConnectStatus:

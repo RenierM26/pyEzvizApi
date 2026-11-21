@@ -14,6 +14,7 @@ release tag, or use a source checkout for current development. See the
 
 Unreleased multi-lens application APIs are described in
 [camera channels](docs/camera-channels.md); they are not included in PyPI 2.5.1.
+See [device switches](docs/device-switches.md) for Android switch IDs and capability gates.
 
 ## Release 2.5.0
 

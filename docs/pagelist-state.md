@@ -296,6 +296,12 @@ No dedicated or verified generic setter for `SpeakerConfig` itself was found.
   only when on (0–100, step 10); the PUT sends
   `{"value":{"hdrSwitchEnabled":"open","WDRLevel1":<level>}}`. The SDK provides
   `set_iot_wdr_enabled` and `set_iot_wdr_level`.
+  Live cloud reads on one H80x supported WDR enable and level changes with
+  fresh read-back and verified restoration. On one H9c, both reported video
+  resources rejected direct WDR GETs with API code 400. Do not use pagelist
+  values, switch 604, or the first lens as a substitute for that read. For a
+  locally reachable camera with a supported image-parameter layout, see
+  [the LAN WDR command](cli.md#lan-wdr) for its separate binary setting.
 - **Binary alternative:** With `273` but no matching function point,
   the same app screen reads switch 604 and calls its v3 switch action
   at channel 0 (the graphics view is owner-only for this row). A connected

@@ -2135,6 +2135,42 @@ def test_switch_light_status_routes_light_bulbs_to_iot_feature(monkeypatch) -> N
     ]
 
 
+@pytest.mark.parametrize(
+    ("channel", "expected"),
+    [(0, False), (1, True), (2, None), (3, None)],
+)
+def test_warning_light_state_keeps_channel_and_unknown_distinct(
+    monkeypatch, channel, expected
+) -> None:
+    client = _client()
+    calls = []
+
+    def inventory(serial):
+        calls.append(serial)
+        return {
+            "SWITCH": [
+                {"type": 303, "enable": True},
+                {"type": 303, "channelNo": 0, "enable": False},
+                {"type": 303, "channelNo": 2, "enable": 7},
+                {"type": 303, "channelNo": "1", "enable": "1"},
+                {"type": 301, "channelNo": 3, "enable": True},
+            ]
+        }
+
+    monkeypatch.setattr(client, "get_device_infos", inventory)
+    assert client.get_warning_light_state("CAM123", channel_no=channel) is expected
+    assert calls == ["CAM123"]
+
+
+def test_warning_light_state_defaults_to_legacy_device_channel(monkeypatch) -> None:
+    client = _client()
+    monkeypatch.setattr(
+        client, "get_device_infos", lambda serial: {"SWITCH": [{"type": 303, "enable": True}]}
+    )
+    assert client.get_warning_light_state("CAM123") is True
+    assert client.get_warning_light_state("CAM123", channel_no=1) is None
+
+
 def test_switch_light_status_routes_cameras_to_alarm_light_switch(monkeypatch) -> None:
     client = _client()
     calls: list[dict[str, Any]] = []

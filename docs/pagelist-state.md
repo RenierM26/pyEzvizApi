@@ -253,7 +253,10 @@ Use `pyezvizapi.devices.audio.set_doorbell_ringtone_volume` for the
 standard picker’s integer range (0–7). Verify model and online eligibility
 before calling it and supply a fresh device record. The helper preserves
 the reported tone and custom slot and uses the query-based key/value
-route. It does not change tone selection or verify device read-back.
+route. Use `set_doorbell_ringtone_tone` to change the built-in tone while
+preserving the reported volume and custom slot. This helper does not
+select custom tone 10 or implement the SD7 picker. Neither helper
+verifies device read-back.
 
 Existing controls are for different settings. The app's
 `soundSelect.js` reads/writes `device_bell` with `Type`, `Volume`,

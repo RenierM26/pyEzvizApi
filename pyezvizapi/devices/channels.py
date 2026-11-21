@@ -94,6 +94,29 @@ def camera_channels(data: Mapping[str, Any]) -> tuple[CameraChannel, ...]:
         return ()
 
 
+def reported_video_channel_numbers(data: Mapping[str, Any]) -> tuple[int, ...]:
+    """Return reported video indexes without inventing command resource names."""
+    rows = data.get("resourceInfos", ())
+    if not isinstance(rows, (list, tuple)):
+        return ()
+    numbers: set[int] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        resource = row.get("resourceIdentifier")
+        resource_type = row.get("resourceType")
+        named_video = isinstance(resource, str) and _VIDEO.fullmatch(resource)
+        anonymous_video = (
+            resource in (None, "") and type(resource_type) is int and resource_type == 50
+        )
+        if named_video or anonymous_video:
+            index = _local_index(row.get("localIndex"))
+            if index is None:
+                return ()
+            numbers.add(int(index))
+    return tuple(sorted(numbers))
+
+
 def resolve_camera_channel(data: Mapping[str, Any], key: str) -> CameraChannel:
     """Re-resolve a stable identity against current metadata before any command."""
     for channel in _channels(data):

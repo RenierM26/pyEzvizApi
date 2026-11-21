@@ -18,6 +18,12 @@ retry, state overlay or network side effect. Applications retain their existing
 account/session and worker lifetime ownership. Shared device settings remain
 shared unless their individual protocol contract establishes channel scope.
 
+For numeric-only consumers, `reported_video_channel_numbers(data)` also
+recognizes unnamed resources of type 50 (Android's `Type_Video_Device`).
+Other unnamed rows, including type 0, do not establish a video channel.
+This does not create child entities or supply missing resource identifiers
+for named commands, nor prove an independent stream exists.
+
 ## Command routing
 
 `point_ptz_route(data, lens="auto", channel_key=None)` owns the app-backed

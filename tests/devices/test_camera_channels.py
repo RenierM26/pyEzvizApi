@@ -12,6 +12,7 @@ from pyezvizapi.devices.channels import (
     capture_channel_number,
     notification_camera_channel,
     point_ptz_route,
+    reported_video_channel_numbers,
     resolve_camera_channel,
     validate_channel_rtsp_path,
 )
@@ -169,3 +170,17 @@ def test_oversized_numeric_channel_is_invalid():
     with pytest.raises(CameraChannelError) as caught:
         resolve_camera_channel(data, "Video_1:1")
     assert caught.value.reason == "invalid"
+
+
+def test_unnamed_video_is_a_numeric_channel_not_a_named_route():
+    info = {
+        "resourceInfos": [
+            {"resourceType": 0, "localIndex": "0"},
+            {"resourceType": 50, "localIndex": "1"},
+            {"resourceIdentifier": "Video_1", "localIndex": "2"},
+        ]
+    }
+    assert reported_video_channel_numbers(info) == (1, 2)
+    assert [channel.key for channel in camera_channels(info)] == ["Video_1:2"]
+    with pytest.raises(CameraChannelError):
+        resolve_camera_channel(info, "Video:1")

@@ -7,10 +7,12 @@ from io import BufferedReader
 import subprocess
 import sys
 from threading import Event, Lock, Thread
+import time
 from typing import TYPE_CHECKING, BinaryIO, cast
 
 from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
 from pyezvizapi.streaming.capture import AutoClipSource
+from pyezvizapi.streaming.media.models import is_positive_finite_duration_bound
 from pyezvizapi.streaming.media.remux import (
     _ffmpeg_exit_error,
     _wait_for_process,
@@ -23,13 +25,32 @@ if TYPE_CHECKING:
     from pyezvizapi.client import EzvizClient
 
 
+class LiveStreamShutdownTimeout(PyEzvizError):
+    """Shutdown is still in progress; keep ownership and call close again."""
+
+
 class LiveMpegtsStream:
     """One synchronous reader, with cancellation from another thread."""
 
-    def __init__(self, source: AutoMediaStream, ffmpeg_path: str) -> None:
+    def __init__(
+        self,
+        source: AutoMediaStream,
+        ffmpeg_path: str,
+        *,
+        startup_timeout: float = 10.0,
+        close_timeout: float = 15.0,
+    ) -> None:
+        if not is_positive_finite_duration_bound(startup_timeout):
+            raise ValueError("Live startup timeout must be positive and finite")
+        if not is_positive_finite_duration_bound(close_timeout):
+            raise ValueError("Live close timeout must be positive and finite")
         self._source = source
         self._closed = Event()
         self._close_lock = Lock()
+        self._startup_timeout = startup_timeout
+        self._close_timeout = close_timeout
+        self._stopper: Thread | None = None
+        self._shutdown_error: Exception | None = None
         self._error: Exception | None = None
         self._process = open_mpegts_remux_process(ffmpeg_path)
         assert self._process.stdin is not None and self._process.stdout is not None
@@ -45,7 +66,10 @@ class LiveMpegtsStream:
 
     def _feed(self, stdin: BinaryIO) -> None:
         try:
-            with closing(self._source.iter_media_packets()) as packets:
+            if self._closed.is_set():
+                return
+            deadline = time.monotonic() + self._startup_timeout
+            with closing(self._source.iter_media_packets(startup_deadline=deadline)) as packets:
                 for packet in packets:
                     if self._closed.is_set():
                         return
@@ -97,24 +121,41 @@ class LiveMpegtsStream:
         finally:
             self.__exit__(*sys.exc_info())
 
-    def close(self) -> None:
-        """Stop the subprocess and interrupt the selected transport."""
-        with self._close_lock:
-            if self._closed.is_set():
-                return
-            self._closed.set()
+    def _stop(self) -> None:
+        try:
             try:
                 _wait_for_process(self._process)
             finally:
-                try:
-                    self._source.close()
-                finally:
-                    self._writer.join(timeout=5)
-                    self._stdout.close()
-                    if self._stderr_thread is not None:
-                        self._stderr_thread.join(timeout=1)
-                    if self._process.stderr is not None:
-                        self._process.stderr.close()
+                self._source.close()
+        except Exception as error:
+            self._shutdown_error = error
+
+    def close(self) -> None:
+        """Interrupt reads and await shutdown, or raise with ownership retained."""
+        deadline = time.monotonic() + self._close_timeout
+        with self._close_lock:
+            self._closed.set()
+            if self._stopper is None:
+                self._stopper = Thread(target=self._stop, name="pyezvizapi-live-stop", daemon=True)
+                self._stopper.start()
+            stopper = self._stopper
+        for thread in (stopper, self._writer, self._stderr_thread):
+            if thread is not None:
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+                if thread.is_alive():
+                    raise LiveStreamShutdownTimeout(
+                        "Live MPEG-TS shutdown timed out; stream owner retained"
+                    )
+        self._stdout.close()
+        if self._process.stderr is not None:
+            self._process.stderr.close()
+        if (
+            self._shutdown_error is not None
+            or not self._source.capture_result["transport_closure_verified"]
+        ):
+            raise PyEzvizError(
+                "Live MPEG-TS transport cleanup could not be verified"
+            ) from self._shutdown_error
 
     def __enter__(self) -> LiveMpegtsStream:
         return self
@@ -134,9 +175,13 @@ def open_live_mpegts_stream(
     channel: int | None = None,
     ffmpeg_path: str = "ffmpeg",
     source: AutoClipSource | None = None,
+    close_timeout: float = 15.0,
 ) -> LiveMpegtsStream:
-    """Open clear MPEG-PS live media using the SDK's automatic source policy."""
+    """Open clear MPEG-PS live media using the selected transport policy."""
+    options = source if source is not None else AutoClipSource()
     return LiveMpegtsStream(
-        AutoMediaStream(client, serial, source or AutoClipSource(), channel=channel),
+        AutoMediaStream(client, serial, options, channel=channel),
         ffmpeg_path,
+        startup_timeout=options.timeout,
+        close_timeout=close_timeout,
     )

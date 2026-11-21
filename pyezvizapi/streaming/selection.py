@@ -13,6 +13,7 @@ from threading import Lock
 import time
 from typing import Any
 
+from pyezvizapi.cloud.deadline import request_deadline
 from pyezvizapi.exceptions import (
     EzvizLocalSdkDeadlineExpired,
     EzvizLocalSdkStreamClosed,
@@ -85,6 +86,8 @@ def select_stream_source(
     _discovery_keys: list[str] | None = None,
 ) -> SelectedClipSource:
     """Resolve one playback candidate, never fetching account data offline."""
+    if options.mode == "cloud":
+        return CloudClipSource(timeout=options.timeout, smscode=options.smscode)
     device = options.device
     if device is None and options.mode == "auto":
         response = client.get_device_infos(serial)
@@ -195,6 +198,12 @@ def fallback_stream_source(
     ):
         return CloudClipSource(timeout=options.timeout, smscode=options.smscode)
     return None
+
+
+def _connect_deadline(
+    monotonic: Callable[[], float], timeout: float, *deadlines: float | None
+) -> float:
+    return min([monotonic() + timeout, *(limit for limit in deadlines if limit is not None)])
 
 
 def _live_input_frame_limit(limits: CaptureLimits) -> int | None:
@@ -363,6 +372,7 @@ class AutoMediaStream:
         *,
         limits: CaptureLimits | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        startup_deadline: float | None = None,
     ) -> Generator[MediaPacket, None, None]:
         """Select once, report a local stop reason, and own iterator/transport cleanup."""
         if self._closed or self._started:
@@ -370,7 +380,9 @@ class AutoMediaStream:
         self._started = True
         with self._cleanup_scope(self._close_owner):
             try:
-                yield from self._iter_selected_packets(limits=limits, monotonic=monotonic)
+                yield from self._iter_selected_packets(
+                    limits=limits, monotonic=monotonic, startup_deadline=startup_deadline
+                )
             except GeneratorExit:
                 self._stop("consumer_closed")
                 raise
@@ -388,16 +400,18 @@ class AutoMediaStream:
         *,
         limits: CaptureLimits | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        startup_deadline: float | None = None,
     ) -> Iterator[MediaPacket]:
         """Select once and stream within one duration budget, including fallback."""
         selected_limits = limits or CaptureLimits()
-        source = select_stream_source(
-            self._client,
-            self._serial,
-            self._options,
-            channel=1 if self._channel is None else self._channel,
-            _discovery_keys=self._discovery_keys,
-        )
+        with request_deadline(startup_deadline, monotonic):
+            source = select_stream_source(
+                self._client,
+                self._serial,
+                self._options,
+                channel=1 if self._channel is None else self._channel,
+                _discovery_keys=self._discovery_keys,
+            )
         # Account discovery is separate; subsequent LAN/cloud startup and retries
         # share the requested capture duration rather than restarting its budget.
         deadline = (
@@ -454,9 +468,9 @@ class AutoMediaStream:
                             )
                         )
                     else:
-                        cloud_deadline = monotonic() + self._options.timeout
-                        if deadline is not None:
-                            cloud_deadline = min(cloud_deadline, deadline)
+                        cloud_deadline = _connect_deadline(
+                            monotonic, self._options.timeout, deadline, startup_deadline
+                        )
                         self._stream = open_cloud_stream(
                             self._client,
                             self._serial,
@@ -473,11 +487,12 @@ class AutoMediaStream:
                         adapter = vtm_media_packet_source(self._stream)
                     if self._closed:
                         return
-                    startup_deadline = monotonic() + self._options.timeout
-                    if deadline is not None:
-                        startup_deadline = min(startup_deadline, deadline)
                     if not isinstance(source, CloudClipSource) and not self._start_transport(
-                        read_first_media=False, deadline=startup_deadline, monotonic=monotonic
+                        read_first_media=False,
+                        deadline=_connect_deadline(
+                            monotonic, self._options.timeout, deadline, startup_deadline
+                        ),
+                        monotonic=monotonic,
                     ):
                         return
                     remaining = None if deadline is None else deadline - monotonic()

@@ -696,24 +696,41 @@ in the repository, and this does not measure physical screen/speaker latency.
 
 ## Live MPEG-TS for integrations
 
-`CameraStatus.supports_local_rtsp` indicates that the camera reports a valid
-local RTSP port, not that the port is reachable. The legacy
-`local_rtsp_port` field and its default are unchanged.
+`CameraStatus.reported_local_rtsp_port` is the cloud's `CONNECTION.localRtspPort`
+hint: a port from `1` to `65535`, `0` when the cloud explicitly reports zero,
+or `None` when the field is missing or invalid. Neither zero nor a positive
+port establishes whether RTSP is supported, enabled, or reachable. The legacy
+`local_rtsp_port` field and its `"554"` fallback are unchanged.
+
+Do not choose local RTSP versus cloud streaming solely from either field. Where
+available, a LAN service read reports whether RTSP is enabled on the device;
+successful local playback verifies that the configured stream is usable.
 
 With FFmpeg installed, an integration can use a synchronous reader:
 
 ```python
+from pyezvizapi.streaming.capture import AutoClipSource
 from pyezvizapi.streaming.live import open_live_mpegts_stream
 
-with open_live_mpegts_stream(client, serial) as stream:
+with open_live_mpegts_stream(client, serial, source=AutoClipSource(mode="cloud")) as stream:
     while chunk := stream.read(65536):
         write_to_viewer(chunk)
 ```
 
+Explicit cloud mode skips local SDK discovery. Omitting `source` retains
+automatic selection, which chooses EZVIZ SDK transports rather than RTSP.
+Only clear MPEG-PS is supported. Encrypted packets and local ECDH/RTP input
+raise `EzvizUnsupportedMediaError`. There is no transport switch once packets
+have been selected.
+
 Run blocking reads off the event loop. Call `close()` from another thread
-on disconnect or unload. The stream owns the selected transport and FFmpeg,
-not the account client. Source selection follows `AutoMediaStream`; only
-clear MPEG-PS is supported. Encrypted packets and local ECDH/RTP input raise
-`EzvizUnsupportedMediaError`. There is no transport switch once packets
-have been selected. Viewer authentication, HTTP and snapshot policy remain
-the integration's responsibility.
+on disconnect or unload. The stream owns the transport and FFmpeg, not the
+account client. The source timeout bounds discovery and connection startup;
+it is not an end-to-end first-frame deadline. A read returning empty bytes
+after cancellation does not prove cleanup. Await `close()`; if it raises
+`LiveStreamShutdownTimeout`, retain the stream and call `close()` again to
+await the same teardown. Closing the VTM connection is not a camera-side
+stop acknowledgement.
+
+Viewer authentication, admission, HTTP and snapshot policy remain the
+integration's responsibility.

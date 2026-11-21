@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any, cast
 
+import pytest
+
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.devices.camera import EzvizCamera
 from pyezvizapi.models import EzvizDeviceRecord
@@ -91,7 +93,7 @@ def test_camera_status_extracts_integration_facing_keys_without_refresh() -> Non
     assert status["offline_notify"] is True
     assert status["last_offline_time"] == "2026-04-26 10:00:00"
     assert status["local_rtsp_port"] == "554"
-    assert status["supports_local_rtsp"] is False
+    assert status["reported_local_rtsp_port"] == 0
     assert status["supported_channels"] == 2
     assert status["battery_level"] == 87
     assert status["PIR_Status"] == 1
@@ -108,6 +110,37 @@ def test_camera_status_extracts_integration_facing_keys_without_refresh() -> Non
     assert status["Alarm_AdvancedDetect"] == 4
     assert status["resouceid"] == "Video"
     assert status["CUSTOM_TOP_LEVEL"] == {"kept": True}
+
+
+@pytest.mark.parametrize(
+    ("connection", "reported_port", "legacy_port"),
+    [
+        ({}, None, "554"),
+        ({"localRtspPort": None}, None, "554"),
+        ({"localRtspPort": "0"}, 0, "554"),
+        ({"localRtspPort": 8554}, 8554, "8554"),
+        ({"localRtspPort": "00554"}, 554, "00554"),
+        ({"localRtspPort": "65535"}, 65535, "65535"),
+        ({"localRtspPort": 65536}, None, "65536"),
+        ({"localRtspPort": 554.0}, None, "554.0"),
+        ({"localRtspPort": True}, None, "True"),
+        ({"localRtspPort": "unknown"}, None, "unknown"),
+        ({"localRtspPort": "\uff15\uff15\uff14"}, None, "\uff15\uff15\uff14"),
+        ({"localRtspPort": "9" * 5000}, None, "9" * 5000),
+    ],
+)
+def test_camera_status_reports_only_the_cloud_rtsp_port_hint(
+    connection: dict[str, object], reported_port: int | None, legacy_port: str
+) -> None:
+    payload = _camera_payload()
+    payload["CONNECTION"] = connection
+    camera = EzvizCamera(cast(EzvizClient, object()), "CAM123", device_obj=payload)
+
+    status = camera.status(refresh=False)
+
+    assert status["reported_local_rtsp_port"] == reported_port
+    assert status["local_rtsp_port"] == legacy_port
+    assert status.get("CONNECTION") == connection
 
 
 def test_camera_status_uses_prefetched_alarm_without_network_refresh() -> None:

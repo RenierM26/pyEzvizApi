@@ -100,6 +100,25 @@ lacks every possible route: generic key/value and IoT methods exist, and an
 app action may live outside pagelist. Do not promote an unmapped row to a
 control without tracing the actual write payload, scope, and capability check.
 
+### SDK helpers for app settings
+
+Import `pyezvizapi.devices.settings` to use these helpers with an existing
+`EzvizClient`. They validate inputs and the fetched state needed for a write.
+Callers must apply the capability, product-profile, ownership, and device
+conditions documented below before offering a control. These helpers do not
+select another route on failure and a successful write is not read-back.
+
+- `set_recording_mode` takes a `RecordingMode` and a legacy channel number
+  (default 1). Use the existing switch 29 route for devices that only expose
+  binary recording. `set_recording_pre_roll`, `set_recording_pre_roll_fps`,
+  and `set_supplemental_event_recording` use an IoT local index (default `"1"`).
+- `set_indicator_daylight_mode` takes an `IndicatorDaylightMode` and writes
+  channel 1. `set_indicator_night_mode` writes the separate global property.
+- `set_iot_wdr_enabled` preserves the fetched level. `set_iot_wdr_level`
+  accepts integer levels from 0 to 100 while WDR is enabled (the Android
+  slider uses steps of 10). Both use the same video local index to read
+  and write.
+
 ### Follow-up trace: recording, indicator, speaker, and WDR
 
 The retained Android 7.4.1.0421 asset split contains the React Native
@@ -139,7 +158,7 @@ Two SDK transports already cover the traced cloud writes:
   work modes `2`/`7` respectively. An enabled advertised
   `Video/1/BatCustomSpecial/TimeLapseMode` also disables these choices.
   The fixture only reports numeric mode `0`; the other values come from
-  the app picker. There is no dedicated SDK recording-mode helper.
+  the app picker. Use the SDK's `set_recording_mode` helper for this route.
 - **`FEATURE_INFO.1.Video.RecordStorage.RecordMode`:** The revised SD-card
   screen reads/writes `Video/1/RecordStorage/RecordMode` via IoT. It matches
   the product profile's resource, index, domain, and property schema and
@@ -159,8 +178,7 @@ Two SDK transports already cover the traced cloud writes:
   and sends `{"value":{"recordMode":"event","eventRecordParams":{"suppleRecordEnabled":<bool>}}}`;
   it does not send the storage count. The Java player's separate
   `supportStreamStateChange` reads the current playback resource/local
-  index's schema for `preRolling`; it is not a write. SDK generic IoT
-  read/write exists; no dedicated helper implements either settings flow.
+  index's schema for `preRolling`; it is not a write. The SDK's pre-roll and supplemental event recording helpers implement these writes.
 - **Binary alternative:** When neither numeric-mode branch applies, the
   revised screen uses switch 29 with `88`: on is all-day, off is event
   recording. Its shared switch action sends
@@ -184,7 +202,7 @@ Two SDK transports already cover the traced cloud writes:
   picker requires `331 = 1`, mode not `-1`, and switch 3 on.
   It writes channel 1 via `set_device_key_value`, key `IndicatorLight`,
   value `{"enable":1,"mode":N}` (`0` daytime only, `1` always on).
-  No dedicated SDK mode setter; `switch_device_state_led` is the
+  Use `set_indicator_daylight_mode`; `switch_device_state_led` is the
   separate binary switch 3 control.
 - **`FEATURE_INFO.0.global.IndicatorLight.IndicatorLightCfg`:** In
   `lightSettingViewModel.js`, the ordinary status-light branch requires
@@ -196,8 +214,7 @@ Two SDK transports already cover the traced cloud writes:
   object's `enabled` and PUTs `{"value":{"enabled":<bool>,"mode":"nightMode"}}`.
   It sends `nightMode` even when disabling, not `lightKeepOn` as seen
   in the fixture. This is a device-global IoT write, not the channel-1
-  daylight key or the separate doorbell/intercom light control. The SDK
-  has the generic IoT reader/writer but no dedicated night-mode helper.
+  daylight key or the separate doorbell/intercom light control. Use `set_indicator_night_mode` for this route.
 
 #### Speaker configuration
 
@@ -229,9 +246,7 @@ No dedicated or verified generic setter for `SpeakerConfig` itself was found.
   the toggle sends both fields, preserving the level and changing
   `hdrSwitchEnabled` to `open` or `close`. The level slider is visible
   only when on (0–100, step 10); the PUT sends
-  `{"value":{"hdrSwitchEnabled":"open","WDRLevel1":<level>}}`. The SDK
-  has the scoped generic IoT reader/writer, but no dedicated IoT WDR
-  helper or level setter.
+  `{"value":{"hdrSwitchEnabled":"open","WDRLevel1":<level>}}`. The SDK provides `set_iot_wdr_enabled` and `set_iot_wdr_level`.
 - **Binary alternative:** With `273` but no matching function point,
   the same app screen reads switch 604 and calls its v3 switch action
   at channel 0 (the graphics view is owner-only for this row). A connected

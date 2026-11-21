@@ -731,7 +731,8 @@ selection does not change once media has started.
 
 Run blocking reads off the event loop. Call `close()` from another thread
 on disconnect or unload. The stream owns the transport and FFmpeg, not the
-account client. The source timeout bounds discovery and connection startup;
+account client. The source timeout bounds discovery, connection startup, and
+the wait for the first cloud media packet;
 it is not an end-to-end first-frame deadline. A read returning empty bytes
 after cancellation does not prove cleanup. Await `close()`; if it raises
 `LiveStreamShutdownTimeout`, retain the stream and call `close()` again to

@@ -28,6 +28,7 @@ from pyezvizapi.streaming.capture import (
     LocalSdkEcdhClipSource,
 )
 from pyezvizapi.streaming.cloud.bootstrap import open_cloud_stream
+from pyezvizapi.streaming.cloud.protocol import VtmStreamClient
 from pyezvizapi.streaming.cloud.transport import vtm_media_packet_source
 from pyezvizapi.streaming.discovery import LocalStreamDiscovery
 from pyezvizapi.streaming.local.ecdh import (
@@ -484,7 +485,20 @@ class AutoMediaStream:
                             return
                         if not self._start_transport(deadline=cloud_deadline, monotonic=monotonic):
                             return
-                        adapter = vtm_media_packet_source(self._stream)
+                        if isinstance(self._stream, VtmStreamClient):
+                            reply = self._stream.stream_info
+                            if reply is not None and reply.result not in (None, 0):
+                                raise EzvizNoMediaError(
+                                    f"VTM stream negotiation rejected (result {reply.result})"
+                                )
+                            adapter = replace(
+                                vtm_media_packet_source(self._stream),
+                                first_packet_deadline=cloud_deadline
+                                if startup_deadline is not None
+                                else None,
+                            )
+                        else:
+                            adapter = vtm_media_packet_source(self._stream)
                     if self._closed:
                         return
                     if not isinstance(source, CloudClipSource) and not self._start_transport(

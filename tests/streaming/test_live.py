@@ -17,10 +17,10 @@ from unittest.mock import Mock
 from Crypto.Cipher import AES
 import pytest
 
-from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
+from pyezvizapi.exceptions import EzvizNoMediaError, EzvizUnsupportedMediaError, PyEzvizError
 from pyezvizapi.streaming import live, selection
 from pyezvizapi.streaming.capture import AutoClipSource
-from pyezvizapi.streaming.cloud.protocol import VtmStreamClient
+from pyezvizapi.streaming.cloud.protocol import StreamInfoResponse, VtmStreamClient
 from pyezvizapi.streaming.media.models import MediaPacket, MediaPacketMetadata
 from pyezvizapi.streaming.media.rtp_timing import _pack_header
 from tests.streaming.media.test_ps_stream_isolation import pes
@@ -341,3 +341,29 @@ def test_real_ffmpeg_remux_preserves_video_and_audio() -> None:
     assert {
         entry["codec_type"]: entry["codec_name"] for entry in json.loads(probe.stdout)["streams"]
     } == {"video": "mpeg2video", "audio": "mp2"}
+
+
+@pytest.mark.parametrize("result", [0, 5405])
+def test_vtm_first_media_wait_and_rejection(monkeypatch: pytest.MonkeyPatch, result: int) -> None:
+    transport = VtmStreamClient("ysproto://127.0.0.1:8554/live")
+    iterator = Mock(return_value=iter(()))
+
+    def start(**_kwargs: Any) -> None:
+        transport.stream_info = StreamInfoResponse(result=result)
+
+    monkeypatch.setattr(transport, "start", start)
+    monkeypatch.setattr(transport, "iter_packets", iterator)
+    monkeypatch.setattr(selection, "open_cloud_stream", lambda *_args, **_kwargs: transport)
+    expected = "result 5405" if result else "did not contain media"
+    with (
+        live.open_live_mpegts_stream(
+            Mock(), "CAMERA", source=AutoClipSource(mode="cloud")
+        ) as stream,
+        pytest.raises(EzvizNoMediaError, match=expected),
+    ):
+        stream.read()
+    if result:
+        iterator.assert_not_called()
+    else:
+        assert 0 < iterator.call_args.kwargs["first_packet_deadline"] - time.monotonic() <= 10
+    assert not stream._writer.is_alive()

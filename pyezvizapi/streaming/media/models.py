@@ -359,6 +359,7 @@ class DeadlineLegacyPacketSource[PacketT](Protocol):
         max_packets: int | None = None,
         duration_seconds: float | None = None,
         duration_from_start: bool = False,
+        first_packet_deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[PacketT]:
         """Yield transport packets using an optional wall-clock duration."""
@@ -374,6 +375,7 @@ class MediaPacketSourceAdapter[PacketT]:
     converter: Callable[[PacketT], MediaPacket]
     duration_from_start: bool = False
     prepare: Callable[[], object] | None = None
+    first_packet_deadline: float | None = None
 
     def iter_media_packets(
         self,
@@ -401,6 +403,11 @@ class MediaPacketSourceAdapter[PacketT]:
                 duration_seconds=selected_limits.duration_seconds,
                 duration_from_start=True,
                 monotonic=monotonic,
+                **(
+                    {"first_packet_deadline": self.first_packet_deadline}
+                    if self.first_packet_deadline is not None
+                    else {}
+                ),
             )
         else:
             packets = self.source.iter_packets(

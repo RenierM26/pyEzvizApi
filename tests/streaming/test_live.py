@@ -49,7 +49,7 @@ def test_reads_and_closes(monkeypatch: pytest.MonkeyPatch) -> None:
     _process(monkeypatch, "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())")
     source = _source()
     source.iter_media_packets.return_value = _packets(
-        [MediaPacket(b"abc", MediaPacketMetadata(source="cloud_vtm"))]
+        [MediaPacket(b"abc", MediaPacketMetadata(source="local_sdk"))]
     )
     with live.LiveMpegtsStream(source, "ffmpeg") as stream:
         assert stream.read(2) == b"ab"
@@ -64,7 +64,7 @@ def test_reads_short_ffmpeg_output_before_source_ends(monkeypatch: pytest.Monkey
     source.close.side_effect = stopped.set
 
     def packets(**_kwargs: Any) -> Generator[MediaPacket, None, None]:
-        yield MediaPacket(b"abc", MediaPacketMetadata(source="cloud_vtm"))
+        yield MediaPacket(b"abc", MediaPacketMetadata(source="local_sdk"))
         assert stopped.wait(5)
 
     source.iter_media_packets.side_effect = packets
@@ -173,7 +173,10 @@ def test_rtp_output_can_be_read_and_cancelled(monkeypatch: pytest.MonkeyPatch) -
     source.close.side_effect = release.set
     body = bytes.fromhex("806000010000000155667788") + b"payload"
     source.iter_media_packets.return_value = _packets(
-        [MediaPacket(body, MediaPacketMetadata(source="cloud_vtm"))]
+        [
+            MediaPacket(b"nonmedia prelude", MediaPacketMetadata(source="cloud_vtm")),
+            MediaPacket(body, MediaPacketMetadata(source="cloud_vtm")),
+        ]
     )
 
     def copy_rtp(packets: Iterable[Any], output: Any, **kwargs: Any) -> None:
@@ -201,7 +204,7 @@ def test_input_without_mpegts_output_times_out_and_closes(
     source.close.side_effect = stopped.set
 
     def packets(**_kwargs: Any) -> Generator[MediaPacket, None, None]:
-        yield MediaPacket(b"not a complete frame", MediaPacketMetadata(source="cloud_vtm"))
+        yield MediaPacket(b"not a complete frame", MediaPacketMetadata(source="local_sdk"))
         received_input.set()
         assert stopped.wait(5)
 
@@ -232,7 +235,7 @@ def test_ffmpeg_stderr_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     _process(monkeypatch, "import sys; sys.stderr.write('bad media'); sys.exit(2)")
     source = _source()
     source.iter_media_packets.return_value = _packets(
-        [MediaPacket(b"bad input", MediaPacketMetadata(source="cloud_vtm"))]
+        [MediaPacket(b"bad input", MediaPacketMetadata(source="local_sdk"))]
     )
     with (
         live.LiveMpegtsStream(source, "ffmpeg") as stream,
@@ -352,7 +355,7 @@ def test_close_releases_backpressure_from_a_full_child_pipe(
 
     def packets(**_kwargs: Any) -> Generator[MediaPacket, None, None]:
         entered.set()
-        yield MediaPacket(b"x" * (8 * 1024 * 1024), MediaPacketMetadata(source="cloud_vtm"))
+        yield MediaPacket(b"x" * (8 * 1024 * 1024), MediaPacketMetadata(source="local_sdk"))
 
     source = _source()
     source.iter_media_packets.side_effect = packets

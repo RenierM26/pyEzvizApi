@@ -19,7 +19,12 @@ from pyezvizapi.streaming.cloud.bootstrap import (
     _decrypt_cloud_rtp_nal_unit,
     _parse_cloud_rtp_packet,
 )
-from pyezvizapi.streaming.cloud.protocol import VtmChannel, VtmPacket
+from pyezvizapi.streaming.cloud.protocol import (
+    StreamTransport,
+    VtmChannel,
+    VtmPacket,
+    detect_transport,
+)
 from pyezvizapi.streaming.media.models import MediaPacket, is_positive_finite_duration_bound
 from pyezvizapi.streaming.media.native_ps import LegacyPsVideoTransform, NativePsTransform
 from pyezvizapi.streaming.media.remux import copy_remuxed_output, open_mpegts_remux_process
@@ -110,8 +115,19 @@ class LiveMpegtsStream:
                 closing(self._source.iter_media_packets(startup_deadline=deadline)) as packets,
             ):
                 checked = self._checked_packets(packets)
-                first = next(checked, None)
-                if first is None:
+                for first in checked:
+                    if first.metadata.source != "cloud_vtm":
+                        break
+                    if time.monotonic() >= deadline:
+                        raise EzvizNoMediaError(
+                            "Cloud stream supplied no media before startup deadline"
+                        )
+                    if (
+                        detect_transport(first.body) is StreamTransport.MPEG_PS
+                        or _parse_cloud_rtp_packet(first.body) is not None
+                    ):
+                        break
+                else:
                     return
                 payloads = chain((first,), checked)
                 if (
@@ -131,7 +147,7 @@ class LiveMpegtsStream:
                     )
         except (BrokenPipeError, ConnectionResetError):
             # The viewer can close the output while the writer is still draining.
-            pass
+            return
         except Exception as error:
             self._error = error
         finally:

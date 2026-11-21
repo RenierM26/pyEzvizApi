@@ -1482,9 +1482,8 @@ def _whole_header_nal_start(payload: bytes, aes_key: bytes) -> bool:
     block = payload[start : start + AES.block_size]
     if len(block) != AES.block_size:
         return False
-    header = _hikvision_aes_ecb_cipher(aes_key).decrypt(
-        block
-    )  # codeql[py/weak-cryptographic-algorithm]
+    cipher = _hikvision_aes_ecb_cipher(aes_key)  # codeql[py/weak-cryptographic-algorithm]
+    header = cipher.decrypt(block)  # codeql[py/weak-cryptographic-algorithm]
     return _is_plausible_hevc_header_bytes(header[:2]) or (
         not header[0] & 0x80 and 1 <= header[0] & 0x1F <= 23
     )

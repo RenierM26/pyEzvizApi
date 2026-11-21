@@ -296,6 +296,21 @@ No dedicated or verified generic setter for `SpeakerConfig` itself was found.
   only when on (0–100, step 10); the PUT sends
   `{"value":{"hdrSwitchEnabled":"open","WDRLevel1":<level>}}`. The SDK provides
   `set_iot_wdr_enabled` and `set_iot_wdr_level`.
+  In both the retained Android 7.4.1.0421 and 7.6.1.0824 bundles,
+  `graphicSettingDynamicVM.js` passes literal index `1` and resource
+  `Video` to `getFeatureProp`.
+  The action builds the same serial/resource/index/property URL as the SDK;
+  a non-200 app code results in a failed load rather than retrying another
+  lens or switching transports. The screen gates on the product profile,
+  not just the presence of a pagelist value. This trace does not show a
+  second-lens cloud selector.
+
+  Live cloud reads on one H80x supported WDR enable and level changes with
+  fresh read-back and verified restoration. On one H9c, both reported video
+  resources rejected direct WDR GETs with API code 400. Do not use pagelist
+  values, switch 604, or the first lens as a substitute for that read. For a
+  locally reachable camera with a supported image-parameter layout, see
+  [the LAN WDR command](cli.md#lan-wdr) for its separate binary setting.
 - **Binary alternative:** With `273` but no matching function point,
   the same app screen reads switch 604 and calls its v3 switch action
   at channel 0 (the graphics view is owner-only for this row). A connected
@@ -362,13 +377,48 @@ and the [pagelist fixture](../tests/fixtures/page_list_response.json).
   type and task ID. These declarations do not establish which path the
   consumer app uses to edit an existing schedule, or whether a property
   write would replace existing blocks. No writer is provided here.
-- Android's standard ringtone picker hands off to
-  `pushCustomSoundBellSetting` and consumes `voiceName`, `voiceId`,
-  and `voiceInfos` from the callback. The retained UI bundle does not
-  show the native listing request. The SDK already has
-  `get_voice_info` for uploaded device voice prompts, but the trace
-  does not establish that its results are valid ringtone selections.
+- The retained 7.4.1.0421 `RevisionSetting` bundle does not reference
+  `TimingRecord` or the three task names. The SD-card
+  `recordModeView.js` changes the recording mode, not a weekly schedule;
+  its work-mode schedule warning does not identify a recording editor.
+  The bundle's `showCyclePlan` applies to sockets. The native
+  `DeviceSettingPresenter.getAbsenceReminder` uses
+  `GET /v3/devconfig/v2/plan` with `NOONE_ALARM_PLAN`, not a camera
+  recording schedule. In 7.6.1.0824, the packaged settings bundles still
+  do not reference the property or the task names. The native `RecordPlan`
+  hit in `NetdiscApi` is the CloudSpace query
+  `GET /v3/clouds/cloudspace/recordPlanDevice`, not a device settings write.
+  EZVIZ's [24/7 recording instructions][ezviz-all-day-recording] describe a
+  working mode or an All Day memory-card switch, not a weekly editor.
+  None of these establishes how to edit the on-device weekly schedule.
+- Both `soundSelect.js` and `sd7SoundSelect.js` pass the serial, current
+  custom index and optional serialized voice list to
+  `EzvizRNBridge.pushCustomSoundBellSetting`. They consume
+  `voiceName`, `voiceId` and serialized `voiceInfos` in its callback.
+  A selected voice becomes `Type = 10` and `CustomRingIndex = voiceId`
+  when the user saves. Both Android versions gate the standard picker’s
+  custom row on capability `486`; it is distinct from the SD7 audition
+  gate. The newer settings asset split contains the same handoff, but
+  its bridge method is not present by that name in the shipped Android
+  DEX files examined. The picker’s listing and upload requests remain
+  unverified.
+- The retained Java `NewRemindVoiceActivity` instead loads device
+  reminder voices through `VoiceInfoRepository`; its unshared branch
+  reaches `DeviceApi.getVoiceInfo`
+  (`GET /v3/specialBizs/voices?deviceSerial=...`), with a separate
+  shared-device call. This verifies the context of the SDK’s
+  `get_voice_info`, not that its results are valid doorbell ring IDs.
+- The app does show two distinct preview paths: the standard DP2 picker
+  calls native `playDeviceBellFile`, which plays one of five bundled AAC
+  assets on the phone without a device request. The SD7 picker instead
+  gates its preview on capability `655` and calls
+  `auditionReq` with the row’s `auditionIndex` (fallback `21`) and
+  ten times the picker volume. This uses the common devconfig
+  `request=audition` operation. The row index is not a custom voice ID;
+  neither path establishes how to audition an uploaded doorbell tone.
   Use only a voice ID independently verified for that doorbell.
+
+[ezviz-all-day-recording]: https://support.ezviz.com/faq/article/How-to-set-camera-to-24-7-recording-on-the-EZVIZ-APP
 
 ### Fixture coverage: feature domains
 

@@ -40,6 +40,8 @@ import requests
 
 from pyezvizapi.cloud import responses as _api_response
 from pyezvizapi.devices import factory as device_factory
+from pyezvizapi.devices.observation import power_state
+from pyezvizapi.devices.payload import switch_rows
 from pyezvizapi.devices.snapshot import DevicePollOptions, DeviceSnapshot
 from pyezvizapi.cloud.operations import snapshot as _snapshot_ops
 from pyezvizapi.cloud.auth_http import auth_http_response
@@ -3652,6 +3654,20 @@ class EzvizClient:
         return _settings.switch_light_status(
             self, serial, enable, channel_no, max_retries, _owner=_sys.modules[__name__]
         )
+
+    def get_warning_light_state(self, serial: str, *, channel_no: int = 0) -> bool | None:
+        """Read the camera warning-light switch from a fresh device inventory.
+
+        Return None when the selected channel has no usable state. Legacy
+        unscoped rows apply only to the device-level channel (0).
+        """
+        if type(channel_no) is not int or channel_no < 0:
+            raise PyEzvizError("Warning light channel must be a nonnegative integer")
+        rows = self.get_device_infos(serial).get("SWITCH")
+        row = switch_rows(rows, channel_no=channel_no).get(DeviceSwitchType.ALARM_LIGHT.value)
+        if row is None or (channel_no != 0 and "channelNo" not in row):
+            return None
+        return power_state(row.get("enable"))
 
     def detection_sensibility(
         self, serial: str, sensibility: int = 3, type_value: int = 3, max_retries: int = 0

@@ -11,6 +11,23 @@ switch 303 is an alarm light, but capability key 303 is backlight support.
 A missing switch entry is not an observed off state. A capability alone does
 not establish a writable switch, a per-lens route, or current availability.
 
+## Warning light (switch 303)
+
+On a camera known to support direct warning-light control, use
+`client.switch_light_status(serial, 1, channel_no=channel_no)` to turn it on
+and pass `0` to turn it off. This helper uses `DeviceSwitchType.ALARM_LIGHT`
+on cameras; it is not the siren control or the motion-triggered flicker
+setting. The [H8c report](https://github.com/RenierM26/pyEzvizApi/issues/451)
+confirms the switch for that camera. Other models may list the row without
+supporting the same behavior.
+
+For fresh read-back, call
+`client.get_warning_light_state(serial, channel_no=channel_no)`. It reads
+switch 303 from a fresh cloud inventory for that channel, returning `True`,
+`False`, or `None` when the state is unknown. Old rows without a channel
+apply only to channel 0. The write's return value is not read-back, and the
+flat `load_cameras()` switch mapping can collapse rows across channels.
+
 ## Android switch IDs
 
 The write column records a known caller, not a live hardware guarantee.

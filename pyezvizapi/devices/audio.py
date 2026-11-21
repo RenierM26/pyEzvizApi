@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 import math
 from typing import TYPE_CHECKING, Any
 
@@ -160,4 +161,27 @@ def set_microphone_volume(
         resolve_channel(camera_data),
         "CustomVoice_Volume",
         payload,
+    )
+
+
+def set_doorbell_ringtone_volume(
+    client: EzvizClient, serial: str, value: int, camera_data: dict[str, Any]
+) -> None:
+    """Set standard ringtone-picker volume; callers must verify model/UI eligibility."""
+    if type(value) is not int or not 0 <= value <= 7:
+        raise PyEzvizError("Doorbell ringtone volume must be an integer from 0 to 7")
+    support = SupportExtView.from_camera_data(camera_data)
+    config = volume_config(camera_data, "device_bell")
+    if (
+        not support.has("241", ("1", "2"))
+        or config is None
+        or any(
+            type(config.get(key)) is not int or config[key] < 0
+            for key in ("Type", "Volume", "CustomRingIndex")
+        )
+    ):
+        raise PyEzvizError("Doorbell does not report a usable ringtone configuration")
+    config["Volume"] = value
+    client.set_device_key_value(
+        serial, resolve_channel(camera_data), "device_bell", json.dumps(config)
     )

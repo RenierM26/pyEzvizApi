@@ -242,6 +242,19 @@ write payload, write scope, or feature gate was identified in the
 retained Java and bundled React Native settings. Do not treat `-1` as
 off or use the generic key/value route on this basis.
 
+The separate `device_bell` ringtone picker requires capability `241`
+and, on DB2C, the app's doorbell-online check. The standard picker offers
+tones 1–3, 4–5 when `241 = 2`, and custom tone 10 with capability `486`.
+SD7 has a distinct picker. Capability `649` instead gates an on/off
+shortcut that writes volume 0 or 4; that shortcut does not establish
+support for the full slider.
+
+Use `pyezvizapi.devices.audio.set_doorbell_ringtone_volume` for the
+standard picker’s integer range (0–7). Verify model and online eligibility
+before calling it and supply a fresh device record. The helper preserves
+the reported tone and custom slot and uses the query-based key/value
+route. It does not change tone selection or verify device read-back.
+
 Existing controls are for different settings. The app's
 `soundSelect.js` reads/writes `device_bell` with `Type`, `Volume`,
 and `CustomRingIndex`, not `SpeakerConfig.RingIndex`. The SDK's cloud

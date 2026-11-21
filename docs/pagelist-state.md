@@ -63,13 +63,32 @@ does not authorize a generic key/value write.
 | `STATUS.optionals.ChimeMusic` | Device helpers `set_alarm_volume`, `set_intercom_chime` | Alarm volume helper checks DeviceRing `185` and a valid reported value; intercom helper checks device category and reported field. |
 | `STATUS.optionals.CustomVoice_Volume` | Device audio helpers `set_alarm_voice_volume`, `set_microphone_volume` | Alarm voice volume uses ChangeVolume `203 = 1`; mic gain requires a valid reported field (HA also gates on AudioOnoff `63`). They are not chime volume. |
 | `FEATURE_INFO.…Video.SupplementLightMgr.ImageSupplementLightModeSwitchParams` | `set_intelligent_fill_light` | HA: `688` with the reported property. Not IR switch 10 or a verified port-8000 route. |
-| `FEATURE_INFO.…Video.LensCleaning.DefogCfg` | `set_lens_defog_mode` | HA checks the reported configuration with `688` and its supported variants. |
+| `FEATURE_INFO.…Video.LensCleaning.DefogCfg` | `set_lens_defog_mode` | HA requires token `6` in capability `688` and a nonempty reported defog mode. See the route details below. |
 | `FEATURE_INFO.…Video.VideoAdjustment.ImageFlip` | `set_image_flip_iot` | Android checks the feature definition and resource. Not equivalent to native mirror-mode numbers. |
 | `FEATURE_INFO.…NetworkSecurityProtection.PortSecurity` | `set_port_security` | Gate on the specific reported client mode or port, not merely on the parent domain. |
 | `FEATURE_INFO.…DoorLock.LightCtrl.NightLightCfg` | Intercom helper `set_label_light` | Requires an intercom and usable observed property or validated legacy fallback; the two routes are not interchangeable. |
 | `FEATURE_INFO.…IntelligentAPP.DownloadedAPP` | `set_intelligent_app_state` | Match a reported app identity and its supported action; an installed-app list is not proof every app can be toggled. |
 | `FEATURE_INFO.…Video.PTZMasterSlaveTrace.LinkedTrackingAdvancedCfg` | Companion `set_linked_tracking_takeover` via the SDK IoT route | HA: `715` and eligible routing. Not the generic tracking switch or native linked-lens calibration. |
 | `deviceInfos.name`, firmware upgrade state | `update_device_name`, `upgrade_device` | Metadata and update actions, not toggles. The update action is not a way to set reported progress/version fields. |
+
+## Maintenance actions and lens controls
+
+Pagelist can report a capability or progress without providing a setting to
+write back. Treat reboot, upgrade, and format as actions, not switches.
+
+| Action | State and gate | SDK route and limits |
+| --- | --- | --- |
+| Reboot | Android's player exposes reboot support when `452 = 1`. The settings action blocks when sleep switch 21 is on and asks for confirmation. | `reboot_camera` uses the cloud device-operation route. Its defaults (`oper=1`, `delay=1`) match the traced settings action. Success means the request was accepted, not that the device has returned online. The firmware's advertised `SystemMaintenance.SystemReboot` action does not establish a LAN route or a per-lens reboot. |
+| Lens defogging | `FEATURE_INFO` reports `LensCleaning.DefogCfg` on a video resource. HA requires `688` containing token `6` and a nonempty reported `defogMode`. | `set_lens_defog_mode` sends a cloud IoT feature update to resource `Video`, with a supplied local index. Auto sends `enabled=true, defogMode=auto`; on sends `true, open`; off sends `false, auto`. The helper used by HA uses the client's default index rather than deriving it from the record. Neither the response tuple nor the helper's cache update establishes fresh device read-back. No equivalent LAN setter was verified. |
+| Firmware upgrade | `UPGRADE.isNeedUpgrade` reports availability; `STATUS.upgradeStatus` and `upgradeProcess` report progress. Capability `10` is named Upgrade; its presence alone is not an update offer or a verified app visibility rule. | `upgrade_device` initiates the cloud upgrade on the device-level `/0/upgrade` route. Use fresh firmware status to observe progression and completion. The account auto-upgrade preference (`get_autoupgrade_switch` / `set_autoupgrade_switch`) is separate. |
+| Disk status and format | Pagelist reports `diskNum`, `diskState`, `diskStatus`, and optionals such as `diskCapacity` and `diskHealth`. Capability `4` is named Disk, not a sufficient format gate. | `get_storage_status` reads cloud storage status; `hd_config` reads native LAN disk configuration. Android's LAN module starts formatting with `NET_DVR_FormatDisk` and checks progress by handle. The SDK models start, progress, and close requests; these are not a high-level LAN format executor. The advertised IoT `HDD.FormatHDD` is a separate action, not a write to disk status. |
+
+Trace sources: Android `PlayDataInfo.supportReboot`,
+`DeviceSettingActivity.onClickRebootDeviceView` / `rebootDevice`, and
+`EZRNLanDevModule` disk formatting; SDK [cloud controls](../pyezvizapi/cloud/operations/controls.py),
+[firmware status](../pyezvizapi/devices/firmware.py),
+[lens helpers](../pyezvizapi/devices/lens.py), and
+[native configuration](../pyezvizapi/streaming/local/hcnetsdk/api.py).
 
 ## Evidence and gaps
 

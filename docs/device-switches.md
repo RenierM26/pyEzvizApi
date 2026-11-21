@@ -72,7 +72,7 @@ relationship was established in this trace; it does not mean unsupported.
 
 | ID | SDK name | Evidence | Write route |
 | ---: | --- | --- | --- |
-| 604 | WIDE_DYNAMIC_RANGE | HA: `273` WideDynamicRange. Not in the traced Android enum. | HA via SDK switch. |
+| 604 | WIDE_DYNAMIC_RANGE | App: owned device with `273` and no matching IoT WDR function point; connected HomeKit blocks the switch action. The React Native bundle uses 604 even though it is absent from the traced Java enum. HA: `273` plus switch-row presence. | App and HA via the cloud switch route. See [WDR routes](pagelist-state.md#wdr-iot-level-cloud-switch-and-lan-byte). |
 | 617 | DISTORTION_CORRECTION | HA: `490` DistortionCorrection. Not in the traced Android enum. | HA via SDK switch. |
 | 702 | LOGO_WATERMARK | HA: switch-entry presence. SDK lists capability `632` LogoWatermark separately; Android switch gate unverified. | HA via SDK switch. |
 

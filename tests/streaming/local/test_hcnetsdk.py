@@ -8817,7 +8817,7 @@ def test_set_camera_wdr_preserves_configuration(monkeypatch, result):
     raw[52] = 1
     after = ezviz_lan_camera_param_config(raw)
     reads = iter([before, before if result == "mismatch" else after])
-    writes = []
+    writes: list[HcNetSdkCommandPortControlTemplate] = []
     monkeypatch.setattr(client, "camera_param_config", lambda: next(reads))
     monkeypatch.setattr(client, "execute_template", writes.append)
     if result in ("unsupported", "mismatch"):
@@ -8852,7 +8852,7 @@ def test_set_camera_imaging_field(monkeypatch, method, args, offset):
     raw[offset] = args[-1]
     after = ezviz_lan_camera_param_config(raw)
     reads = iter([before, after])
-    writes = []
+    writes: list[HcNetSdkCommandPortControlTemplate] = []
     monkeypatch.setattr(client, "camera_param_config", lambda: next(reads))
     monkeypatch.setattr(client, "execute_template", writes.append)
     assert getattr(client, method)(*args) == after
@@ -8876,7 +8876,7 @@ def test_lan_audio_volume_write(monkeypatch, setter, getter, parser, command, si
     payload[offset] = 75
     after = parser(payload)
     reads = iter([before, after, after])
-    writes = []
+    writes: list[HcNetSdkCommandPortControlTemplate] = []
     monkeypatch.setattr(client, getter, lambda: next(reads))
     monkeypatch.setattr(client, "execute_template", writes.append)
     update = getattr(client, setter)
@@ -8898,7 +8898,7 @@ def test_legacy_osd_visibility_round_trip(monkeypatch):
     payload[0x78F] = 1
     after = ezviz_lan_picture_config(payload)
     reads = iter([before, before, after, after])
-    writes = []
+    writes: list[HcNetSdkCommandPortControlTemplate] = []
     monkeypatch.setattr(client, "picture_config_v30", lambda: next(reads))
     monkeypatch.setattr(client, "execute_template", writes.append)
     assert not client.osd_visible()

@@ -12,7 +12,7 @@ from threading import Event, Lock, Thread
 import time
 from typing import TYPE_CHECKING, BinaryIO
 
-from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
+from pyezvizapi.exceptions import EzvizNoMediaError, EzvizUnsupportedMediaError, PyEzvizError
 from pyezvizapi.streaming.capture import AutoClipSource
 from pyezvizapi.streaming.cloud.bootstrap import (
     _copy_cloud_rtp_packets_to_mpegts,
@@ -63,7 +63,8 @@ class LiveMpegtsStream:
         self._ffmpeg_path = ffmpeg_path
         self._closed = Event()
         self._close_lock = Lock()
-        self._startup_timeout = startup_timeout
+        self._startup_deadline = time.monotonic() + startup_timeout
+        self._started_output = False
         self._close_timeout = close_timeout
         self._stopper: Thread | None = None
         self._shutdown_error: Exception | None = None
@@ -101,7 +102,7 @@ class LiveMpegtsStream:
         try:
             if self._closed.is_set():
                 return
-            deadline = time.monotonic() + self._startup_timeout
+            deadline = self._startup_deadline
             with (
                 self._sender.makefile("wb") as output,
                 closing(self._source.iter_media_packets(startup_deadline=deadline)) as packets,
@@ -170,6 +171,20 @@ class LiveMpegtsStream:
             on_process=self._set_process,
         )
 
+    def _recv(self, size: int) -> bytes:
+        if self._started_output:
+            return self._reader.recv(size)
+        remaining = self._startup_deadline - time.monotonic()
+        self._reader.settimeout(max(0.0, remaining))
+        try:
+            chunk = self._reader.recv(size)
+        except BlockingIOError as error:
+            raise TimeoutError from error
+        if chunk:
+            self._reader.settimeout(None)
+            self._started_output = True
+        return chunk
+
     def read(self, size: int = 65536) -> bytes:
         """Read up to size bytes; return empty bytes on EOF or cancellation."""
         if size <= 0:
@@ -177,7 +192,14 @@ class LiveMpegtsStream:
         if self._closed.is_set():
             return b""
         try:
-            chunk = self._reader.recv(size)
+            chunk = self._recv(size)
+        except TimeoutError as timeout:
+            if self._closed.is_set():
+                return b""
+            self.close()
+            raise EzvizNoMediaError(
+                "Live stream produced no MPEG-TS output before startup deadline"
+            ) from timeout
         except OSError:
             if self._closed.is_set():
                 return b""

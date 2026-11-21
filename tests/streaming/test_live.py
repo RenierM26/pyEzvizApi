@@ -134,6 +134,29 @@ def test_rtp_output_can_be_read_and_cancelled(monkeypatch: pytest.MonkeyPatch) -
         assert not stream._writer.is_alive()
 
 
+def test_input_without_mpegts_output_times_out_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received_input = Event()
+    stopped = Event()
+    source = _source()
+    source.close.side_effect = stopped.set
+
+    def packets(**_kwargs: Any) -> Generator[MediaPacket, None, None]:
+        yield MediaPacket(b"not a complete frame", MediaPacketMetadata(source="cloud_vtm"))
+        received_input.set()
+        assert stopped.wait(5)
+
+    source.iter_media_packets.side_effect = packets
+    _process(monkeypatch, "import sys; sys.stdin.buffer.read()")
+    with live.LiveMpegtsStream(source, "ffmpeg", startup_timeout=0.3) as stream:
+        with pytest.raises(EzvizNoMediaError, match="no MPEG-TS output"):
+            stream.read()
+        assert received_input.is_set()
+        assert stopped.is_set()
+        assert not stream._writer.is_alive()
+
+
 def test_encrypted_input_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     _process(monkeypatch, "import sys; sys.stdin.buffer.read()")
     source = _source()

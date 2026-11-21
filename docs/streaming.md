@@ -732,8 +732,10 @@ selection does not change once media has started.
 Run blocking reads off the event loop. Call `close()` from another thread
 on disconnect or unload. The stream owns the transport and FFmpeg, not the
 account client. The source timeout bounds discovery, connection startup, and
-the wait for the first cloud media packet;
-it is not an end-to-end first-frame deadline. A read returning empty bytes
+the first cloud media packet and first MPEG-TS output. If input arrives but
+produces no output by that deadline, the first read closes the stream and
+raises `EzvizNoMediaError` after cleanup. This does not guarantee that a viewer
+has decoded a frame. A read returning empty bytes
 after cancellation does not prove cleanup. Await `close()`; if it raises
 `LiveStreamShutdownTimeout`, retain the stream and call `close()` again to
 await the same teardown. Closing the VTM connection is not a camera-side

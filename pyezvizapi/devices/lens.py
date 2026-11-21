@@ -31,9 +31,7 @@ def _scoped_defog_config(
     return config if _usable_defog_config(config) else None
 
 
-def has_lens_defog(
-    camera_data: dict[str, Any], *, channel: CameraChannel | None = None
-) -> bool:
+def has_lens_defog(camera_data: dict[str, Any], *, channel: CameraChannel | None = None) -> bool:
     """Check for usable defog state; an explicit channel must have a supported route."""
 
     if channel is not None:

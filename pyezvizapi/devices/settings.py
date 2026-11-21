@@ -352,3 +352,33 @@ def set_doorlock_welcome_light_mode(
         "ProjectionLampCfg",
         {"value": _doorlock_light_payload(mode)},
     )
+
+
+def get_recording_schedule(
+    client: EzvizClient, serial: str, *, channel: CameraChannel
+) -> dict[str, Any]:
+    """Read the schedule from a video resource advertising TimingRecord.RecordSchedule."""
+    return _read_timing_record(client, serial, channel, "RecordSchedule")
+
+
+def get_recording_storage_params(
+    client: EzvizClient, serial: str, *, channel: CameraChannel
+) -> dict[str, Any]:
+    """Read storage allocation and overwrite settings, not schedule slots."""
+    return _read_timing_record(client, serial, channel, "ScheduleRecordParams")
+
+
+def _read_timing_record(
+    client: EzvizClient, serial: str, channel: CameraChannel, property_name: str
+) -> dict[str, Any]:
+    response = client.get_device_feature_value(
+        serial,
+        channel.resource_identifier,
+        "TimingRecord",
+        property_name,
+        local_index=channel.local_index,
+    )
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise PyEzvizError(f"Missing or invalid TimingRecord.{property_name} configuration")
+    return dict(data)

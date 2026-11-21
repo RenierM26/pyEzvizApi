@@ -345,8 +345,13 @@ and the [pagelist fixture](../tests/fixtures/page_list_response.json).
 - `TimingRecord.ScheduleRecordParams` is reported in pagelist, but its
   write route and gate remain unverified. The fixture schema lists
   storage allocation and overwrite parameters, not schedule slots.
-  The adjacent `WeekSchedule` schema describes schedule blocks;
-  that is not evidence of a working write.
+  The adjacent `RecordSchedule` property has a payload schema titled
+  `WeekSchedule`, which describes schedule blocks. Use
+  `devices.settings.get_recording_schedule` or
+  `devices.settings.get_recording_storage_params` after checking that
+  the product profile advertises the matching property on the selected
+  video route. These are schema-backed read helpers; the profile
+  does not establish a working write or confirm hardware behavior.
 
 ### Fixture coverage: feature domains
 

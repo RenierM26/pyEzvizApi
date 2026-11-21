@@ -519,3 +519,25 @@ def test_sensing_mode_is_only_for_welcome_light() -> None:
         "ProjectionLampCfg",
         {"value": {"enabled": True, "mode": 2}},
     )
+
+
+@pytest.mark.parametrize(
+    ("reader", "property_name"),
+    [
+        (settings.get_recording_schedule, "RecordSchedule"),
+        (settings.get_recording_storage_params, "ScheduleRecordParams"),
+    ],
+)
+def test_recording_reads_use_distinct_scoped_properties(
+    reader: Callable[..., dict[str, Any]], property_name: str
+) -> None:
+    client = Mock()
+    client.get_device_feature_value.return_value = {"data": {"reported": True}}
+    channel = CameraChannel("Video_1", "2")
+    assert reader(client, "TEST", channel=channel) == {"reported": True}
+    client.get_device_feature_value.assert_called_once_with(
+        "TEST", "Video_1", "TimingRecord", property_name, local_index="2"
+    )
+    client.get_device_feature_value.return_value = {"data": None}
+    with pytest.raises(PyEzvizError, match=property_name):
+        reader(client, "TEST", channel=channel)

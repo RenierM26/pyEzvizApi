@@ -293,3 +293,15 @@ def set_mute_plan_schedule(
         "MutePlan",
         {"value": {"plan": plan, "enabled": True}},
     )
+
+
+def set_doorlock_night_light_enabled(client: EzvizClient, serial: str, enabled: bool) -> None:
+    """Toggle the indoor night light on a lock advertising DoorLock/0 NightLightCfg.
+
+    Use this for the app's binary branch. Mode-capable locks may require a
+    mode selection in addition to the enabled state.
+    """
+    _require_bool(enabled)
+    client.set_iot_feature(
+        serial, "DoorLock", "0", "LightCtrl", "NightLightCfg", {"value": {"enabled": enabled}}
+    )

@@ -102,7 +102,7 @@ AREA_NAMES: tuple[tuple[int, str], ...] = (
     (321, "Jamaica"),
     (227, "Japan"),
     (246, "Jordan"),
-    (213, "Kazakstan"),
+    (213, "Kazakhstan"),
     (425, "Kenya"),
     (521, "Kiribati"),
     (214, "Korea"),

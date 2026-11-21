@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import IntEnum
 import json
 from typing import TYPE_CHECKING, Any
 
+from pyezvizapi._shared.coercion import decode_json
+from pyezvizapi.devices.capabilities import SupportExtView
+from pyezvizapi.devices.channels import CameraChannel
+from pyezvizapi.devices.features import optionals_mapping
 from pyezvizapi.exceptions import PyEzvizError
 
 if TYPE_CHECKING:
@@ -32,6 +37,42 @@ class IndicatorDaylightMode(IntEnum):
     ALWAYS_ON = 1
 
 
+def recording_mode_options(camera_data: Mapping[str, Any]) -> tuple[RecordingMode, ...]:
+    """Return advertised numeric choices, without checking disk or work-mode gates."""
+    support = SupportExtView.from_camera_data(camera_data)
+    mask = support.get("793")
+    if type(mask) in (int, str) and str(mask).strip() not in ("", "0"):
+        return tuple(
+            mode
+            for token, mode in (
+                ("1", RecordingMode.EVENT),
+                ("2", RecordingMode.ALL_DAY),
+                ("4", RecordingMode.AOV),
+            )
+            if support.has("793", (token,))
+        )
+    if str(support.get("219")).strip() == "1":
+        return (RecordingMode.EVENT, RecordingMode.ALL_DAY, RecordingMode.STOP)
+    return ()
+
+
+def reported_indicator_daylight_mode(
+    camera_data: Mapping[str, Any],
+) -> IndicatorDaylightMode | None:
+    """Return a recognized daylight mode with flag 331; switch 3 is a separate gate."""
+    support = SupportExtView.from_camera_data(camera_data)
+    if str(support.get("331")).strip() != "1":
+        return None
+    config = decode_json(optionals_mapping(camera_data).get("IndicatorLight"))
+    if not isinstance(config, Mapping):
+        return None
+    mode = config.get("mode")
+    return next(
+        (choice for choice in IndicatorDaylightMode if str(mode).strip() == str(choice.value)),
+        None,
+    )
+
+
 def set_recording_mode(
     client: EzvizClient,
     serial: str,
@@ -43,14 +84,18 @@ def set_recording_mode(
 
     if not isinstance(mode, RecordingMode):
         raise PyEzvizError("Expected a RecordingMode")
+    if type(channel) is not int or channel < 0:
+        raise PyEzvizError("Recording channel must be a nonnegative integer")
     client.set_device_key_value(serial, channel, "Record_Mode", json.dumps({"mode": int(mode)}))
 
 
 def _read_video_setting(
     client: EzvizClient, serial: str, domain: str, prop: str, local_index: str
 ) -> dict[str, Any]:
+    # Validate the Video route's syntax only; it does not prove profile support.
+    route = CameraChannel("Video", local_index)
     response = client.get_device_feature_value(
-        serial, "Video", domain, prop, local_index=local_index
+        serial, route.resource_identifier, domain, prop, local_index=route.local_index
     )
     data = response.get("data")
     if not isinstance(data, dict):

@@ -1,13 +1,17 @@
 """Offline checks for the app-traced cloud settings."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 import json
 from typing import Any
 from unittest.mock import Mock
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import requests
 
+from pyezvizapi import EzvizClient
 from pyezvizapi.devices import settings
+from pyezvizapi.devices.channels import CameraChannelError
 from pyezvizapi.exceptions import PyEzvizError
 
 
@@ -155,3 +159,221 @@ def test_rejected_iot_write_does_not_fall_back_to_switch() -> None:
         settings.set_iot_wdr_enabled(client, "serial", True)
     client.set_iot_feature.assert_called_once()
     client.switch_status.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("support", "expected"),
+    [
+        ({"219": 1}, ("EVENT", "ALL_DAY", "STOP")),
+        ({"219": "1", "793": " 2, 4 "}, ("ALL_DAY", "AOV")),
+        ({"219": 1, "793": "0"}, ("EVENT", "ALL_DAY", "STOP")),
+        ({"219": 1, "793": "14"}, ()),
+        ({"219": 0, "88": 1}, ()),
+        ({"219": True}, ()),
+    ],
+)
+def test_recording_options_use_advertised_numeric_modes(
+    support: dict[str, Any], expected: tuple[str, ...]
+) -> None:
+    data = {"deviceInfos": {"supportExt": support}}
+    assert tuple(mode.name for mode in settings.recording_mode_options(data)) == expected
+
+
+@pytest.mark.parametrize(
+    ("support", "optionals", "expected"),
+    [
+        (1, {"IndicatorLight": {"mode": 0}}, settings.IndicatorDaylightMode.DAYTIME_ONLY),
+        (
+            "1",
+            '{"IndicatorLight":"{\\"mode\\":\\"1\\"}"}',
+            settings.IndicatorDaylightMode.ALWAYS_ON,
+        ),
+        (1, {"IndicatorLight": {"mode": -1}}, None),
+        (1, {"IndicatorLight": {"mode": True}}, None),
+        (1, {"IndicatorLight": "not JSON"}, None),
+        (0, {"IndicatorLight": {"mode": 1}}, None),
+        (True, {"IndicatorLight": {"mode": 1}}, None),
+    ],
+)
+def test_reported_indicator_daylight_mode(
+    support: Any, optionals: Any, expected: settings.IndicatorDaylightMode | None
+) -> None:
+    data = {"supportExt": {"331": support}, "STATUS": {"optionals": optionals}}
+    assert settings.reported_indicator_daylight_mode(data) is expected
+
+
+@pytest.fixture
+def device_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[EzvizClient, list[requests.PreparedRequest], list[dict[str, Any]]]]:
+    client = EzvizClient(token={"session_id": "synthetic", "api_url": "api.example.invalid"})
+    sent: list[requests.PreparedRequest] = []
+    replies: list[dict[str, Any]] = []
+
+    def send(
+        _session: requests.Session, request: requests.PreparedRequest, **_kwargs: Any
+    ) -> requests.Response:
+        sent.append(request)
+        assert replies, f"Unexpected request: {request.method} {request.url}"
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps(replies.pop(0)).encode()  # noqa: SLF001 - offline response.
+        return response
+
+    monkeypatch.setattr(requests.Session, "send", send)
+    try:
+        yield client, sent, replies
+    finally:
+        client.close_session()
+
+
+def test_query_and_form_key_value_puts_keep_distinct_wire_contracts(device_requests) -> None:
+    client, sent, replies = device_requests
+    replies.extend([{"meta": {"code": 200}}] * 3)
+    settings.set_recording_mode(client, "CAM001", settings.RecordingMode.AOV, channel=7)
+    settings.set_indicator_daylight_mode(client, "CAM001", settings.IndicatorDaylightMode.ALWAYS_ON)
+    client.set_dev_config_kv("CAM001", 7, "Record_Mode", {"mode": 4})
+
+    assert len(sent) == 3
+    for request, channel, key, value in (
+        (sent[0], 7, "Record_Mode", {"mode": 4}),
+        (sent[1], 1, "IndicatorLight", {"enable": 1, "mode": 1}),
+    ):
+        url = urlsplit(request.url)
+        assert request.method == "PUT"
+        assert url.path == f"/v3/devconfig/v1/keyValue/CAM001/{channel}/op"
+        query = parse_qs(url.query, strict_parsing=True)
+        assert query.keys() == {"key", "value"}
+        assert query["key"] == [key]
+        (encoded_value,) = query["value"]
+        assert json.loads(encoded_value) == value
+        assert request.body is None
+
+    form = sent[2]
+    assert form.method == "PUT"
+    assert form.url == "https://api.example.invalid/v3/devconfig/v1/keyValue/CAM001/7/op"
+    assert form.headers["Content-Type"] == "application/x-www-form-urlencoded"
+    assert parse_qs(form.body, strict_parsing=True) == {
+        "key": ["Record_Mode"],
+        "value": ['{"mode":4}'],
+    }
+
+
+def test_rejected_query_put_does_not_fall_back_to_form_or_switch(device_requests) -> None:
+    client, sent, replies = device_requests
+    replies.append({"meta": {"code": 403}})
+    with pytest.raises(PyEzvizError, match="Could not set common key value"):
+        settings.set_recording_mode(client, "CAM001", settings.RecordingMode.EVENT)
+
+    (request,) = sent
+    assert request.method == "PUT"
+    assert urlsplit(request.url).path == "/v3/devconfig/v1/keyValue/CAM001/1/op"
+    assert parse_qs(urlsplit(request.url).query)["key"] == ["Record_Mode"]
+    assert request.body is None
+
+
+@pytest.mark.parametrize(
+    ("setter", "value", "domain", "prop", "state", "payload"),
+    [
+        (
+            settings.set_recording_pre_roll,
+            True,
+            "RecordStorage",
+            "RecordMode",
+            {"recordMode": "event", "preRecordParams": {"fps": 2}},
+            {"recordMode": "preRolling", "preRecordParams": {"fps": 2}},
+        ),
+        (
+            settings.set_recording_pre_roll_fps,
+            4,
+            "RecordStorage",
+            "RecordMode",
+            {"recordMode": "preRolling"},
+            {"recordMode": "preRolling", "preRecordParams": {"fps": 4}},
+        ),
+        (
+            settings.set_supplemental_event_recording,
+            False,
+            "RecordStorage",
+            "RecordMode",
+            {"recordMode": "event", "eventRecordParams": {"suppleRecordStorage": 10}},
+            {"recordMode": "event", "eventRecordParams": {"suppleRecordEnabled": False}},
+        ),
+        (
+            settings.set_iot_wdr_enabled,
+            False,
+            "ImageBacklight",
+            "WDR",
+            {"hdrSwitchEnabled": "open", "WDRLevel1": 30},
+            {"hdrSwitchEnabled": "close", "WDRLevel1": 30},
+        ),
+        (
+            settings.set_iot_wdr_level,
+            70,
+            "ImageBacklight",
+            "WDR",
+            {"hdrSwitchEnabled": "open", "WDRLevel1": 30},
+            {"hdrSwitchEnabled": "open", "WDRLevel1": 70},
+        ),
+    ],
+)
+def test_video_iot_stays_on_the_explicit_local_index(
+    device_requests, setter, value, domain, prop, state, payload
+) -> None:
+    client, sent, replies = device_requests
+    replies.extend([{"meta": {"code": 200}, "data": state}, {"meta": {"code": 200}}])
+    setter(client, "cam001", value, local_index="2")
+
+    url = f"https://api.example.invalid/v3/iot-feature/feature/CAM001/Video/2/{domain}/{prop}"
+    assert [(request.method, request.url) for request in sent] == [("GET", url), ("PUT", url)]
+    assert sent[0].body is None
+    assert sent[1].headers["Content-Type"] == "application/json"
+    assert json.loads(sent[1].body) == {"value": payload}
+
+
+def test_night_mode_is_device_global_and_does_not_read_video(device_requests) -> None:
+    client, sent, replies = device_requests
+    replies.append({"meta": {"code": 200}})
+    settings.set_indicator_night_mode(client, "cam001", False)
+
+    (request,) = sent
+    assert request.method == "PUT"
+    assert request.url == (
+        "https://api.example.invalid/v3/iot-feature/feature/CAM001/global/0/IndicatorLight/IndicatorLightCfg"
+    )
+    assert request.headers["Content-Type"] == "application/json"
+    assert json.loads(request.body) == {"value": {"enabled": False, "mode": "nightMode"}}
+
+
+@pytest.mark.parametrize("channel", [True, -1, "1"])
+def test_invalid_legacy_channel_never_reaches_transport(device_requests, channel) -> None:
+    client, sent, _ = device_requests
+    with pytest.raises(PyEzvizError, match="Recording channel"):
+        settings.set_recording_mode(client, "CAM001", settings.RecordingMode.EVENT, channel=channel)
+    assert sent == []
+
+
+@pytest.mark.parametrize("local_index", [1, True, "01", "-1", "1/global"])
+def test_invalid_video_index_never_reaches_transport(device_requests, local_index) -> None:
+    client, sent, _ = device_requests
+    with pytest.raises(CameraChannelError, match="invalid"):
+        settings.set_iot_wdr_enabled(client, "CAM001", True, local_index=local_index)
+    assert sent == []
+
+
+@pytest.mark.parametrize("rejected_method", ["GET", "PUT"])
+def test_rejected_video_iot_request_never_changes_scope_or_route(
+    device_requests, rejected_method: str
+) -> None:
+    client, sent, replies = device_requests
+    if rejected_method == "PUT":
+        replies.append({"meta": {"code": 200}, "data": {"WDRLevel1": 30}})
+    replies.append({"meta": {"code": 403}})
+    with pytest.raises(PyEzvizError, match="Could not"):
+        settings.set_iot_wdr_enabled(client, "CAM001", True, local_index="2")
+
+    url = "https://api.example.invalid/v3/iot-feature/feature/CAM001/Video/2/ImageBacklight/WDR"
+    expected = [("GET", url)]
+    if rejected_method == "PUT":
+        expected.append(("PUT", url))
+    assert [(request.method, request.url) for request in sent] == expected

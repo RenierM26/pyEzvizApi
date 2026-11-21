@@ -59,6 +59,27 @@ def test_reads_and_closes(monkeypatch: pytest.MonkeyPatch) -> None:
     source.close.assert_called()
 
 
+def test_reads_short_ffmpeg_output_before_source_ends(monkeypatch: pytest.MonkeyPatch) -> None:
+    stopped = Event()
+    source = _source()
+    source.close.side_effect = stopped.set
+
+    def packets(**_kwargs: Any) -> Generator[MediaPacket, None, None]:
+        yield MediaPacket(b"abc", MediaPacketMetadata(source="cloud_vtm"))
+        assert stopped.wait(5)
+
+    source.iter_media_packets.side_effect = packets
+    _process(
+        monkeypatch,
+        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read(3)); "
+        "sys.stdout.buffer.flush(); sys.stdin.buffer.read()",
+    )
+    with live.LiveMpegtsStream(source, "ffmpeg", startup_timeout=1) as stream:
+        assert stream.read() == b"abc"
+        assert not stopped.is_set()
+    assert stopped.is_set()
+
+
 @pytest.mark.parametrize(("header_size", "nal_header"), [(1, b"\x65"), (2, b"\x26\x01")])
 def test_decrypts_inner_ps_video_with_clear_vtm_flag(
     monkeypatch: pytest.MonkeyPatch, header_size: int, nal_header: bytes

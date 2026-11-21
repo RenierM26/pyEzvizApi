@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import suppress
+from io import BufferedReader
 from pathlib import Path
 import subprocess
 from threading import Event, Lock, Thread
@@ -252,7 +253,9 @@ def copy_remuxed_output(  # noqa: PLR0912, PLR0915
     writer.start()
     output_error: Exception | None = None
     try:
-        while chunk := stdout.read(FFMPEG_IO_CHUNK_SIZE):
+        # Forward short writes without waiting for a full chunk or FFmpeg EOF.
+        read_output = stdout.read1 if isinstance(stdout, BufferedReader) else stdout.read
+        while chunk := read_output(FFMPEG_IO_CHUNK_SIZE):
             output.write(chunk)
             output.flush()
     except (BrokenPipeError, ConnectionResetError) as err:

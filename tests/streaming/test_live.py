@@ -14,7 +14,6 @@ import time
 from typing import Any
 from unittest.mock import Mock
 
-from Crypto.Cipher import AES
 import pytest
 
 from pyezvizapi.exceptions import EzvizNoMediaError, EzvizUnsupportedMediaError, PyEzvizError
@@ -109,7 +108,8 @@ def test_cloud_live_recovers_short_video_pes_at_next_pack(monkeypatch: pytest.Mo
     source = _source()
     key = b"test-camera-key!"
     clear = b"0123456789abcdef" * 2
-    cipher = AES.new(key.ljust(16, b"\0"), AES.MODE_ECB).encrypt(clear)
+    # Fixed ciphertext for the camera protocol fixture above.
+    cipher = bytes.fromhex("423a0e8b042bbbceded349b7e544820b423a0e8b042bbbceded349b7e544820b")
     prefix = _pack_header(0) + pes(0xE0, b"\x00\x00\x00\x01\x42\x01" + cipher[:16], 0)
     next_pack = _pack_header(3600)
     audio = pes(0xC0, b"unchanged audio", 3600)
@@ -130,7 +130,8 @@ def test_legacy_ps_waits_for_pes_run_and_leaves_audio_intact(
     source = _source()
     key = b"test-camera-key!"
     clear = b"\x67" + b"0123456789abcde"
-    encrypted = AES.new(key, AES.MODE_ECB).encrypt(clear)
+    # Fixed ciphertext for the camera protocol fixture above.
+    encrypted = bytes.fromhex("7bbf37a75901cc1819fcf84396208a2f")
     start = b"\x00\x00\x00\x01"
     pack = _pack_header(0)
     audio = pes(0xC0, b"audio", 0)

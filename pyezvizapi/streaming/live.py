@@ -130,6 +130,7 @@ class LiveMpegtsStream:
                         retain_input_owner=True,
                     )
         except (BrokenPipeError, ConnectionResetError):
+            # The viewer can close the output while the writer is still draining.
             pass
         except Exception as error:
             self._error = error

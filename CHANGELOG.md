@@ -5,7 +5,13 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.6.0 - 2026-11-21
+
 ### Added
+
+- Add a closeable live MPEG-TS reader for integrations, with bounded startup
+  and teardown, cloud MPEG-PS and supported RTP playback, and explicit cloud
+  substream selection. Home Assistant integrations must opt into this API.
 
 - Add immutable reported camera channels, app-backed point routing, explicit
   notification-channel normalization and strict batch image-channel selection.

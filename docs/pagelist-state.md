@@ -343,7 +343,10 @@ and the [pagelist fixture](../tests/fixtures/page_list_response.json).
   verify that the named app is enabled and advertises tracking.
   It does not replace the device-wide tracking switch or tracking zoom.
 - `TimingRecord.ScheduleRecordParams` is reported in pagelist, but its
-  write route and gate remain unverified.
+  write route and gate remain unverified. The fixture schema lists
+  storage allocation and overwrite parameters, not schedule slots.
+  The adjacent `WeekSchedule` schema describes schedule blocks;
+  that is not evidence of a working write.
 
 ### Fixture coverage: feature domains
 
@@ -355,7 +358,7 @@ IoT methods alone do not qualify a property.
 | --- | --- |
 | `DoorLock.DoorLockMgr` | `MessagePlanCfg`, `WeatherReminderPlan` |
 | `DoorLock.LensPrivacyCover` | `LensPrivacyCoverModeParams` |
-| `DoorLock.LightCtrl` | `NightLightCfg` (writer unverified; distinct from `Video.LightCtrl.NightLightEnable`) |
+| `DoorLock.LightCtrl` | `NightLightCfg` (binary app route: `devices.settings.set_doorlock_night_light_enabled` on `DoorLock/0`; requires the matching product-profile property. Mode-capable locks have a separate picker. Distinct from `Video.LightCtrl.NightLightEnable`) |
 | `DoorLock.RGBLightCtrl` | `ProjectionLampCfg` |
 | `DoorLock.SensorLight` | `RadarFMCfg` |
 | `Video.AudioMgr` | `AudioSourceEnhancement`, `DirectionalPickup`, `MicAdaptive` |

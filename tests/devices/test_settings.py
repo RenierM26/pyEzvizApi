@@ -471,3 +471,12 @@ def test_app_tracking_action() -> None:
             }
         },
     )
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_doorlock_night_light_uses_lock_resource(enabled: bool) -> None:
+    client = Mock()
+    settings.set_doorlock_night_light_enabled(client, "TEST", enabled)
+    client.set_iot_feature.assert_called_once_with(
+        "TEST", "DoorLock", "0", "LightCtrl", "NightLightCfg", {"value": {"enabled": enabled}}
+    )

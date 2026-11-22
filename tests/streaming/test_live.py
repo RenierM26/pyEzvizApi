@@ -149,6 +149,31 @@ def test_legacy_ps_waits_for_pes_run_and_leaves_audio_intact(
         )
 
 
+def test_cloud_live_detects_legacy_header_and_replays_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _process(monkeypatch, "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())")
+    source = _source()
+    key = b"test-camera-key!"
+    start = b"\x00\x00\x00\x01"
+    clear = b"\x67" + b"0123456789abcde"
+    cipher = bytes.fromhex("7bbf37a75901cc1819fcf84396208a2f")
+    pack = _pack_header(0)
+    audio = pes(0xC0, b"unchanged audio", 0)
+    padding = pes(0xBE, bytes(4096))
+    wire = pack + pes(0xE0, start + cipher, 0, aligned=True) + audio + padding
+    source.iter_media_packets.return_value = _packets(
+        MediaPacket(wire[index : index + 7], MediaPacketMetadata(source="cloud_vtm"))
+        for index in range(0, len(wire), 7)
+    )
+    with live.LiveMpegtsStream(source, "ffmpeg", media_key=key) as stream:
+        assert b"".join(iter(stream.read, b"")) == (
+            pack + pes(0xE0, start + clear, 0, aligned=True) + audio + padding
+        )
+        assert isinstance(stream._transform, live.LegacyPsVideoTransform)
+    source.iter_media_packets.assert_called_once()
+
+
 def test_legacy_ps_releases_video_without_audio_at_aligned_nal() -> None:
     transform = live.LegacyPsVideoTransform(b"test-camera-key!")
     start = b"\x00\x00\x00\x01"

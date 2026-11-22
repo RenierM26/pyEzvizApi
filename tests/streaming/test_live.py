@@ -160,15 +160,18 @@ def test_cloud_live_detects_legacy_header_and_replays_startup(
     cipher = bytes.fromhex("7bbf37a75901cc1819fcf84396208a2f")
     pack = _pack_header(0)
     audio = pes(0xC0, b"unchanged audio", 0)
-    padding = pes(0xBE, bytes(4096))
-    wire = pack + pes(0xE0, start + cipher, 0, aligned=True) + audio + padding
+    # A clear PPS alone is not enough to identify the stream's encryption mode.
+    prelude = pack + pes(0xE0, start + b"\x68\xce\x06\xe2", 0, aligned=True)
+    prelude += pes(0xBE, bytes(4096))
+    padding = pes(0xBE, bytes(62000))
+    wire = prelude + 2 * pes(0xE0, start + cipher, 0, aligned=True) + audio + padding
     source.iter_media_packets.return_value = _packets(
-        MediaPacket(wire[index : index + 7], MediaPacketMetadata(source="cloud_vtm"))
-        for index in range(0, len(wire), 7)
+        MediaPacket(wire[index : index + 1400], MediaPacketMetadata(source="cloud_vtm"))
+        for index in range(0, len(wire), 1400)
     )
     with live.LiveMpegtsStream(source, "ffmpeg", media_key=key) as stream:
         assert b"".join(iter(stream.read, b"")) == (
-            pack + pes(0xE0, start + clear, 0, aligned=True) + audio + padding
+            prelude + 2 * pes(0xE0, start + clear, 0, aligned=True) + audio + padding
         )
         assert isinstance(stream._transform, live.LegacyPsVideoTransform)
     source.iter_media_packets.assert_called_once()

@@ -36,7 +36,8 @@ if TYPE_CHECKING:
     from pyezvizapi.client import EzvizClient
 
 
-_INITIAL_PS_PROBE_BYTES = 4 * 1024
+# A short clear PPS can precede the encrypted video headers.
+_INITIAL_PS_PROBE_BYTES = 64 * 1024
 _MAX_PS_PROBE_BYTES = 8 * 1024 * 1024
 
 

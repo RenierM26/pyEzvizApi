@@ -23,6 +23,7 @@ from pyezvizapi.streaming.cloud.protocol import (
     StreamTransport,
     VtmChannel,
     VtmPacket,
+    detect_hikvision_ps_video_nalu_header_size,
     detect_transport,
 )
 from pyezvizapi.streaming.media.models import MediaPacket, is_positive_finite_duration_bound
@@ -33,6 +34,12 @@ from pyezvizapi.streaming.selection import AutoMediaStream
 
 if TYPE_CHECKING:
     from pyezvizapi.client import EzvizClient
+
+
+# A short clear PPS can precede the encrypted video headers.
+_INITIAL_PS_PROBE_BYTES = 64 * 1024
+_MAX_PS_PROBE_SECONDS = 1.0
+_MAX_PS_PROBE_BYTES = 8 * 1024 * 1024
 
 
 class LiveStreamShutdownTimeout(PyEzvizError):
@@ -50,27 +57,22 @@ class LiveMpegtsStream:
         startup_timeout: float = 10.0,
         close_timeout: float = 15.0,
         media_key: str | bytes | None = None,
-        nalu_header_size: int = 2,
+        nalu_header_size: int | None = None,
     ) -> None:
         if not is_positive_finite_duration_bound(startup_timeout):
             raise ValueError("Live startup timeout must be positive and finite")
         if not is_positive_finite_duration_bound(close_timeout):
             raise ValueError("Live close timeout must be positive and finite")
         self._transform: NativePsTransform | LegacyPsVideoTransform | None = None
-        if media_key is not None:
-            self._transform = (
-                LegacyPsVideoTransform(media_key)
-                if nalu_header_size == 0 and not isinstance(nalu_header_size, bool)
-                else NativePsTransform(
-                    media_key, nalu_header_size=nalu_header_size, recover_cloud_pes=True
-                )
-            )
+        if media_key is not None and nalu_header_size is not None:
+            self._transform = self._ps_transform(media_key, nalu_header_size)
         self._media_key = media_key
         self._source = source
         self._ffmpeg_path = ffmpeg_path
         self._closed = Event()
         self._close_lock = Lock()
         self._startup_deadline = time.monotonic() + startup_timeout
+        self._ps_probe_window = min(_MAX_PS_PROBE_SECONDS, startup_timeout / 4)
         self._started_output = False
         self._close_timeout = close_timeout
         self._stopper: Thread | None = None
@@ -158,11 +160,58 @@ class LiveMpegtsStream:
                 self._sender.shutdown(socket.SHUT_WR)
             self._sender.close()
 
+    @staticmethod
+    def _ps_transform(
+        key: str | bytes, header_size: int
+    ) -> NativePsTransform | LegacyPsVideoTransform:
+        if header_size == 0 and not isinstance(header_size, bool):
+            return LegacyPsVideoTransform(key)
+        return NativePsTransform(key, nalu_header_size=header_size, recover_cloud_pes=True)
+
+    def _probe_ps(self, payloads: Iterator[bytes], key: str | bytes) -> Iterator[bytes]:
+        """Select the transform and replay the probe on the same connection."""
+        probe = bytearray()
+        buffered: list[bytes] = []
+        next_probe = _INITIAL_PS_PROBE_BYTES
+        probe_deadline = None
+        for body in payloads:
+            now = time.monotonic()
+            if probe_deadline is None:
+                # Preserve part of the overall startup budget for FFmpeg.
+                probe_deadline = min(
+                    now + self._ps_probe_window, self._startup_deadline - self._ps_probe_window
+                )
+            time_exhausted = now >= probe_deadline
+            remaining = _MAX_PS_PROBE_BYTES - len(probe)
+            buffered.append(body)
+            probe.extend(body[:remaining])
+            if len(probe) < next_probe and not time_exhausted:
+                continue
+            header_size = detect_hikvision_ps_video_nalu_header_size(
+                bytes(probe), key, default=None
+            )
+            if header_size is not None or time_exhausted or len(probe) == _MAX_PS_PROBE_BYTES:
+                self._transform = self._ps_transform(key, 2 if header_size is None else header_size)
+                probe.clear()
+                yield from buffered
+                buffered.clear()
+                yield from payloads
+                return
+            # Avoid scanning the entire buffered prefix on every packet.
+            next_probe = min(2 * len(probe), _MAX_PS_PROBE_BYTES)
+        if probe and not self._closed.is_set():
+            header_size = detect_hikvision_ps_video_nalu_header_size(bytes(probe), key)
+            probe.clear()
+            assert header_size is not None
+            self._transform = self._ps_transform(key, header_size)
+            yield from buffered
+
     def _write_ps(self, packets: Iterator[MediaPacket], stdin: BinaryIO) -> None:
-        for packet in packets:
-            body = packet.body
-            if self._transform is not None:
-                body = self._transform.feed(body)
+        payloads: Iterator[bytes] = (packet.body for packet in packets)
+        if self._media_key is not None and self._transform is None:
+            payloads = self._probe_ps(payloads, self._media_key)
+        for payload in payloads:
+            body = self._transform.feed(payload) if self._transform is not None else payload
             if body:
                 stdin.write(body)
                 stdin.flush()
@@ -292,12 +341,13 @@ def open_live_mpegts_stream(
     source: AutoClipSource | None = None,
     close_timeout: float = 15.0,
     media_key: str | bytes | None = None,
-    nalu_header_size: int = 2,
+    nalu_header_size: int | None = None,
     cloud_stream_index: int = 1,
 ) -> LiveMpegtsStream:
     """Open MPEG-PS or supported cloud RTP media using the selected transport.
 
-    Supply the camera's media key for inner video encryption. For MPEG-PS set
+    Supply the camera's media key for inner video encryption. MPEG-PS header
+    mode is detected by default from bounded startup data. Set
     ``nalu_header_size=0`` for encrypted headers, 1 for clear H.264 headers,
     or 2 for clear HEVC headers. Cloud RTP uses its detected codec. Transport-level
     encryption and local ECDH are not supported.

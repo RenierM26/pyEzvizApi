@@ -177,6 +177,39 @@ def test_cloud_live_detects_legacy_header_and_replays_startup(
     source.iter_media_packets.assert_called_once()
 
 
+def test_cloud_live_probes_slow_stream_before_startup_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source()
+    closed = Event()
+    source.close.side_effect = closed.set
+    key = b"test-camera-key!"
+    clear = b"\x67" + b"0123456789abcde"
+    cipher = bytes.fromhex("7bbf37a75901cc1819fcf84396208a2f")
+    pack = _pack_header(0)
+    start = b"\x00\x00\x00\x01"
+    audio = pes(0xC0, b"audio", 0)
+    wire = pack + pes(0xE0, start + cipher, 0, aligned=True) + audio
+    expected = pack + pes(0xE0, start + clear, 0, aligned=True) + audio
+
+    def packets(**_kwargs: Any) -> Generator[MediaPacket, None, None]:
+        packet = MediaPacket(wire, MediaPacketMetadata(source="cloud_vtm"))
+        while not closed.is_set():
+            yield packet
+            closed.wait(0.05)
+
+    source.iter_media_packets.side_effect = packets
+    _process(
+        monkeypatch,
+        f"import sys; sys.stdout.buffer.write(sys.stdin.buffer.read({len(wire)})); "
+        "sys.stdout.buffer.flush(); sys.stdin.buffer.read()",
+    )
+    with live.LiveMpegtsStream(source, "ffmpeg", startup_timeout=2, media_key=key) as stream:
+        assert stream.read() == expected
+        assert not closed.is_set()
+    assert closed.is_set()
+
+
 def test_legacy_ps_releases_video_without_audio_at_aligned_nal() -> None:
     transform = live.LegacyPsVideoTransform(b"test-camera-key!")
     start = b"\x00\x00\x00\x01"

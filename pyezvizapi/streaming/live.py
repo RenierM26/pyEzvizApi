@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
 # A short clear PPS can precede the encrypted video headers.
 _INITIAL_PS_PROBE_BYTES = 64 * 1024
+_MAX_PS_PROBE_SECONDS = 1.0
 _MAX_PS_PROBE_BYTES = 8 * 1024 * 1024
 
 
@@ -71,6 +72,7 @@ class LiveMpegtsStream:
         self._closed = Event()
         self._close_lock = Lock()
         self._startup_deadline = time.monotonic() + startup_timeout
+        self._ps_probe_window = min(_MAX_PS_PROBE_SECONDS, startup_timeout / 4)
         self._started_output = False
         self._close_timeout = close_timeout
         self._stopper: Thread | None = None
@@ -171,16 +173,24 @@ class LiveMpegtsStream:
         probe = bytearray()
         buffered: list[bytes] = []
         next_probe = _INITIAL_PS_PROBE_BYTES
+        probe_deadline = None
         for body in payloads:
+            now = time.monotonic()
+            if probe_deadline is None:
+                # Preserve part of the overall startup budget for FFmpeg.
+                probe_deadline = min(
+                    now + self._ps_probe_window, self._startup_deadline - self._ps_probe_window
+                )
+            time_exhausted = now >= probe_deadline
             remaining = _MAX_PS_PROBE_BYTES - len(probe)
             buffered.append(body)
             probe.extend(body[:remaining])
-            if len(probe) < next_probe:
+            if len(probe) < next_probe and not time_exhausted:
                 continue
             header_size = detect_hikvision_ps_video_nalu_header_size(
                 bytes(probe), key, default=None
             )
-            if header_size is not None or len(probe) == _MAX_PS_PROBE_BYTES:
+            if header_size is not None or time_exhausted or len(probe) == _MAX_PS_PROBE_BYTES:
                 self._transform = self._ps_transform(key, 2 if header_size is None else header_size)
                 probe.clear()
                 yield from buffered

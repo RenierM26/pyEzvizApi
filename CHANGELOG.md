@@ -5,6 +5,14 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.7.0 - 2026-11-22
+
+### Added
+
+- Automatically detect encrypted MPEG-PS video headers during live playback.
+  Startup probing is bounded by time and bytes, reuses the same connection,
+  and preserves explicit header overrides.
+
 ## v2.6.0 - 2026-11-21
 
 ### Added

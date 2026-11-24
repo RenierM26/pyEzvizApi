@@ -94,6 +94,7 @@ def _client_with_fixture(monkeypatch) -> client_module.EzvizClient:
         token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"}
     )
     monkeypatch.setattr(client, "_get_page_list", _page_list_fixture)
+    monkeypatch.setattr(client, "_get_device_page", lambda _serial: None)
     return client
 
 
@@ -121,6 +122,30 @@ def test_get_device_infos_can_filter_to_one_serial(monkeypatch) -> None:
 
     assert camera["deviceInfos"]["name"] == "Front Camera"
     assert client.get_device_infos("MISSING") == {}
+
+
+@pytest.mark.parametrize("scenario", ["match", "wrong_serial", "multiple_resources"])
+def test_serial_lookup_prefers_scoped_response_and_falls_back(monkeypatch, scenario) -> None:
+    client = client_module.EzvizClient()
+    page = _page_list_fixture()
+    page["deviceInfos"] = [page["deviceInfos"][1 if scenario == "wrong_serial" else 0]]
+    if scenario != "multiple_resources":
+        page["resourceInfos"] = page["resourceInfos"][:1]
+    calls = []
+
+    def request(method, path, **kwargs):
+        calls.append((method, path, kwargs["params"]))
+        return {"meta": {"code": 200}, **page}
+
+    def inventory():
+        assert scenario != "match", "matching direct response must not fetch the full account"
+        return _page_list_fixture()
+
+    monkeypatch.setattr(client, "_request_json", request)
+    monkeypatch.setattr(client, "_get_page_list", inventory)
+    assert client.get_device_infos("CAM123")["deviceInfos"]["deviceSerial"] == "CAM123"
+    assert calls[0][:2] == ("GET", "/v3/userdevices/v1/resources/CAM123")
+    assert len(calls) == 1
 
 
 def test_serial_lookup_preserves_channel_resources_without_decoding_other_devices(

@@ -5431,6 +5431,7 @@ def test_get_device_records_returns_map_single_record_and_raw_fallback(monkeypat
         "STATUS": {"CAM123": {"globalStatus": 1, "optionals": {}}},
         "SWITCH": {"CAM123": [{"type": 1, "enable": 1}]},
     }
+    monkeypatch.setattr(client, "_get_device_page", lambda _serial: None)
     monkeypatch.setattr(client, "_get_page_list", lambda: page)
 
     records = cast(dict[str, Any], client.get_device_records())

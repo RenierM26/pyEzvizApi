@@ -239,7 +239,9 @@ def get_device_infos(
     sources: dict[str, _owner_types.JsonDict] | None = None,
 ) -> _owner_types.JsonDict:
     """Load all devices and build dict per device serial."""
-    devices = self._get_page_list()
+    devices = self._get_device_page(serial) if serial else None
+    if devices is None:
+        devices = self._get_page_list()
     device_rows = {
         device["deviceSerial"]: device
         for device in devices.get("deviceInfos") or []

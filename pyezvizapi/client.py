@@ -36,6 +36,8 @@ urlunsplit = _compat_module_1.urlunsplit
 from uuid import uuid4
 import zlib
 
+from urllib.parse import quote
+
 import requests
 
 from pyezvizapi.cloud import responses as _api_response
@@ -4458,17 +4460,52 @@ class EzvizClient:
                 )
             return self.mqtt_client
 
+    _DEVICE_PAGE_FILTER = (
+        "CLOUD, TIME_PLAN, CONNECTION, SWITCH,"
+        "STATUS, WIFI, NODISTURB, KMS,"
+        "P2P, CHANNEL, VTM, DETECTOR,"
+        "FEATURE, CUSTOM_TAG, UPGRADE, VIDEO_QUALITY,"
+        "QOS, PRODUCTS_INFO, SIM_CARD, MULTI_UPGRADE_EXT,"
+        "FEATURE_INFO"
+    )
+
     def _get_page_list(self) -> Any:
         """Get ezviz device info broken down in sections."""
-        return self._api_get_pagelist(
-            page_filter="CLOUD, TIME_PLAN, CONNECTION, SWITCH,"
-            "STATUS, WIFI, NODISTURB, KMS,"
-            "P2P, CHANNEL, VTM, DETECTOR,"
-            "FEATURE, CUSTOM_TAG, UPGRADE, VIDEO_QUALITY,"
-            "QOS, PRODUCTS_INFO, SIM_CARD, MULTI_UPGRADE_EXT,"
-            "FEATURE_INFO",
-            json_key=None,
-        )
+        return self._api_get_pagelist(page_filter=self._DEVICE_PAGE_FILTER, json_key=None)
+
+    def _get_device_page(self, serial: str) -> JsonDict | None:
+        """Try the app's serial-scoped resource endpoint."""
+        if serial in {".", ".."}:
+            return None
+        path = f"{API_ENDPOINT_PAGELIST.rsplit('/', 1)[0]}/{quote(serial, safe='')}"
+        try:
+            payload = self._request_json(
+                "GET",
+                path,
+                params={"filter": self._DEVICE_PAGE_FILTER.replace(" ", "")},
+            )
+        except HTTPError as err:
+            if self._http_error_status(err) in {404, 405, 501}:
+                return None
+            raise
+        # A failed or ambiguous scoped lookup is not proof of device absence.
+        if self._meta_code(payload) in {404, 405, 501}:
+            return None
+        self._ensure_ok(payload, "Could not get device resources")
+        rows = payload.get("deviceInfos")
+        resources = payload.get("resourceInfos")
+        # The scoped endpoint can reorder resource rows. Some legacy callers
+        # select the first row, so retain the account ordering when ambiguous.
+        if isinstance(resources, list) and len(resources) > 1:
+            return None
+        if (
+            isinstance(rows, list)
+            and len(rows) == 1
+            and isinstance(rows[0], dict)
+            and rows[0].get("deviceSerial") == serial
+        ):
+            return payload
+        return None
 
     def get_page_list(self) -> Any:
         """Return the full pagelist payload without filtering."""

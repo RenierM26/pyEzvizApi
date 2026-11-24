@@ -148,6 +148,26 @@ def test_serial_lookup_prefers_scoped_response_and_falls_back(monkeypatch, scena
     assert len(calls) == 1
 
 
+def test_serial_lookup_falls_back_to_pagelist_session_recovery(monkeypatch) -> None:
+    client = client_module.EzvizClient()
+    events = []
+    page = {"meta": {"code": 200}, "page": {"hasNext": False}, **_page_list_fixture()}
+    scoped_path = "/v3/userdevices/v1/resources/CAM123"
+    pagelist_path = "/v3/userdevices/v1/resources/pagelist"
+
+    def request(_method, path, **_kwargs):
+        events.append(path)
+        if events[-2:] == ["login", pagelist_path]:
+            return page
+        return {"meta": {"code": 401}}
+
+    monkeypatch.setattr(client, "_request_json", request)
+    monkeypatch.setattr(client, "login", lambda: events.append("login"))
+
+    assert client.get_device_infos("CAM123")["deviceInfos"]["deviceSerial"] == "CAM123"
+    assert events == [scoped_path, pagelist_path, "login", pagelist_path]
+
+
 def test_serial_lookup_preserves_channel_resources_without_decoding_other_devices(
     monkeypatch,
 ) -> None:

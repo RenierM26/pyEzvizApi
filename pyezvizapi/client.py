@@ -4488,10 +4488,9 @@ class EzvizClient:
             if self._http_error_status(err) in {404, 405, 501}:
                 return None
             raise
-        # A failed or ambiguous scoped lookup is not proof of device absence.
-        if self._meta_code(payload) in {404, 405, 501}:
+        # Let the account pagelist handle recovery for metadata-level errors.
+        if self._meta_code(payload) != 200:
             return None
-        self._ensure_ok(payload, "Could not get device resources")
         rows = payload.get("deviceInfos")
         resources = payload.get("resourceInfos")
         # The scoped endpoint can reorder resource rows. Some legacy callers

@@ -103,6 +103,29 @@ def load_devices(
     return {**self._cameras, **self._light_bulbs, **self._smart_plugs, **self._detectors}
 
 
+def _unifiedmsg_page_cursor(items: list[_owner_types.Any]) -> str | int | None:
+    """Return the last timestamp known to be complete on a newest-first page."""
+    previous_time = None
+    previous_raw = None
+    cursor = None
+    for item in items:
+        raw_time = item.get("time") if isinstance(item, dict) else None
+        if not isinstance(raw_time, (str, int)):
+            return None
+        digits = str(raw_time)
+        if not digits.isascii() or not digits.isdecimal() or len(digits) > 20:
+            return None
+        timestamp = int(digits)
+        if not timestamp or (previous_time is not None and timestamp > previous_time):
+            return None
+        if previous_time is not None and timestamp < previous_time:
+            # An older row proves that the preceding timestamp group ended.
+            cursor = previous_raw
+        previous_time = timestamp
+        previous_raw = raw_time
+    return cursor
+
+
 def _prefetch_latest_camera_alarms(
     self: _owner_types.EzvizClient,
     serials: _owner_types.Iterable[str],
@@ -119,11 +142,11 @@ def _prefetch_latest_camera_alarms(
     def _query_chunk(missing: set[str], *, serials: str | None) -> bool:
         """Collect latest matches, returning True only for a complete filtered batch."""
         cursor: str | int = ""
-        seen_cursors: set[str] = set()
         requested = missing.copy()
         # Prefetch is a latency optimization, not an exhaustive history scan.
         # After two pages, let narrower queries resolve the remaining cameras.
-        for _ in range(min(2, _owner.MAX_UNIFIEDMSG_PAGES)):
+        page_budget = min(2, _owner.MAX_UNIFIEDMSG_PAGES)
+        for page in range(page_budget):
             try:
                 response = self.get_device_messages_list(
                     serials=serials, limit=50, date="", end_time=cursor, max_retries=1
@@ -160,21 +183,12 @@ def _prefetch_latest_camera_alarms(
                     and not response.get("noMessageAbility")
                 )
 
-            tail = items[-1]
-            next_cursor = tail.get("time") if isinstance(tail, dict) else None
-            if not isinstance(next_cursor, (str, int)):
-                return False
-            cursor_text = str(next_cursor)
-            cursor_key = cursor_text.lstrip("0")
-            if (
-                not cursor_text.isascii()
-                or not cursor_text.isdecimal()
-                or not cursor_key
-                or cursor_key in seen_cursors
-            ):
-                return False
+            if page + 1 == page_budget:
+                break
+            next_cursor = _unifiedmsg_page_cursor(items)
+            if next_cursor is None:
+                break
             cursor = next_cursor
-            seen_cursors.add(cursor_key)
         return False
 
     remaining_serials = set(serial_list)

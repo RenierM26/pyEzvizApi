@@ -566,7 +566,10 @@ def test_prefetch_latest_camera_alarms_sends_raw_time_on_wire(monkeypatch, times
         calls.append(cursor)
         pages = {
             "": {
-                "messages": [{"deviceSerial": "OTHER", "msgId": "first-message", "time": timestamp}],
+                "messages": [
+                    {"deviceSerial": "OTHER", "msgId": "first-message", "time": timestamp},
+                    {"deviceSerial": "OTHER", "msgId": "boundary-message", "time": int(timestamp) - 1},
+                ],
                 "hasNext": True,
             },
             str(timestamp): {"messages": [found], "hasNext": False},
@@ -579,8 +582,8 @@ def test_prefetch_latest_camera_alarms_sends_raw_time_on_wire(monkeypatch, times
     assert calls == ["", str(timestamp)]
 
 
-@pytest.mark.parametrize("cursor", [None, "", True, "bad", "1700000000300"])
-def test_prefetch_falls_back_when_global_cursor_cannot_advance(cursor) -> None:
+@pytest.mark.parametrize("tail_time", [None, "", True, "bad", "1700000000300", 1700000000400])
+def test_prefetch_falls_back_when_global_cursor_cannot_advance(tail_time) -> None:
     client = client_module.EzvizClient()
     calls = []
 
@@ -589,15 +592,17 @@ def test_prefetch_falls_back_when_global_cursor_cannot_advance(cursor) -> None:
         calls.append(query)
         return {
             (None, ""): {
-                "messages": [{"deviceSerial": "OTHER", "time": 1700000000300}],
-                "hasNext": True,
-            },
-            (None, 1700000000300): {
-                "messages": [{"deviceSerial": "OTHER", "time": cursor}],
+                "messages": [
+                    {"deviceSerial": "OTHER", "time": 1700000000300},
+                    {"deviceSerial": "OTHER", "time": tail_time},
+                ],
                 "hasNext": True,
             },
             ("CAM1,CAM2", ""): {
-                "messages": [{"deviceSerial": "CAM1", "time": 1700000000200}],
+                "messages": [
+                    {"deviceSerial": "CAM1", "time": 1700000000200},
+                    {"deviceSerial": "CAM1", "time": 1700000000190},
+                ],
                 "hasNext": True,
             },
             ("CAM1,CAM2", 1700000000200): {
@@ -612,7 +617,36 @@ def test_prefetch_falls_back_when_global_cursor_cannot_advance(cursor) -> None:
         "CAM1": {"deviceSerial": "CAM1", "time": 1700000000200},
         "CAM2": {"deviceSerial": "CAM2", "time": 1700000000100},
     }
-    assert calls == [(None, ""), (None, 1700000000300), ("CAM1,CAM2", ""), ("CAM1,CAM2", 1700000000200)]
+    assert calls == [(None, ""), ("CAM1,CAM2", ""), ("CAM1,CAM2", 1700000000200)]
+
+
+def test_prefetch_does_not_skip_newest_alarm_at_timestamp_boundary(monkeypatch) -> None:
+    client = client_module.EzvizClient()
+    newest = {"deviceSerial": "CAM1", "msgId": "newest", "time": 200}
+    older = {"deviceSerial": "CAM1", "msgId": "older", "time": 100}
+    calls = []
+
+    def fake_messages(*, serials, end_time, **_kwargs):
+        assert serials is None
+        calls.append(end_time)
+        pages = {
+            "": {
+                "message": [
+                    {"deviceSerial": "OTHER", "time": 300},
+                    {"deviceSerial": "OTHER", "time": 200},
+                ],
+                "hasNext": True,
+            },
+            # A strict endTime=200 would skip the other row at time 200.
+            200: {"message": [older], "hasNext": False},
+            300: {"message": [newest, older], "hasNext": False},
+        }
+        return pages[end_time]
+
+    monkeypatch.setattr(client, "get_device_messages_list", fake_messages)
+
+    assert client._prefetch_latest_camera_alarms(["CAM1"]) == {"CAM1": newest}
+    assert calls == ["", 300]
 
 
 @pytest.mark.parametrize("entrypoint", ["load_devices", "poll_devices"])
@@ -629,7 +663,10 @@ def test_prefetch_falls_back_when_global_cursor_cannot_advance(cursor) -> None:
         ({"message": [], "hasNext": False, "noMessageAbility": True}, True),
         (None, True),
         ({"message": [], "hasNext": True}, True),
-        ({"message": [{"deviceSerial": "CAM234", "time": 1700000000000}], "hasNext": True}, True),
+        (
+            {"message": [{"deviceSerial": "CAM234", "time": time} for time in (200, 100)], "hasNext": True},
+            True,
+        ),
     ],
 )
 def test_device_poll_only_skips_fallback_for_complete_first_page(

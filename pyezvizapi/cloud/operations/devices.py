@@ -80,12 +80,13 @@ def load_devices(
         stage = "camera_status"
         try:
             if kind == "camera":
+                alarm = latest_alarms.get(serial)
                 self._cameras[serial] = factory.camera_status(
                     self,
                     serial,
                     dict(record.raw),
-                    refresh=refresh,
-                    latest_alarm=latest_alarms.get(serial),
+                    refresh=refresh and (alarm is not None or serial not in latest_alarms),
+                    latest_alarm=alarm,
                     switches=record.switches,
                 )
             else:
@@ -108,59 +109,85 @@ def _prefetch_latest_camera_alarms(
     *,
     chunk_size: int,
     _owner: _ModuleType,
-) -> dict[str, dict[str, _owner_types.Any]]:
-    """Attempt to fetch the most recent unified message per camera serial."""
-    serial_list = [serial for serial in serials if serial]
+) -> dict[str, _owner_types.JsonDict | None]:
+    """Return found alarms and confirmed absences, omitting unresolved serials."""
+    serial_list = list(dict.fromkeys(serial for serial in serials if serial))
     if not serial_list:
         return {}
-    latest: dict[str, dict[str, _owner_types.Any]] = {}
+    latest: dict[str, _owner_types.JsonDict | None] = {}
 
-    def _query_chunk(missing: set[str], limit: int, *, serials: str | None) -> None:
-        """Page through a fixed query until all requested serials are found."""
-        cursor = ""
-        seen_cursors = {cursor}
-        for _ in range(_owner.MAX_UNIFIEDMSG_PAGES):
+    def _query_chunk(missing: set[str], *, serials: str | None) -> bool:
+        """Collect latest matches, returning True only for a complete filtered batch."""
+        cursor: str | int = ""
+        seen_cursors: set[str] = set()
+        requested = missing.copy()
+        # Prefetch is a latency optimization, not an exhaustive history scan.
+        # After two pages, let narrower queries resolve the remaining cameras.
+        for _ in range(min(2, _owner.MAX_UNIFIEDMSG_PAGES)):
             try:
                 response = self.get_device_messages_list(
-                    serials=serials, limit=limit, date="", end_time=cursor, max_retries=1
+                    serials=serials, limit=50, date="", end_time=cursor, max_retries=1
                 )
             except _owner.PyEzvizError as err:
                 _owner._LOGGER.debug(
                     "alarm_prefetch_failed: serials=%s error=%r", serials or "", err
                 )
-                return
-            items = response.get("message") or response.get("messages") or []
-            if not isinstance(items, list) or not items:
-                return
+                return False
+            items = response.get("message")
+            if not items:
+                items = response.get("messages", items)
+            if not isinstance(items, list):
+                return False
+            scoped_rows = True
             for item in items:
-                if (
-                    isinstance(item, dict)
-                    and isinstance(serial := item.get("deviceSerial"), str)
-                    and serial in missing
-                ):
+                serial = item.get("deviceSerial") if isinstance(item, dict) else None
+                if not isinstance(serial, str) or serial not in requested:
+                    scoped_rows = False
+                elif serial in missing:
                     latest[serial] = item
                     missing.remove(serial)
-            if not missing or not response.get("hasNext"):
-                return
+
+            has_next = response.get("hasNext")
+            if not missing or has_next is not True or not items:
+                # A timestamp-only cursor can skip messages tied at a page boundary.
+                # Only a complete first page can rule out an alarm for a missing serial.
+                return (
+                    serials is not None
+                    and cursor == ""
+                    and has_next is False
+                    and scoped_rows
+                    and not response.get("failureSubTypes")
+                    and not response.get("noMessageAbility")
+                )
+
             tail = items[-1]
-            next_cursor = tail.get("msgId") if isinstance(tail, dict) else None
-            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
-                return
+            next_cursor = tail.get("time") if isinstance(tail, dict) else None
+            if not isinstance(next_cursor, (str, int)):
+                return False
+            cursor_text = str(next_cursor)
+            cursor_key = cursor_text.lstrip("0")
+            if (
+                not cursor_text.isascii()
+                or not cursor_text.isdecimal()
+                or not cursor_key
+                or cursor_key in seen_cursors
+            ):
+                return False
             cursor = next_cursor
-            seen_cursors.add(cursor)
+            seen_cursors.add(cursor_key)
+        return False
 
     remaining_serials = set(serial_list)
-    _query_chunk(remaining_serials, limit=50, serials=None)
+    _query_chunk(remaining_serials, serials=None)
     for start_idx in range(0, len(serial_list), chunk_size):
         chunk = serial_list[start_idx : start_idx + chunk_size]
         remaining = remaining_serials.intersection(chunk)
         if not remaining:
             continue
         serial_param = ",".join(sorted(remaining))
-        limit = min(50, max(len(chunk), 20))
-        _query_chunk(remaining, limit, serials=serial_param)
-        remaining_serials.difference_update(serial for serial in chunk if serial in latest)
-        if remaining:
+        if _query_chunk(remaining, serials=serial_param):
+            latest.update(dict.fromkeys(remaining))
+        elif remaining:
             _owner._LOGGER.debug(
                 "alarm_prefetch_incomplete: serials=%s missing=%s",
                 serial_param,

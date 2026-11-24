@@ -43,7 +43,7 @@ def _render(
     serial: str,
     record: EzvizDeviceRecord,
     kind: DeviceKind,
-    alarms: dict,
+    alarms: dict[str, dict[str, Any] | None],
     refresh: bool,
 ) -> DeviceState:
     raw = dict(record.raw)
@@ -54,12 +54,13 @@ def _render(
     observed: frozenset[str] = frozenset()
     state_type: type[DeviceState]
     if kind == "camera":
+        alarm = alarms.get(serial)
         values = factory.camera_status(
             client,
             serial,
             raw,
-            refresh=refresh,
-            latest_alarm=alarms.get(serial),
+            refresh=refresh and (alarm is not None or serial not in alarms),
+            latest_alarm=alarm,
             switches=record.switches,
         )
         if not refresh:

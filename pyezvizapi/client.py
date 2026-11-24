@@ -1587,9 +1587,9 @@ class EzvizClient:
             limit: Clamp between 1 and 50 as enforced by the public API.
             date: Accepts ``YYYYMMDD`` string, :class:`datetime.date`, or
                 :class:`datetime.datetime`. Defaults to "today" in API format.
-            end_time: Pass the ``msgId`` (string) returned by the previous call
-                for pagination. The mobile app sends an empty string to fetch the
-                most recent message, so ``""`` is preserved on purpose here.
+            end_time: Pass the last message's raw ``time`` from the previous page,
+            without converting units or substituting ``msgId``. An empty string
+            requests the newest messages.
             max_retries: Number of additional attempts when the backend reports
                 temporary failures. Capped by :data:`MAX_RETRIES`.
         """
@@ -2425,8 +2425,8 @@ class EzvizClient:
 
     def _prefetch_latest_camera_alarms(
         self, serials: Iterable[str], *, chunk_size: int = 20
-    ) -> dict[str, dict[str, Any]]:
-        """Attempt to fetch the most recent unified message per camera serial."""
+    ) -> dict[str, JsonDict | None]:
+        """Fetch latest alarms; None means a complete query found no alarm."""
         return _devices._prefetch_latest_camera_alarms(
             self, serials, chunk_size=chunk_size, _owner=_sys.modules[__name__]
         )

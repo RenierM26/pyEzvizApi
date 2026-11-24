@@ -5,6 +5,23 @@ See [the release procedure](docs/releases.md) for the version/tag contract.
 
 ## Unreleased
 
+## v2.8.0 - 2026-11-24
+
+### Added
+
+- Add channel-aware camera switch writes and readback, with dedicated People
+  detection and all-day recording endpoints. Existing generic switch methods
+  retain their behavior.
+
+### Fixed
+
+- Detect incomplete or inconsistent EZVIZ device inventory pagination rather
+  than publishing a partial device snapshot.
+
+### Changed
+
+- Update the PyCryptodome dependency.
+
 ## v2.7.0 - 2026-11-22
 
 ### Added

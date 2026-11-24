@@ -75,7 +75,7 @@ from pyezvizapi.push.longlink.profile import (
     session_header_for_token,
     synchronize_http_headers,
 )
-from pyezvizapi.cloud.pagination import collect_pagelist
+from pyezvizapi.cloud.pagination import collect_pagelist, validate_device_inventory_page
 import pyezvizapi.cloud.deadline as _compat_module_2
 
 bounded_request_timeout = _compat_module_2.bounded_request_timeout
@@ -1490,6 +1490,8 @@ class EzvizClient:
         limit: int = 30,
         offset: int = 0,
         max_retries: int = 0,
+        *,
+        validate_page: Callable[[JsonDict], None] | None = None,
     ) -> Any:
         """Get data from pagelist API."""
         if max_retries > MAX_RETRIES:
@@ -1521,6 +1523,8 @@ class EzvizClient:
                     max_retries=retries,
                 )
                 if self._meta_code(payload) == 200:
+                    if validate_page is not None:
+                        validate_page(payload)
                     return payload
                 self.login()
                 _LOGGER.warning(
@@ -4441,8 +4445,18 @@ class EzvizClient:
         with request_budget_lock(self._token_lock):
             return deepcopy(cast(dict[str, Any], self._token))
 
-    def get_device(self) -> Any:
-        """Get ezviz devices filter."""
+    def get_device(self, *, strict: bool = False) -> Any:
+        """Return the account's raw CLOUD device inventory.
+
+        In strict mode, validate device rows before merging pages and require
+        an explicit final page. Raise PyEzvizError if those checks fail.
+        """
+        if strict:
+            return self._api_get_pagelist(
+                page_filter="CLOUD",
+                json_key="deviceInfos",
+                validate_page=validate_device_inventory_page,
+            )
         return self._api_get_pagelist(page_filter="CLOUD", json_key="deviceInfos")
 
     def get_connection(self) -> Any:

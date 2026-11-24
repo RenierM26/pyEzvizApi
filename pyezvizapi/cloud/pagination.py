@@ -13,6 +13,27 @@ from pyezvizapi.exceptions import PyEzvizError
 MAX_PAGELIST_PAGES = 1000
 
 
+def validate_device_inventory_page(payload: dict[str, Any]) -> None:
+    """Require explicit pagination and valid serials before merging inventory."""
+    page = payload.get("page")
+    if (
+        not isinstance(page, Mapping)
+        or not isinstance(has_next := page.get("hasNext"), (bool, int))
+        or has_next not in (False, True)
+    ):
+        raise PyEzvizError("Device inventory page requires an explicit hasNext flag")
+
+    devices = payload.get("deviceInfos")
+    if not isinstance(devices, list) or not all(
+        isinstance(device, dict)
+        and isinstance(serial := device.get("deviceSerial"), str)
+        and serial
+        and serial == serial.strip()
+        for device in devices
+    ):
+        raise PyEzvizError("Invalid deviceInfos on inventory page")
+
+
 def collect_pagelist(
     fetch: Callable[[int], dict[str, Any]],
     *,

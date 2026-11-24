@@ -127,3 +127,59 @@ def test_api_get_pagelist_stops_after_max_retries(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Max retries exceeded"):
         client._api_get_pagelist("SWITCH", json_key="SWITCH")
+
+
+@pytest.mark.parametrize(
+    ("bad_page", "message"),
+    [
+        ({"page": {"hasNext": True}, "deviceInfos": {"deviceSerial": "CAM1"}}, "deviceInfos"),
+        ({"page": {}, "deviceInfos": [{"deviceSerial": "CAM2"}]}, "hasNext"),
+        ({"deviceInfos": []}, "hasNext"),
+        ({"page": {"hasNext": False}, "deviceInfos": [{"deviceSerial": " "}]}, "deviceInfos"),
+        ({"page": {"hasNext": False}}, "deviceInfos"),
+    ],
+)
+def test_get_device_strict_rejects_incomplete_inventory(monkeypatch, bad_page, message) -> None:
+    client = _client()
+    responses = iter(
+        [
+            {"meta": {"code": 200}, **bad_page},
+            {"meta": {"code": 200}, "page": {"hasNext": False}, "deviceInfos": []},
+        ]
+    )
+    monkeypatch.setattr(client, "_request_json", lambda *args, **kwargs: next(responses))
+
+    with pytest.raises(PyEzvizError, match=message):
+        client.get_device(strict=True)
+
+
+@pytest.mark.parametrize("serials", [[], ["CAM1"], ["CAM1", "CAM2"]])
+def test_get_device_strict_collects_complete_inventory(monkeypatch, serials) -> None:
+    client = _client()
+    offsets: list[int] = []
+
+    def request(*args: Any, params: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        offset = params["offset"]
+        offsets.append(offset)
+        assert params["filter"] == "CLOUD"
+        return {
+            "meta": {"code": 200},
+            "page": {"hasNext": int(offset == 0 and len(serials) > 1)},
+            "deviceInfos": [{"deviceSerial": serial} for serial in serials[offset // 30 :][:1]],
+        }
+
+    monkeypatch.setattr(client, "_request_json", request)
+    assert client.get_device(strict=True) == [{"deviceSerial": serial} for serial in serials]
+    assert offsets == ([0, 30] if len(serials) > 1 else [0])
+
+
+def test_get_device_default_accepts_legacy_page_without_metadata(monkeypatch) -> None:
+    client = _client()
+    devices = [{"deviceSerial": "CAM1"}]
+    monkeypatch.setattr(
+        client,
+        "_request_json",
+        lambda *args, **kwargs: {"meta": {"code": 200}, "deviceInfos": devices},
+    )
+
+    assert client.get_device() == devices

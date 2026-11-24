@@ -9,7 +9,8 @@ import time
 from typing import Any
 
 from pyezvizapi.cloud.deadline import remaining_request_budget, request_deadline
-from pyezvizapi.constants import DeviceCatagories, DeviceSwitchType
+from pyezvizapi.cloud.operations.devices import _device_kind
+from pyezvizapi.constants import DeviceSwitchType
 from pyezvizapi.devices import factory
 from pyezvizapi.devices.detector import EzvizDetector
 from pyezvizapi.devices.intercom_events import IntercomEvent, get_intercom_events
@@ -35,24 +36,6 @@ from pyezvizapi.exceptions import (
     PyEzvizError,
 )
 from pyezvizapi.models import EzvizDeviceRecord
-
-
-def _kind(record: EzvizDeviceRecord, supported: list[str]) -> DeviceKind | None:
-    category = record.device_category
-    if category not in supported:
-        return None
-    info = record.raw.get("deviceInfos")
-    if category == DeviceCatagories.COMMON_DEVICE_CATEGORY.value and (
-        not isinstance(info, Mapping) or not info.get("hik")
-    ):
-        return None
-    categories: dict[str, DeviceKind] = {
-        DeviceCatagories.LIGHTING.value: "light",
-        DeviceCatagories.SOCKET.value: "plug",
-        DeviceCatagories.DETECTOR_DEVICE_CATEGORY.value: "detector",
-        DeviceCatagories.INTERCOM_MONITOR_CATEGORY.value: "monitor",
-    }
-    return categories.get(category, "camera")
 
 
 def _render(
@@ -163,7 +146,7 @@ def poll_devices(client: Any, options: DevicePollOptions) -> DeviceSnapshot:
             if len(records) > options.max_devices:
                 raise PyEzvizError("Inventory device budget exhausted")
             kinds: dict[str, DeviceKind | None] = {
-                s: _kind(r, client.SUPPORTED_CATEGORIES) for s, r in records.items()
+                s: _device_kind(r, client.SUPPORTED_CATEGORIES) for s, r in records.items()
             }
             alarms = (
                 client._prefetch_latest_camera_alarms(

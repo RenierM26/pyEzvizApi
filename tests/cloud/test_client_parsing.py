@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 import pyezvizapi.client as client_module
 from pyezvizapi.constants import DeviceCatagories
 from tests._paths import FIXTURES
@@ -118,6 +120,29 @@ def test_get_device_infos_can_filter_to_one_serial(monkeypatch) -> None:
 
     assert camera["deviceInfos"]["name"] == "Front Camera"
     assert client.get_device_infos("MISSING") == {}
+
+
+def test_serial_lookup_preserves_channel_resources_without_decoding_other_devices(
+    monkeypatch,
+) -> None:
+    client = _client_with_fixture(monkeypatch)
+    page = _page_list_fixture()
+    page["CLOUD"] = {
+        "res-a": {"deviceSerial": "CAM123", "channelNo": 2},
+        **page["CLOUD"],
+    }
+    page["CLOUD"]["res-cam"]["channelNo"] = 1
+    secondary = {"deviceSerial": "CAM123", "resourceId": "res-a", "localIndex": 2}
+    page["resourceInfos"].insert(0, secondary)
+    monkeypatch.setattr(client, "_get_page_list", lambda: page)
+
+    record = client.get_device_records("CAM123")
+
+    assert isinstance(record, client_module.EzvizDeviceRecord)
+    assert record.raw["CLOUD"] == {"res-cam": page["CLOUD"]["res-cam"]}
+    assert record.raw["resourceInfos"] == [secondary, page["resourceInfos"][1]]
+    assert page["deviceInfos"][1]["supportExt"] == "{}"
+    assert client.get_device_records("MISSING") == {}
 
 
 def test_full_pagelist_fixture_builds_device_infos(monkeypatch) -> None:
@@ -442,21 +467,62 @@ def test_prefetch_latest_camera_alarms_uses_global_fetch_before_filtered_chunks(
 
 def test_prefetch_latest_camera_alarms_follows_global_pages_until_matched() -> None:
     client = client_module.EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
-    calls = 0
+    calls = []
+    pages = {
+        "": {"messages": [{"deviceSerial": "OTHER", "msgId": "page-1"}], "hasNext": True},
+        "page-1": {
+            "messages": [{"deviceSerial": "CAM1", "msgId": "page-2"}],
+            "hasNext": False,
+        },
+    }
 
-    def fake_messages(**_kwargs: Any) -> dict[str, Any]:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return {"messages": [{"deviceSerial": "OTHER"}], "hasNext": True}
-        return {"messages": [{"deviceSerial": "CAM1", "msgId": "second-page"}], "hasNext": False}
+    def fake_messages(**kwargs: Any) -> dict[str, Any]:
+        assert kwargs["serials"] is None
+        calls.append(kwargs["end_time"])
+        return pages[kwargs["end_time"]]
 
     client.get_device_messages_list = fake_messages  # type: ignore[assignment]
 
     assert client._prefetch_latest_camera_alarms(["CAM1"]) == {
-        "CAM1": {"deviceSerial": "CAM1", "msgId": "second-page"}
+        "CAM1": {"deviceSerial": "CAM1", "msgId": "page-2"}
     }
-    assert calls == 2
+    assert calls == ["", "page-1"]
+
+
+@pytest.mark.parametrize("cursor", [None, "", "page-1"])
+def test_prefetch_falls_back_when_global_cursor_cannot_advance(cursor) -> None:
+    client = client_module.EzvizClient()
+    calls = []
+
+    def fake_messages(**kwargs: Any) -> dict[str, Any]:
+        query = (kwargs["serials"], kwargs["end_time"])
+        calls.append(query)
+        return {
+            (None, ""): {
+                "messages": [{"deviceSerial": "OTHER", "msgId": "page-1"}],
+                "hasNext": True,
+            },
+            (None, "page-1"): {
+                "messages": [{"deviceSerial": "OTHER", "msgId": cursor}],
+                "hasNext": True,
+            },
+            ("CAM1,CAM2", ""): {
+                "messages": [{"deviceSerial": "CAM1", "msgId": "filtered-1"}],
+                "hasNext": True,
+            },
+            ("CAM1,CAM2", "filtered-1"): {
+                "messages": [{"deviceSerial": "CAM2", "msgId": "filtered-2"}],
+                "hasNext": False,
+            },
+        }[query]
+
+    client.get_device_messages_list = fake_messages  # type: ignore[assignment]
+
+    assert client._prefetch_latest_camera_alarms(["CAM1", "CAM2"]) == {
+        "CAM1": {"deviceSerial": "CAM1", "msgId": "filtered-1"},
+        "CAM2": {"deviceSerial": "CAM2", "msgId": "filtered-2"},
+    }
+    assert calls == [(None, ""), (None, "page-1"), ("CAM1,CAM2", ""), ("CAM1,CAM2", "filtered-1")]
 
 
 def test_prefetch_latest_camera_alarms_tolerates_api_errors() -> None:

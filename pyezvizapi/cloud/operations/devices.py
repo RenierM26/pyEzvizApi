@@ -19,116 +19,84 @@ from pyezvizapi._shared.image_records import (
     is_image_envelope,
     parse_image_envelope,
 )
+from pyezvizapi.constants import DeviceCatagories
+from pyezvizapi.devices.snapshot import DeviceKind
 
 if TYPE_CHECKING:
     import pyezvizapi._typing.client as _owner_types
 
 
+_DEVICE_KINDS: dict[str, DeviceKind] = {
+    DeviceCatagories.LIGHTING.value: "light",
+    DeviceCatagories.SOCKET.value: "plug",
+    DeviceCatagories.DETECTOR_DEVICE_CATEGORY.value: "detector",
+    DeviceCatagories.INTERCOM_MONITOR_CATEGORY.value: "monitor",
+}
+
+
+def _device_kind(record: _owner_types.EzvizDeviceRecord, supported: list[str]) -> DeviceKind | None:
+    """Classify a device without changing how callers render or cache it."""
+    category = record.device_category
+    if category is None or category not in supported:
+        return None
+    info = record.raw.get("deviceInfos")
+    if category == DeviceCatagories.COMMON_DEVICE_CATEGORY.value and (
+        not isinstance(info, _StaticMapping) or not info.get("hik")
+    ):
+        return None
+    return _DEVICE_KINDS.get(category, "camera")
+
+
 def load_devices(
     self: _owner_types.EzvizClient, refresh: bool, *, _owner: _ModuleType
 ) -> _owner_types.JsonDict:
-    """Build status maps for cameras, lights, plugs and read-only detectors.
-
-    refresh: if True, camera.status() may perform network fetches (e.g. alarms).
-    Returns a combined mapping of serial -> status dict for supported devices.
-
-    Note: We update in place and do not remove keys for devices that may
-    have disappeared. Users who intentionally remove a device can restart
-    the integration to flush stale entries.
-    """
+    """Build and retain the legacy per-family status maps."""
     records = _owner.cast(
         "dict[str, _owner_types.EzvizDeviceRecord]", self.get_device_records(None)
     )
-    supported_categories = self.SUPPORTED_CATEGORIES
-
-    def _is_supported_camera(rec: _owner_types.EzvizDeviceRecord) -> bool:
-        """Return True if record should be treated as a camera."""
-        if rec.device_category not in supported_categories:
-            return False
-        if rec.device_category in (
-            _owner.DeviceCatagories.LIGHTING.value,
-            _owner.DeviceCatagories.SOCKET.value,
-            _owner.DeviceCatagories.DETECTOR_DEVICE_CATEGORY.value,
-            _owner.DeviceCatagories.INTERCOM_MONITOR_CATEGORY.value,
-        ):
-            return False
-        return not (
-            rec.device_category == _owner.DeviceCatagories.COMMON_DEVICE_CATEGORY.value
-            and (not (rec.raw.get("deviceInfos") or {}).get("hik"))
+    kinds = {
+        serial: _device_kind(record, self.SUPPORTED_CATEGORIES)
+        for serial, record in records.items()
+    }
+    latest_alarms = (
+        self._prefetch_latest_camera_alarms(
+            [serial for serial, kind in kinds.items() if kind == "camera"]
         )
-
-    latest_alarms: dict[str, dict[str, _owner_types.Any]] = {}
-    if refresh:
-        camera_serials = [
-            serial for serial, record in records.items() if _is_supported_camera(record)
-        ]
-        latest_alarms = self._prefetch_latest_camera_alarms(camera_serials)
-    for device, rec in records.items():
+        if refresh
+        else {}
+    )
+    factory = _owner.device_factory
+    renderers = {
+        "light": ("light_bulb_status", factory.light_bulb_status, self._light_bulbs),
+        "plug": ("smart_plug_status", factory.smart_plug_status, self._smart_plugs),
+        "detector": ("detector_status", factory.detector_status, self._detectors),
+    }
+    for serial, record in records.items():
+        kind = kinds[serial]
         # Monitors are exposed by poll_devices(), never legacy camera maps.
-        if (
-            rec.device_category in supported_categories
-            and rec.device_category != _owner.DeviceCatagories.INTERCOM_MONITOR_CATEGORY.value
-        ):
-            if rec.device_category == _owner.DeviceCatagories.COMMON_DEVICE_CATEGORY.value and (
-                not (rec.raw.get("deviceInfos") or {}).get("hik")
-            ):
-                continue
-            if rec.device_category == _owner.DeviceCatagories.LIGHTING.value:
-                try:
-                    self._light_bulbs[device] = _owner.device_factory.light_bulb_status(
-                        self, device, dict(rec.raw)
-                    )
-                except (_owner.PyEzvizError, KeyError, TypeError, ValueError) as err:
-                    _owner._LOGGER.warning(
-                        "Load_device_failed: serial=%s code=%s stage=%s error_type=%s",
-                        device,
-                        "load_error",
-                        "light_bulb_status",
-                        type(err).__name__,
-                    )
-            elif rec.device_category == _owner.DeviceCatagories.SOCKET.value:
-                try:
-                    self._smart_plugs[device] = _owner.device_factory.smart_plug_status(
-                        self, device, dict(rec.raw)
-                    )
-                except (_owner.PyEzvizError, KeyError, TypeError, ValueError) as err:
-                    _owner._LOGGER.warning(
-                        "Load_device_failed: serial=%s code=%s stage=%s error_type=%s",
-                        device,
-                        "load_error",
-                        "smart_plug_status",
-                        type(err).__name__,
-                    )
-            elif rec.device_category == _owner.DeviceCatagories.DETECTOR_DEVICE_CATEGORY.value:
-                try:
-                    self._detectors[device] = _owner.device_factory.detector_status(
-                        self, device, dict(rec.raw)
-                    )
-                except (_owner.PyEzvizError, KeyError, TypeError, ValueError) as err:
-                    _owner._LOGGER.warning(
-                        "Load_device_failed: serial=%s code=%s stage=%s error_type=%s",
-                        device,
-                        "load_error",
-                        "detector_status",
-                        type(err).__name__,
-                    )
+        if kind is None or kind == "monitor":
+            continue
+        stage = "camera_status"
+        try:
+            if kind == "camera":
+                self._cameras[serial] = factory.camera_status(
+                    self,
+                    serial,
+                    dict(record.raw),
+                    refresh=refresh,
+                    latest_alarm=latest_alarms.get(serial),
+                )
             else:
-                try:
-                    self._cameras[device] = _owner.device_factory.camera_status(
-                        self,
-                        device,
-                        dict(rec.raw),
-                        refresh=refresh,
-                        latest_alarm=latest_alarms.get(device),
-                    )
-                except (_owner.PyEzvizError, KeyError, TypeError, ValueError) as err:
-                    _owner._LOGGER.warning(
-                        "Load_device_failed: serial=%s code=%s stage=%s error_type=%s",
-                        device,
-                        "load_error",
-                        "camera_status",
-                        type(err).__name__,
-                    )
+                stage, render, cache = renderers[kind]
+                cache[serial] = render(self, serial, dict(record.raw))
+        except (_owner.PyEzvizError, KeyError, TypeError, ValueError) as err:
+            _owner._LOGGER.warning(
+                "Load_device_failed: serial=%s code=%s stage=%s error_type=%s",
+                serial,
+                "load_error",
+                stage,
+                type(err).__name__,
+            )
     return {**self._cameras, **self._light_bulbs, **self._smart_plugs, **self._detectors}
 
 
@@ -145,60 +113,55 @@ def _prefetch_latest_camera_alarms(
         return {}
     latest: dict[str, dict[str, _owner_types.Any]] = {}
 
-    def _query_chunk(missing: set[str], limit: int, *, filtered: bool) -> None:
-        """Populate latest alarms for a given chunk, retrying a few times."""
-        attempts = 0
-        while missing and attempts < _owner.MAX_UNIFIEDMSG_PAGES:
-            attempts += 1
-            serial_param = None if not filtered else ",".join(sorted(missing))
+    def _query_chunk(missing: set[str], limit: int, *, serials: str | None) -> None:
+        """Page through a fixed query until all requested serials are found."""
+        cursor = ""
+        seen_cursors = {cursor}
+        for _ in range(_owner.MAX_UNIFIEDMSG_PAGES):
             try:
                 response = self.get_device_messages_list(
-                    serials=serial_param, limit=limit, date="", end_time="", max_retries=1
+                    serials=serials, limit=limit, date="", end_time=cursor, max_retries=1
                 )
             except _owner.PyEzvizError as err:
                 _owner._LOGGER.debug(
-                    "alarm_prefetch_failed: serials=%s error=%r", serial_param or "", err
+                    "alarm_prefetch_failed: serials=%s error=%r", serials or "", err
                 )
                 return
             items = response.get("message") or response.get("messages") or []
             if not isinstance(items, list) or not items:
                 return
-            matched = 0
             for item in items:
-                serial = item.get("deviceSerial")
-                if isinstance(serial, str) and serial in missing and (serial not in latest):
+                if (
+                    isinstance(item, dict)
+                    and isinstance(serial := item.get("deviceSerial"), str)
+                    and serial in missing
+                ):
                     latest[serial] = item
-                    missing.discard(serial)
-                    matched += 1
-            if filtered and matched < len(missing):
+                    missing.remove(serial)
+            if not missing or not response.get("hasNext"):
                 return
-            if not response.get("hasNext"):
+            tail = items[-1]
+            next_cursor = tail.get("msgId") if isinstance(tail, dict) else None
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
                 return
+            cursor = next_cursor
+            seen_cursors.add(cursor)
 
     remaining_serials = set(serial_list)
-    before = set(remaining_serials)
-    _query_chunk(remaining_serials, limit=50, filtered=False)
-    satisfied = before - remaining_serials
-    if satisfied:
-        remaining_serials.difference_update(satisfied)
+    _query_chunk(remaining_serials, limit=50, serials=None)
     for start_idx in range(0, len(serial_list), chunk_size):
-        chunk = [serial for serial in serial_list[start_idx : start_idx + chunk_size] if serial]
-        if not chunk:
-            continue
-        remaining = {serial for serial in chunk if serial in remaining_serials}
+        chunk = serial_list[start_idx : start_idx + chunk_size]
+        remaining = remaining_serials.intersection(chunk)
         if not remaining:
             continue
-        chunk_key = ",".join(chunk)
+        serial_param = ",".join(sorted(remaining))
         limit = min(50, max(len(chunk), 20))
-        before_chunk = set(remaining)
-        _query_chunk(remaining, limit, filtered=True)
-        satisfied_chunk = before_chunk - remaining
-        if satisfied_chunk:
-            remaining_serials.difference_update(satisfied_chunk)
+        _query_chunk(remaining, limit, serials=serial_param)
+        remaining_serials.difference_update(serial for serial in chunk if serial in latest)
         if remaining:
             _owner._LOGGER.debug(
                 "alarm_prefetch_incomplete: serials=%s missing=%s",
-                chunk_key,
+                serial_param,
                 ",".join(sorted(remaining)),
             )
     return latest
@@ -245,22 +208,53 @@ def load_detectors(
     return self._detectors
 
 
+def _cloud_resource_keys(
+    cloud: _owner_types.JsonDict, devices: dict[str, _owner_types.JsonDict]
+) -> dict[str, str]:
+    """Choose the legacy single CLOUD resource for each requested device."""
+    cloud_keys: dict[str, tuple[bool, str]] = {}
+    for resource_id, row in cloud.items():
+        if not isinstance(row, dict):
+            continue
+        resource_serial = row.get("deviceSerial")
+        if isinstance(resource_serial, str) and resource_serial in devices:
+            # Keep the single-resource shape, preferring channel 1 when present.
+            # Tie-break by resource ID so pagelist dict ordering cannot change it.
+            priority = (row.get("channelNo") not in (1, "1"), resource_id)
+            if resource_serial not in cloud_keys or priority < cloud_keys[resource_serial]:
+                cloud_keys[resource_serial] = priority
+    return {serial: resource_id for serial, (_, resource_id) in cloud_keys.items()}
+
+
 def get_device_infos(
     self: _owner_types.EzvizClient, serial: str | None, *, _owner: _ModuleType
 ) -> _owner_types.JsonDict:
     """Load all devices and build dict per device serial."""
     devices = self._get_page_list()
+    device_rows = {
+        device["deviceSerial"]: device
+        for device in devices.get("deviceInfos") or []
+        if not serial or device["deviceSerial"] == serial
+    }
+    if not device_rows:
+        return {}
+
+    cloud = devices.get("CLOUD", {})
+    cloud_keys = _cloud_resource_keys(cloud, device_rows)
+
+    resources: dict[str, list[_owner_types.JsonDict]] = {}
+    for row in devices.get("resourceInfos") or []:
+        if not isinstance(row, dict):
+            continue
+        resource_serial = row.get("deviceSerial")
+        if isinstance(resource_serial, str) and resource_serial in device_rows:
+            resources.setdefault(resource_serial, []).append(row)
+
     result: dict[str, _owner_types.Any] = {}
-    for device in devices.get("deviceInfos", []) or []:
-        _serial = device["deviceSerial"]
-        _res_id_list = {
-            item
-            for item in devices.get("CLOUD", {})
-            if devices["CLOUD"][item].get("deviceSerial") == _serial
-        }
-        _res_id = _res_id_list.pop() if _res_id_list else "NONE"
+    for _serial, device in device_rows.items():
+        _res_id = cloud_keys.get(_serial, "NONE")
         result[_serial] = {
-            "CLOUD": {_res_id: devices.get("CLOUD", {}).get(_res_id, {})},
+            "CLOUD": {_res_id: cloud.get(_res_id, {})},
             "VTM": {_res_id: devices.get("VTM", {}).get(_res_id, {})},
             "P2P": devices.get("P2P", {}).get(_serial, {}),
             "CONNECTION": devices.get("CONNECTION", {}).get(_serial, {}),
@@ -276,11 +270,7 @@ def get_device_infos(
             "SWITCH": devices.get("SWITCH", {}).get(_serial, {}),
             "CUSTOM_TAG": devices.get("CUSTOM_TAG", {}).get(_serial, {}),
             "VIDEO_QUALITY": {_res_id: devices.get("VIDEO_QUALITY", {}).get(_res_id, {})},
-            "resourceInfos": [
-                item
-                for item in devices.get("resourceInfos") or []
-                if isinstance(item, dict) and item.get("deviceSerial") == _serial
-            ],
+            "resourceInfos": resources.get(_serial, []),
             "WIFI": devices.get("WIFI", {}).get(_serial, {}),
             "deviceInfos": device,
         }
@@ -312,6 +302,10 @@ def get_device_records(
 
     Falls back to raw when a specific serial is requested but not found.
     """
+    if serial:
+        device = self.get_device_infos(serial)
+        return _owner.EzvizDeviceRecord.from_api(serial, device) if device else {}
+
     devices = self.get_device_infos()
     records = _owner.build_device_records_map(devices)
     if serial is None:

@@ -5435,7 +5435,10 @@ def test_get_device_records_returns_map_single_record_and_raw_fallback(monkeypat
         "ODD123": {"unexpected": "shape"},
     }
 
-    monkeypatch.setattr(client, "get_device_infos", lambda: device_infos)
+    monkeypatch.setattr(
+        client, "get_device_infos",
+        lambda serial=None: device_infos if not serial else device_infos.get(serial, {}),
+    )
 
     records = cast(dict[str, Any], client.get_device_records())
     assert records["CAM123"].serial == "CAM123"

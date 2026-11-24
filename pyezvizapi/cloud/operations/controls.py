@@ -12,6 +12,8 @@ from collections.abc import Mapping as _StaticMapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
+from pyezvizapi.cloud.endpoints import API_ENDPOINT_PEOPLE_DETECTION_SWITCH
+
 if TYPE_CHECKING:
     import pyezvizapi._typing.client as _owner_types
 
@@ -171,7 +173,7 @@ def set_people_detection(
         raise _owner.PyEzvizError("Can't gather proper data. Max retries exceeded.")
     payload = self._request_json(
         "POST",
-        _owner.API_ENDPOINT_PEOPLE_DETECTION_SWITCH,
+        API_ENDPOINT_PEOPLE_DETECTION_SWITCH,
         data={
             "deviceSerial": serial,
             "channelNo": channel_no,

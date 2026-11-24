@@ -157,6 +157,34 @@ def switch_status_other(
     return True
 
 
+def set_people_detection(
+    self: _owner_types.EzvizClient,
+    serial: str,
+    enabled: bool,
+    channel_no: int,
+    max_retries: int,
+    *,
+    _owner: _ModuleType,
+) -> bool:
+    """Write switch 200 using the app's dedicated People detection endpoint."""
+    if max_retries > _owner.MAX_RETRIES:
+        raise _owner.PyEzvizError("Can't gather proper data. Max retries exceeded.")
+    payload = self._request_json(
+        "POST",
+        _owner.API_ENDPOINT_PEOPLE_DETECTION_SWITCH,
+        data={
+            "deviceSerial": serial,
+            "channelNo": channel_no,
+            "enable": int(enabled),
+            "type": _owner.DeviceSwitchType.HUMAN_INTELLIGENT_DETECTION.value,
+        },
+        retry_401=True,
+        max_retries=max_retries,
+    )
+    self._ensure_ok(payload, "Could not set people detection")
+    return True
+
+
 def set_camera_defence(
     self: _owner_types.EzvizClient,
     serial: str,

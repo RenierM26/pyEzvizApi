@@ -185,6 +185,7 @@ API_ENDPOINT_STREAMING_RECORDS_INTELLIGENT = (
 )
 API_ENDPOINT_STREAMING_RECORDS_V2 = _compat_module_4.API_ENDPOINT_STREAMING_RECORDS_V2
 API_ENDPOINT_SWITCH_DEFENCE_MODE = _compat_module_4.API_ENDPOINT_SWITCH_DEFENCE_MODE
+API_ENDPOINT_PEOPLE_DETECTION_SWITCH = _compat_module_4.API_ENDPOINT_PEOPLE_DETECTION_SWITCH
 API_ENDPOINT_SWITCH_OTHER = _compat_module_4.API_ENDPOINT_SWITCH_OTHER
 API_ENDPOINT_SWITCH_SOUND_ALARM = _compat_module_4.API_ENDPOINT_SWITCH_SOUND_ALARM
 API_ENDPOINT_SWITCH_STATUS = _compat_module_4.API_ENDPOINT_SWITCH_STATUS
@@ -1790,6 +1791,42 @@ class EzvizClient:
             max_retries,
             _owner=_sys.modules[__name__],
         )
+
+    def set_people_detection(
+        self, serial: str, enabled: bool, *, channel_no: int, max_retries: int = 0
+    ) -> bool:
+        """Set the dedicated People detection switch (200) for a camera channel."""
+        return _controls.set_people_detection(
+            self, serial, enabled, channel_no, max_retries, _owner=_sys.modules[__name__]
+        )
+
+    def set_camera_switch(
+        self,
+        serial: str,
+        switch_type: DeviceSwitchType | int,
+        enabled: bool,
+        *,
+        channel_no: int,
+        max_retries: int = 0,
+    ) -> bool:
+        """Write a camera switch using the route for the caller-selected channel.
+
+        Channel zero keeps the generic device-wide route. Camera channels use
+        the dedicated endpoints for People detection and all-day recording.
+        This does not change cached state; poll inventory for readback.
+        """
+        switch_id = switch_type.value if isinstance(switch_type, DeviceSwitchType) else switch_type
+        if channel_no != 0:
+            if switch_id == DeviceSwitchType.HUMAN_INTELLIGENT_DETECTION.value:
+                return self.set_people_detection(
+                    serial, enabled, channel_no=channel_no, max_retries=max_retries
+                )
+            if switch_id == DeviceSwitchType.ALL_DAY_VIDEO.value:
+                return self.switch_status_other(
+                    serial, switch_id, int(enabled), channel_no, max_retries=max_retries
+                )
+        self.set_switch(serial, switch_id, enabled, channel=channel_no, max_retries=max_retries)
+        return True
 
     def set_camera_defence(
         self,

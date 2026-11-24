@@ -14,7 +14,7 @@ def switch_rows(value: Any, *, channel_no: int = 0) -> dict[int, Mapping[str, An
     """
     scoped: dict[int, Mapping[str, Any]] = {}
     unscoped: dict[int, Mapping[str, Any]] = {}
-    for item in value if isinstance(value, list) else ():
+    for item in value if isinstance(value, (list, tuple)) else ():
         if not isinstance(item, Mapping) or type(item.get("type")) is not int:
             continue
         kind = item["type"]

@@ -525,6 +525,72 @@ def test_switch_request_helpers_build_modern_and_legacy_payloads(monkeypatch) ->
     assert calls[3]["params"] == {"channelNo": 3, "enable": 1, "switchType": 29}
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_camera_switch_routes_use_the_selected_channel(monkeypatch, enabled) -> None:
+    client = _client()
+    requests_sent: list[tuple[str, str, dict[str, Any]]] = []
+
+    def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        requests_sent.append((method, path, kwargs))
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", request)
+    client._cameras["CAM123"] = {"switches": {7: not enabled}}
+
+    assert client.set_camera_switch(
+        "CAM123", DeviceSwitchType.HUMAN_INTELLIGENT_DETECTION, enabled, channel_no=2, max_retries=1
+    )
+    assert client.set_camera_switch("CAM123", 29, enabled, channel_no=1)
+    for switch_id in (200, 29):
+        assert client.set_camera_switch("CAM123", switch_id, enabled, channel_no=0)
+    assert client.set_camera_switch("CAM123", 7, enabled, channel_no=2)
+
+    flag = int(enabled)
+    assert requests_sent == [
+        (
+            "POST",
+            "/v3/faceservice/cateye/switch",
+            {
+                "data": {"deviceSerial": "CAM123", "channelNo": 2, "enable": flag, "type": 200},
+                "retry_401": True,
+                "max_retries": 1,
+            },
+        ),
+        (
+            "PUT",
+            "/v3/devices/CAM123/switch",
+            {
+                "params": {"channelNo": 1, "enable": flag, "switchType": 29},
+                "retry_401": True,
+                "max_retries": 0,
+            },
+        ),
+        *[
+            (
+                "PUT",
+                f"/v3/devices/CAM123/{channel}/{flag}/{switch_id}/switchStatus",
+                {"retry_401": True, "max_retries": 0},
+            )
+            for channel, switch_id in [(0, 200), (0, 29), (2, 7)]
+        ],
+    ]
+    assert client._cameras["CAM123"]["switches"] == {7: not enabled}
+
+
+def test_people_detection_rejection_does_not_retry_on_a_different_route(monkeypatch) -> None:
+    client = _client()
+    requests_sent: list[str] = []
+
+    def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        requests_sent.append(path)
+        return {"meta": {"code": 400}}
+
+    monkeypatch.setattr(client, "_request_json", request)
+    with pytest.raises(PyEzvizError, match="Could not set people detection"):
+        client.set_people_detection("CAM123", True, channel_no=1)
+    assert requests_sent == ["/v3/faceservice/cateye/switch"]
+
+
 def test_set_switch_falls_back_to_legacy_and_preserves_first_error(monkeypatch) -> None:
     client = _client()
     calls: list[tuple[str, int]] = []

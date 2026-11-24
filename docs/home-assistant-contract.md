@@ -104,6 +104,27 @@ port, an explicit zero, and unavailable metadata. It is not a capability or
 availability check. Do not use it to suppress a user-configured local stream
 or to make cloud fallback depend on the reported port alone.
 
+## Camera switch writes and readback
+
+Use `client.set_camera_switch(serial, switch_type, enabled, channel_no=channel)`
+for camera switches when the caller has selected the target channel. Nonzero
+channels use the app's dedicated People detection (200) and alternate all-day
+recording (29) endpoints. Channel zero preserves the generic device-wide route,
+and other switch types retain the generic v3-to-legacy fallback on the same
+channel. Existing low-level switch methods retain their behavior.
+`client.set_people_detection(serial, enabled, channel_no=channel)` explicitly
+selects the dedicated endpoint without generic fallback; this is distinct
+from the IntelligentAPP AI Human Detection setting.
+
+Read a fresh poll with
+`pyezvizapi.devices.observation.camera_switch_states(data, channel_no=channel)`.
+It accepts a compatibility dict or a camera snapshot's immutable `values`.
+A matching channel row takes precedence over an unscoped row; other channels
+are ignored. If raw rows are absent, the legacy flattened mapping has no
+channel information. A missing switch is omitted; an unrecognized flag is
+`None`. A successful write only means the server accepted the request.
+The integration still decides entity availability and which channel to use.
+
 ## Alarm timestamps and DST
 
 Motion calculations prefer a valid numeric UTC epoch (`alarmStartTime` or

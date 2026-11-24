@@ -9,6 +9,7 @@ module must still affect dependent operations. No copied hook snapshots.
 from __future__ import annotations
 
 from collections.abc import Mapping as _StaticMapping
+import contextlib
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
@@ -85,6 +86,7 @@ def load_devices(
                     dict(record.raw),
                     refresh=refresh,
                     latest_alarm=latest_alarms.get(serial),
+                    switches=record.switches,
                 )
             else:
                 stage, render, cache = renderers[kind]
@@ -209,7 +211,9 @@ def load_detectors(
 
 
 def _cloud_resource_keys(
-    cloud: _owner_types.JsonDict, devices: dict[str, _owner_types.JsonDict]
+    cloud: _owner_types.JsonDict,
+    devices: dict[str, _owner_types.JsonDict],
+    resource_ids: dict[str, set[str]],
 ) -> dict[str, str]:
     """Choose the legacy single CLOUD resource for each requested device."""
     cloud_keys: dict[str, tuple[bool, str]] = {}
@@ -218,6 +222,7 @@ def _cloud_resource_keys(
             continue
         resource_serial = row.get("deviceSerial")
         if isinstance(resource_serial, str) and resource_serial in devices:
+            resource_ids.setdefault(resource_serial, set()).add(resource_id)
             # Keep the single-resource shape, preferring channel 1 when present.
             # Tie-break by resource ID so pagelist dict ordering cannot change it.
             priority = (row.get("channelNo") not in (1, "1"), resource_id)
@@ -227,7 +232,11 @@ def _cloud_resource_keys(
 
 
 def get_device_infos(
-    self: _owner_types.EzvizClient, serial: str | None, *, _owner: _ModuleType
+    self: _owner_types.EzvizClient,
+    serial: str | None,
+    *,
+    _owner: _ModuleType,
+    sources: dict[str, _owner_types.JsonDict] | None = None,
 ) -> _owner_types.JsonDict:
     """Load all devices and build dict per device serial."""
     devices = self._get_page_list()
@@ -240,7 +249,8 @@ def get_device_infos(
         return {}
 
     cloud = devices.get("CLOUD", {})
-    cloud_keys = _cloud_resource_keys(cloud, device_rows)
+    resource_ids: dict[str, set[str]] = {}
+    cloud_keys = _cloud_resource_keys(cloud, device_rows, resource_ids)
 
     resources: dict[str, list[_owner_types.JsonDict]] = {}
     for row in devices.get("resourceInfos") or []:
@@ -274,21 +284,43 @@ def get_device_infos(
             "WIFI": devices.get("WIFI", {}).get(_serial, {}),
             "deviceInfos": device,
         }
-        try:
-            support_ext = result[_serial].get("deviceInfos", {}).get("supportExt")
-            if isinstance(support_ext, str) and support_ext:
-                result[_serial]["deviceInfos"]["supportExt"] = _owner.json.loads(support_ext)
-        except (TypeError, ValueError):
-            # Malformed optional supportExt must not discard otherwise usable device data.
-            pass
-        status_section = result[_serial]["STATUS"]
-        # Preserve invalid per-device data for the isolated renderer boundary;
-        # it must not prevent acquisition of healthy siblings.
-        if isinstance(status_section, _StaticMapping):
-            _owner.convert_to_dict(status_section.get("optionals"))
+        projected = result[_serial]
+        if sources is not None:
+            ids = resource_ids.get(_serial, set()) | {
+                resource_id
+                for row in projected["resourceInfos"]
+                if isinstance(resource_id := row.get("resourceId"), str)
+            }
+            sources[_serial] = {
+                **projected,
+                **{
+                    section: {
+                        resource_id: rows[resource_id] for resource_id in ids if resource_id in rows
+                    }
+                    for section in ("CLOUD", "VTM", "CHANNEL", "VIDEO_QUALITY")
+                    if isinstance(rows := devices.get(section), dict)
+                },
+            }
+        _decode_device_fields(projected, _owner=_owner)
     if not serial:
         return result
     return _owner.cast("dict[_owner_types.Any, _owner_types.Any]", result.get(serial, {}))
+
+
+def _decode_device_fields(device: _owner_types.JsonDict, *, _owner: _ModuleType) -> None:
+    """Decode the legacy view without mutating the original pagelist."""
+    info = device["deviceInfos"]
+    support_ext = info.get("supportExt")
+    if isinstance(support_ext, str) and support_ext:
+        with contextlib.suppress(TypeError, ValueError):
+            device["deviceInfos"] = {**info, "supportExt": _owner.json.loads(support_ext)}
+    status = device["STATUS"]
+    if isinstance(status, _StaticMapping) and isinstance(
+        optionals := status.get("optionals"), dict
+    ):
+        decoded = dict(optionals)
+        _owner.convert_to_dict(decoded)
+        device["STATUS"] = {**status, "optionals": decoded}
 
 
 def get_device_records(
@@ -298,19 +330,20 @@ def get_device_records(
     | _owner_types.EzvizDeviceRecord
     | _owner_types.JsonDict
 ):
-    """Return devices as EzvizDeviceRecord mapping (or single record).
-
-    Falls back to raw when a specific serial is requested but not found.
-    """
+    """Return records with both the legacy projection and preserved wire values."""
+    sources: dict[str, _owner_types.JsonDict] = {}
+    devices = get_device_infos(self, serial, _owner=_owner, sources=sources)
     if serial:
-        device = self.get_device_infos(serial)
-        return _owner.EzvizDeviceRecord.from_api(serial, device) if device else {}
-
-    devices = self.get_device_infos()
-    records = _owner.build_device_records_map(devices)
-    if serial is None:
-        return records
-    return records.get(serial) or devices.get(serial, {})
+        return (
+            _owner.EzvizDeviceRecord.from_api(serial, devices, source=sources[serial])
+            if devices
+            else {}
+        )
+    records = {
+        key: _owner.EzvizDeviceRecord.from_api(key, device, source=sources[key])
+        for key, device in devices.items()
+    }
+    return records if serial is None else records.get(serial, {})
 
 
 def get_accessory(

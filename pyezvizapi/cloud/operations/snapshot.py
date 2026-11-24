@@ -55,7 +55,12 @@ def _render(
     state_type: type[DeviceState]
     if kind == "camera":
         values = factory.camera_status(
-            client, serial, raw, refresh=refresh, latest_alarm=alarms.get(serial)
+            client,
+            serial,
+            raw,
+            refresh=refresh,
+            latest_alarm=alarms.get(serial),
+            switches=record.switches,
         )
         if not refresh:
             for key in (

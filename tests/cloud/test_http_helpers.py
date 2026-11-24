@@ -5420,25 +5420,18 @@ def test_get_alarminfo_raises_contextual_error(monkeypatch) -> None:
 
 def test_get_device_records_returns_map_single_record_and_raw_fallback(monkeypatch) -> None:
     client = _client()
-    device_infos = {
-        "CAM123": {
-            "deviceInfos": {
-                "deviceSerial": "CAM123",
-                "name": "Front door",
-                "deviceCategory": "camera",
-                "version": "1.0",
-                "status": 1,
-            },
-            "STATUS": {"globalStatus": 1, "optionals": {}},
-            "SWITCH": [{"type": 1, "enable": 1}],
-        },
-        "ODD123": {"unexpected": "shape"},
+    page = {
+        "deviceInfos": [{
+            "deviceSerial": "CAM123",
+            "name": "Front door",
+            "deviceCategory": "camera",
+            "version": "1.0",
+            "status": 1,
+        }],
+        "STATUS": {"CAM123": {"globalStatus": 1, "optionals": {}}},
+        "SWITCH": {"CAM123": [{"type": 1, "enable": 1}]},
     }
-
-    monkeypatch.setattr(
-        client, "get_device_infos",
-        lambda serial=None: device_infos if not serial else device_infos.get(serial, {}),
-    )
+    monkeypatch.setattr(client, "_get_page_list", lambda: page)
 
     records = cast(dict[str, Any], client.get_device_records())
     assert records["CAM123"].serial == "CAM123"

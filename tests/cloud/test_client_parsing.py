@@ -7,6 +7,7 @@ import pytest
 
 import pyezvizapi.client as client_module
 from pyezvizapi.constants import DeviceCatagories
+from pyezvizapi.devices.channels import camera_channels
 from tests._paths import FIXTURES
 
 FULL_PAGE_LIST_FIXTURE = FIXTURES / "page_list_response.json"
@@ -132,6 +133,7 @@ def test_serial_lookup_preserves_channel_resources_without_decoding_other_device
         **page["CLOUD"],
     }
     page["CLOUD"]["res-cam"]["channelNo"] = 1
+    page["CHANNEL"]["res-a"] = {"channelNo": 2}
     secondary = {"deviceSerial": "CAM123", "resourceId": "res-a", "localIndex": 2}
     page["resourceInfos"].insert(0, secondary)
     monkeypatch.setattr(client, "_get_page_list", lambda: page)
@@ -142,7 +144,45 @@ def test_serial_lookup_preserves_channel_resources_without_decoding_other_device
     assert record.raw["CLOUD"] == {"res-cam": page["CLOUD"]["res-cam"]}
     assert record.raw["resourceInfos"] == [secondary, page["resourceInfos"][1]]
     assert page["deviceInfos"][1]["supportExt"] == "{}"
+    assert record.source["CLOUD"] == {
+        "res-a": page["CLOUD"]["res-a"],
+        "res-cam": page["CLOUD"]["res-cam"],
+    }
+    assert record.source["CHANNEL"] == page["CHANNEL"]
+    assert record.raw["CHANNEL"] == {"res-cam": {"channelNo": 1}}
+    assert record.source["deviceInfos"]["supportExt"] == '{"SupportExt": "camera"}'
+    assert record.raw["deviceInfos"]["supportExt"] == {"SupportExt": "camera"}
+    assert record.source["STATUS"]["optionals"]["NightVision_Model"] == "{}"
+    assert record.raw["STATUS"]["optionals"]["NightVision_Model"] == {}
+    assert page["STATUS"]["CAM123"]["optionals"]["NightVision_Model"] == "{}"
     assert client.get_device_records("MISSING") == {}
+
+
+def test_poll_without_products_info_keeps_state_and_channel_routes(monkeypatch) -> None:
+    client = _client_with_fixture(monkeypatch)
+    page = _full_page_list_fixture()
+    options = client_module.DevicePollOptions(include_camera_alarms=False)
+    monkeypatch.setattr(client, "_get_page_list", lambda: page)
+
+    def unexpected_switch_parse(_rows):
+        raise AssertionError("camera renderer must reuse the record's switch map")
+
+    monkeypatch.setattr("pyezvizapi.devices.camera.switch_values", unexpected_switch_parse)
+    full = client.poll_devices(options)
+    assert len(full.devices) == len(page["deviceInfos"])
+    assert all(health.current for health in full.health.values())
+
+    page.pop("PRODUCTS_INFO")
+    reduced = client.poll_devices(options)
+
+    assert reduced.devices == full.devices
+    assert {
+        serial: camera_channels(values)
+        for serial, values in reduced.as_dict("camera").items()
+    } == {
+        serial: camera_channels(values)
+        for serial, values in full.as_dict("camera").items()
+    }
 
 
 def test_full_pagelist_fixture_builds_device_infos(monkeypatch) -> None:
@@ -197,6 +237,7 @@ def test_full_pagelist_fixture_load_devices_routes_supported_categories(
         *,
         refresh: bool,
         latest_alarm: dict[str, Any] | None,
+        switches: dict[int, bool] | None = None,
     ) -> dict[str, Any]:
         calls.append(("camera", serial))
         return {
@@ -244,7 +285,7 @@ def test_load_devices_routes_supported_categories(monkeypatch) -> None:
     client = _client_with_fixture(monkeypatch)
 
     class FakeCamera:
-        def __init__(self, _client: client_module.EzvizClient, serial: str, device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, device_obj: dict[str, Any], *, switches=None) -> None:
             self.serial = serial
             self.device_obj = device_obj
 
@@ -295,7 +336,7 @@ def test_load_light_bulbs_returns_only_light_statuses(monkeypatch) -> None:
     client = _client_with_fixture(monkeypatch)
 
     class FakeCamera:
-        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any], *, switches=None) -> None:
             self.serial = serial
 
         def status(self, *, refresh: bool = True, latest_alarm: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -337,7 +378,7 @@ def test_load_smart_plugs_returns_only_plug_statuses(monkeypatch) -> None:
     client = _client_with_fixture(monkeypatch)
 
     class FakeCamera:
-        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any], *, switches=None) -> None:
             self.serial = serial
 
         def status(self, *, refresh: bool = True, latest_alarm: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -379,7 +420,7 @@ def test_load_devices_keeps_previous_light_status_when_new_status_fails(monkeypa
     client._light_bulbs["LIGHT123"] = {"kind": "light", "serial": "LIGHT123", "stale": True}
 
     class FakeCamera:
-        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any], *, switches=None) -> None:
             self.serial = serial
 
         def status(self, *, refresh: bool = True, latest_alarm: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -545,7 +586,7 @@ def test_load_devices_passes_prefetched_latest_alarm_to_camera_status(monkeypatc
         return {"CAM123": {"deviceSerial": "CAM123", "msgId": "alarm-1"}}
 
     class FakeCamera:
-        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any], *, switches=None) -> None:
             self.serial = serial
 
         def status(
@@ -598,7 +639,7 @@ def test_load_devices_skips_alarm_prefetch_when_refresh_false(monkeypatch) -> No
         raise AssertionError("prefetch should not run when refresh is false")
 
     class FakeCamera:
-        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any], *, switches=None) -> None:
             self.serial = serial
 
         def status(

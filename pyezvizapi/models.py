@@ -152,8 +152,11 @@ class EzvizDeviceRecord:
     # Switches collapsed to a simple type->enabled map for convenience
     switches: Mapping[int, bool] = field(default_factory=dict)
 
-    # Full unmodified mapping for anything not yet modeled
+    # Legacy per-device projection, including decoded optionals.
     raw: Mapping[str, Any] = field(default_factory=dict)
+
+    # Original device fields and all resource rows retained when acquired from pagelist.
+    source: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def chime_music(self) -> EzvizChimeMusic | None:
@@ -163,7 +166,9 @@ class EzvizDeviceRecord:
         return EzvizChimeMusic.from_api(self.optionals.get("ChimeMusic"))
 
     @classmethod
-    def from_api(cls, serial: str, data: Mapping[str, Any]) -> EzvizDeviceRecord:
+    def from_api(
+        cls, serial: str, data: Mapping[str, Any], *, source: Mapping[str, Any] | None = None
+    ) -> EzvizDeviceRecord:
         """Build EzvizDeviceRecord from raw pagelist mapping.
 
         Tolerates missing or partially shaped keys.
@@ -202,6 +207,7 @@ class EzvizDeviceRecord:
             optionals=optionals,
             switches=switches,
             raw=data,
+            source=source if source is not None else data,
         )
 
 

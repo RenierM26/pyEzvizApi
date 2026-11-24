@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import datetime
 import logging
 from typing import Any, Literal, TypedDict, cast
@@ -110,6 +111,8 @@ class EzvizCamera:
         client: Any,
         serial: str,
         device_obj: EzvizDeviceRecord | dict | None = None,
+        *,
+        switches: Mapping[int, bool] | None = None,
     ) -> None:
         """Initialize the camera object.
 
@@ -137,7 +140,9 @@ class EzvizCamera:
             self._device = device_obj or {}
         self._last_alarm: dict[str, Any] = {}
         self._switch: dict[int, bool] = {}
-        if self._record and getattr(self._record, "switches", None):
+        if switches is not None:
+            self._switch = dict(switches)
+        elif self._record and getattr(self._record, "switches", None):
             self._switch = {int(k): bool(v) for k, v in self._record.switches.items()}
         else:
             self._switch = switch_values(self._device.get("SWITCH"))

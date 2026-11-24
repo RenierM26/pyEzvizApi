@@ -51,6 +51,23 @@ def power_state(value: Any) -> bool | None:
     return {True: True, False: False, "1": True, "0": False}.get(value)
 
 
+def camera_switch_states(data: Mapping[str, Any], *, channel_no: int = 0) -> dict[int, bool | None]:
+    """Read explicit channel rows with unscoped observations as fallback.
+
+    Use the legacy flattened mapping only when raw switch rows are absent.
+    A present switch with an unrecognized value maps to None, not False.
+    """
+    if "SWITCH" in data:
+        return {
+            kind: power_state(row.get("enable"))
+            for kind, row in switch_rows(data["SWITCH"], channel_no=channel_no).items()
+        }
+    switches = data.get("switches")
+    if not isinstance(switches, Mapping):
+        return {}
+    return {kind: power_state(value) for kind, value in switches.items() if type(kind) is int}
+
+
 def plug_power(raw: Mapping) -> tuple[bool, Any]:
     """Select the app's device-level plug channel before strict power validation."""
     row = switch_rows(raw.get("SWITCH"), channel_no=0).get(DeviceSwitchType.PLUG.value)

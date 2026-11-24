@@ -80,6 +80,7 @@ API_ENDPOINT_RETURN_PANORAMIC = "/api/panoramic/devices/pics"
 # Videogo DeviceApi
 API_ENDPOINT_DEVICES = "/v3/devices/"
 API_ENDPOINT_SWITCH_STATUS = "/switchStatus"
+API_ENDPOINT_PEOPLE_DETECTION_SWITCH = "/v3/faceservice/cateye/switch"
 API_ENDPOINT_SWITCH_OTHER = "/switch"
 API_ENDPOINT_PTZCONTROL = "/ptzControl"
 API_ENDPOINT_ALARM_SOUND = "/alarm/sound"

@@ -16,6 +16,7 @@ from pyezvizapi.cloud import deadline
 from pyezvizapi.cloud.operations import snapshot as operation
 from pyezvizapi.constants import DeviceSwitchType
 from pyezvizapi.devices import factory
+from pyezvizapi.devices.observation import camera_switch_states
 from pyezvizapi.devices.snapshot import (
     CameraState,
     DetectorState,
@@ -417,3 +418,25 @@ def test_actual_acquisition_preserves_malformed_device_status_for_isolation(
     assert second.devices["good"].values["version"] == "V2" and second.health["good"].current
     assert second.devices["bad"] is first.devices["bad"]
     assert second.health["bad"] == DeviceHealth(True, False, first.received_at, "TypeError")
+
+
+def test_camera_switch_states_preserve_channel_identity_and_unknown_flags():
+    camera = CameraState(
+        "cam",
+        "camera",
+        {
+            "SWITCH": [
+                {"type": 200, "channelNo": 1, "enable": "0"},
+                {"type": 200, "channelNo": "2", "enable": "1"},
+                {"type": 200, "enable": True},
+                {"type": 7, "channelNo": 2, "enable": 2},
+                {"type": 22, "channelNo": "bad", "enable": 1},
+            ],
+            "switches": {22: True},
+        },
+    )
+    assert camera_switch_states(camera.values, channel_no=1) == {200: False}
+    assert camera_switch_states(camera.values, channel_no=2) == {200: True, 7: None}
+    assert camera_switch_states(camera.as_dict()) == {200: True}
+    assert camera_switch_states({"switches": {7: "0"}}, channel_no=2) == {7: False}
+    assert camera_switch_states({"SWITCH": [], "switches": {7: True}}) == {}

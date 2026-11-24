@@ -12,6 +12,8 @@ from collections.abc import Mapping as _StaticMapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING
 
+from pyezvizapi.cloud.endpoints import API_ENDPOINT_PEOPLE_DETECTION_SWITCH
+
 if TYPE_CHECKING:
     import pyezvizapi._typing.client as _owner_types
 
@@ -154,6 +156,34 @@ def switch_status_other(
         max_retries=max_retries,
     )
     self._ensure_ok(json_output, "Could not set the switch")
+    return True
+
+
+def set_people_detection(
+    self: _owner_types.EzvizClient,
+    serial: str,
+    enabled: bool,
+    channel_no: int,
+    max_retries: int,
+    *,
+    _owner: _ModuleType,
+) -> bool:
+    """Write switch 200 using the app's dedicated People detection endpoint."""
+    if max_retries > _owner.MAX_RETRIES:
+        raise _owner.PyEzvizError("Can't gather proper data. Max retries exceeded.")
+    payload = self._request_json(
+        "POST",
+        API_ENDPOINT_PEOPLE_DETECTION_SWITCH,
+        data={
+            "deviceSerial": serial,
+            "channelNo": channel_no,
+            "enable": int(enabled),
+            "type": _owner.DeviceSwitchType.HUMAN_INTELLIGENT_DETECTION.value,
+        },
+        retry_401=True,
+        max_retries=max_retries,
+    )
+    self._ensure_ok(payload, "Could not set people detection")
     return True
 
 

@@ -69,6 +69,38 @@ deduplicate list rows. Because `page` is merged too, it is not a per-page log.
 The SDK rejects repeated pages and caps collection at 1,000 pages; see
 [pagination safeguards](bootstrap-and-pagination.md) for details.
 
+## Device categories and types
+
+Look for `deviceCategory` in each `deviceInfos` row. It is a
+case-sensitive product family, not a pagelist `filter` value.
+`deviceSubCategory` is a narrower product label (for example, `H9c`
+or `EB3` in the fixture); `deviceType` is a separate model/type field.
+`resourceInfos[].resourceType` describes a resource, not the device family.
+Keep these values separate and preserve unfamiliar values as reported.
+
+| `deviceCategory` | Current SDK inventory routing |
+| --- | --- |
+| `IPC`, `BatteryCamera`, `BDoorBell`, `CatEye` | Camera-family view, including video doorbells and peephole cameras. |
+| `XVR`, `IGateWay` | Currently routed through the camera-family view; this does not guarantee every camera operation works. |
+| `COMMON` | Camera-family fallback only when the device row has a truthy `hik` marker. |
+| `DBScreen` | Intercom monitor, distinct from `BDoorBell` and the app's separate `SCREEN` category. |
+| `lighting`, `Socket`, `Detector` | Light, plug and detector views respectively. |
+
+The Android app defines more category strings than the SDK's family
+loaders recognize. Examples below are from `EZDeviceCategory` and
+`YSDeviceCategory` in the app, not a list of live-verified values or a
+claim of SDK control support:
+
+- Recorders and video hardware: `DVR`, `DVRWifi`, `NVR`, `VideoBox`, `NAS`.
+- Door and security accessories: `DBChime`, `Wireless Doorbell`, `DoorLock`,
+  `VideoLock`, `AlarmBox`, `SecurityLamp`.
+- Networking and other products: `Router`, `RouterW3`, `RouterW5`, `RouterW5C`,
+  `SCREEN`, `Switch`, `ICurtain`, `PetFeeder`, `SweepingRobot`, `MowingRobot`.
+
+Inspect unknown categories with `get_page_list()` or `get_device_records()`
+rather than relying on the family loaders to return them. Category alone
+does not establish streaming, alarm, or control capability.
+
 ## Choose an SDK or CLI view
 
 - `get_page_list()` / [`pyezvizapi pagelist`](cli.md#pagelist): merged sections

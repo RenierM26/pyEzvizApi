@@ -126,9 +126,7 @@ def _prefetch_latest_camera_alarms(
                 serials=serials, limit=50, date="", end_time="", max_retries=1
             )
         except _owner.PyEzvizError as err:
-            _owner._LOGGER.debug(
-                "alarm_prefetch_failed: serials=%s error=%r", serials or "", err
-            )
+            _owner._LOGGER.debug("alarm_prefetch_failed: serials=%s error=%r", serials or "", err)
             return False
         items = response.get("message")
         if not items:

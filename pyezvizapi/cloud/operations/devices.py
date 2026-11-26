@@ -103,29 +103,6 @@ def load_devices(
     return {**self._cameras, **self._light_bulbs, **self._smart_plugs, **self._detectors}
 
 
-def _unifiedmsg_page_cursor(items: list[_owner_types.Any]) -> str | int | None:
-    """Return the last timestamp known to be complete on a newest-first page."""
-    previous_time = None
-    previous_raw = None
-    cursor = None
-    for item in items:
-        raw_time = item.get("time") if isinstance(item, dict) else None
-        if not isinstance(raw_time, (str, int)):
-            return None
-        digits = str(raw_time)
-        if not digits.isascii() or not digits.isdecimal() or len(digits) > 20:
-            return None
-        timestamp = int(digits)
-        if not timestamp or (previous_time is not None and timestamp > previous_time):
-            return None
-        if previous_time is not None and timestamp < previous_time:
-            # An older row proves that the preceding timestamp group ended.
-            cursor = previous_raw
-        previous_time = timestamp
-        previous_raw = raw_time
-    return cursor
-
-
 def _prefetch_latest_camera_alarms(
     self: _owner_types.EzvizClient,
     serials: _owner_types.Iterable[str],
@@ -141,55 +118,40 @@ def _prefetch_latest_camera_alarms(
 
     def _query_chunk(missing: set[str], *, serials: str | None) -> bool:
         """Collect latest matches, returning True only for a complete filtered batch."""
-        cursor: str | int = ""
+        # Latest-alarm lookups deliberately use only the newest page. A
+        # timestamp cursor can miss tied rows and make an older alarm look
+        # current. Narrow the next query instead of scanning older pages.
+        try:
+            response = self.get_device_messages_list(
+                serials=serials, limit=50, date="", end_time="", max_retries=1
+            )
+        except _owner.PyEzvizError as err:
+            _owner._LOGGER.debug(
+                "alarm_prefetch_failed: serials=%s error=%r", serials or "", err
+            )
+            return False
+        items = response.get("message")
+        if not items:
+            items = response.get("messages", items)
+        if not isinstance(items, list):
+            return False
         requested = missing.copy()
-        # Prefetch is a latency optimization, not an exhaustive history scan.
-        # After two pages, let narrower queries resolve the remaining cameras.
-        page_budget = min(2, _owner.MAX_UNIFIEDMSG_PAGES)
-        for page in range(page_budget):
-            try:
-                response = self.get_device_messages_list(
-                    serials=serials, limit=50, date="", end_time=cursor, max_retries=1
-                )
-            except _owner.PyEzvizError as err:
-                _owner._LOGGER.debug(
-                    "alarm_prefetch_failed: serials=%s error=%r", serials or "", err
-                )
-                return False
-            items = response.get("message")
-            if not items:
-                items = response.get("messages", items)
-            if not isinstance(items, list):
-                return False
-            scoped_rows = True
-            for item in items:
-                serial = item.get("deviceSerial") if isinstance(item, dict) else None
-                if not isinstance(serial, str) or serial not in requested:
-                    scoped_rows = False
-                elif serial in missing:
-                    latest[serial] = item
-                    missing.remove(serial)
+        scoped_rows = True
+        for item in items:
+            serial = item.get("deviceSerial") if isinstance(item, dict) else None
+            if not isinstance(serial, str) or serial not in requested:
+                scoped_rows = False
+            elif serial in missing:
+                latest[serial] = item
+                missing.remove(serial)
 
-            has_next = response.get("hasNext")
-            if not missing or has_next is not True or not items:
-                # A timestamp-only cursor can skip messages tied at a page boundary.
-                # Only a complete first page can rule out an alarm for a missing serial.
-                return (
-                    serials is not None
-                    and cursor == ""
-                    and has_next is False
-                    and scoped_rows
-                    and not response.get("failureSubTypes")
-                    and not response.get("noMessageAbility")
-                )
-
-            if page + 1 == page_budget:
-                break
-            next_cursor = _unifiedmsg_page_cursor(items)
-            if next_cursor is None:
-                break
-            cursor = next_cursor
-        return False
+        return (
+            serials is not None
+            and response.get("hasNext") is False
+            and scoped_rows
+            and not response.get("failureSubTypes")
+            and not response.get("noMessageAbility")
+        )
 
     remaining_serials = set(serial_list)
     _query_chunk(remaining_serials, serials=None)

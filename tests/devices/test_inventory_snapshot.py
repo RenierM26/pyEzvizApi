@@ -16,6 +16,7 @@ from pyezvizapi.cloud import deadline
 from pyezvizapi.cloud.operations import snapshot as operation
 from pyezvizapi.constants import DeviceSwitchType
 from pyezvizapi.devices import factory
+from pyezvizapi.devices.channels import CameraChannel
 from pyezvizapi.devices.observation import camera_switch_states
 from pyezvizapi.devices.snapshot import (
     CameraState,
@@ -440,3 +441,42 @@ def test_camera_switch_states_preserve_channel_identity_and_unknown_flags():
     assert camera_switch_states(camera.as_dict()) == {200: True}
     assert camera_switch_states({"switches": {7: "0"}}, channel_no=2) == {7: False}
     assert camera_switch_states({"SWITCH": [], "switches": {7: True}}) == {}
+
+
+@pytest.mark.parametrize("change", ["omit", "clear", "replace", "remove"])
+def test_poll_preserves_only_matching_omitted_channel_labels(client, monkeypatch, change):
+    row = {
+        "deviceSerial": "cam",
+        "resourceId": "resource",
+        "resourceIdentifier": "Video",
+        "localIndex": 1,
+    }
+    payload: dict[str, Any] = {
+        "meta": {"code": 200},
+        "page": {"hasNext": False},
+        "deviceInfos": [{"deviceSerial": "cam", "deviceCategory": "IPC", "status": 1}],
+        "resourceInfos": [row],
+    }
+    monkeypatch.setattr(client, "_request_json", lambda *_args, **_kwargs: deepcopy(payload))
+    opts = DevicePollOptions(include_camera_alarms=False)
+    first = client.poll_devices(opts).devices["cam"]
+    expected = (CameraChannel("Video", "1"),)
+    assert first.channels == expected
+    partial = dict(row)
+    partial.pop("resourceIdentifier")
+    if change == "clear":
+        partial["resourceIdentifier"] = ""
+    elif change == "replace":
+        partial["resourceId"] = "different"
+    payload["resourceInfos"] = [] if change == "remove" else [partial]
+    payload["deviceInfos"][0]["status"] = 2
+    second = client.poll_devices(opts).devices["cam"]
+    assert second.online is False
+    assert second.channels == ()
+    assert second.motion is None
+    assert second.stale_channels == (expected if change == "omit" else ())
+    assert client.poll_devices(opts).devices["cam"].stale_channels == ()
+    payload["resourceInfos"] = [row]
+    recovered = client.poll_devices(opts).devices["cam"]
+    assert recovered.channels == expected
+    assert recovered.stale_channels == ()

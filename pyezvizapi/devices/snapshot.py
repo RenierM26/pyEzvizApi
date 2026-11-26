@@ -131,6 +131,9 @@ class DeviceState:
 
 @dataclass(frozen=True)
 class CameraState(DeviceState):
+    # Display hints only; never used by the fresh channel resolver or commands.
+    stale_channels: tuple[CameraChannel, ...] = ()
+
     @property
     def channels(self) -> tuple[CameraChannel, ...]:
         """Expose immutable, reported video identities without acquiring data."""

@@ -40,8 +40,9 @@ section. The raw HTTP API lets you request a smaller set.
 
 ## Response and pagination
 
-Check the HTTP status and `meta.code` (`200` on success). The SDK also
-recognizes legacy `resultCode: 0`. Typical responses contain:
+Check both HTTP status and `meta.code` (`200` on success). Pagelist
+requires the modern envelope; do not assume a legacy `resultCode: 0` is
+accepted here. Typical responses contain:
 
 - `deviceInfos`: device rows identified by `deviceSerial`.
 - `resourceInfos`: resource rows linking `deviceSerial` to `resourceId`, with
@@ -68,6 +69,30 @@ recursively, and conflicting scalar values from later pages win. This does not
 deduplicate list rows. Because `page` is merged too, it is not a per-page log.
 The SDK rejects repeated pages and caps collection at 1,000 pages; see
 [pagination safeguards](bootstrap-and-pagination.md) for details.
+
+## Partial responses and diagnostics
+
+- The raw Pagelist dump does not retry an otherwise successful response just
+  because it lacks pagination or a requested section. Projected device
+  inventory can retry one page per collection, at the same offset, if
+  `page.hasNext` is missing or invalid, or if a page with devices omits
+  `resourceInfos`. An invalid continuation flag after recovery fails the
+  acquisition instead of publishing a truncated inventory. An explicit empty
+  resource list does not trigger this retry.
+- In Android 7.4.1's `DeviceListLoaderUnit.loadDevicePage`, the loader checks
+  `meta.moreInfo` for keys matching known section filters and fetches those
+  sections separately for the affected device list. A reported section can
+  therefore be deferred, not unsupported. The same loader advances its offset
+  by the returned resource-row count and checks `page.hasNext`; the SDK still
+  advances by the requested limit. Don't change the SDK stride without checking
+  live multi-page behavior on its route.
+- The Android response model keeps `httpCode` separate from `meta.code`,
+  `meta.message`, and `meta.moreInfo`. For diagnostics, distinguish an HTTP
+  `401` from HTTP `200` carrying `meta.code: 401` (the SDK exercises the latter
+  in its session-recovery tests). Scoped lookups fall back on HTTP `404`,
+  `405`, or `501`; this is SDK policy, not an app error-code registry.
+  No exhaustive inventory error-code mapping was verified. Redact response
+  messages and `moreInfo` before sharing them.
 
 ## Device categories and types
 

@@ -172,6 +172,7 @@ def test_cli_discovery_selects_intercom_video_and_preserves_errors(
         if path.endswith(("/pagelist", "/resources/INTERCOM-TEST")):
             return {
                 "meta": {"code": 200},
+                "page": {"hasNext": False},
                 "deviceInfos": [{"deviceSerial": "INTERCOM-TEST", "deviceCategory": "BDoorBell"}],
                 "resourceInfos": [
                     {"deviceSerial": "UNRELATED", **resource("Video", 9)},

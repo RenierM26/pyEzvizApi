@@ -1494,6 +1494,7 @@ class EzvizClient:
         max_retries: int = 0,
         *,
         validate_page: Callable[[JsonDict], None] | None = None,
+        recover_inventory: bool = False,
     ) -> Any:
         """Get data from pagelist API."""
         if max_retries > MAX_RETRIES:
@@ -1538,7 +1539,13 @@ class EzvizClient:
                 retries += 1
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        return collect_pagelist(fetch_page, json_key=json_key, limit=limit, offset=offset)
+        return collect_pagelist(
+            fetch_page,
+            json_key=json_key,
+            limit=limit,
+            offset=offset,
+            recover_inventory=recover_inventory,
+        )
 
     def get_alarminfo(self, serial: str, limit: int = 1, max_retries: int = 0) -> JsonDict:
         """Get data from alarm info API for camera serial."""
@@ -4471,7 +4478,7 @@ class EzvizClient:
 
     def _get_page_list(self) -> Any:
         """Get ezviz device info broken down in sections."""
-        return self._api_get_pagelist(page_filter=self._DEVICE_PAGE_FILTER, json_key=None)
+        return self._api_get_pagelist(page_filter=self._DEVICE_PAGE_FILTER, recover_inventory=True)
 
     def _get_device_page(self, serial: str) -> JsonDict | None:
         """Try the app's serial-scoped resource endpoint."""
@@ -4514,9 +4521,9 @@ class EzvizClient:
         return None
 
     def get_page_list(self) -> Any:
-        """Return the full pagelist payload without filtering."""
+        """Return the merged payload for the standard section filter."""
 
-        return self._get_page_list()
+        return self._api_get_pagelist(page_filter=self._DEVICE_PAGE_FILTER)
 
     def export_token(self) -> dict[str, Any]:
         """Return an independent snapshot of the current authentication token."""

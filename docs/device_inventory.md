@@ -38,6 +38,19 @@ client.close_session()
   `load_devices()`/`load_cameras()`/family loaders retain their historical semantics
   and caches. The status corrections below apply to both old and typed entrypoints.
 
+## Partial routing metadata
+
+Projected reads can retry one incomplete page within the same poll deadline.
+See [Pagelist diagnostics](pagelist-api.md#partial-responses-and-diagnostics).
+
+`CameraState.stale_channels` contains display-only hints from the immediately
+preceding current observation (at most 120 seconds old). A fresh resource row
+must still match the same device serial and resource ID and omit a channel
+field; an explicit empty field, a removed resource, or a changed identity
+does not reuse the old value. Consecutive partial responses do not renew hints.
+Use `channels` for freshly resolved routes. Stale hints are not merged into
+`as_dict()` or used for commands, streaming, alarms, switches, or connectivity.
+
 ## Typed states and unknowns
 
 `CameraState`, `DetectorState`, `LightState` and `PlugState` inherit `DeviceState`.

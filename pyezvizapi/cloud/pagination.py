@@ -34,18 +34,50 @@ def validate_device_inventory_page(payload: dict[str, Any]) -> None:
         raise PyEzvizError("Invalid deviceInfos on inventory page")
 
 
+def _has_page_flag(payload: dict[str, Any]) -> bool:
+    page = payload.get("page")
+    return (
+        isinstance(page, Mapping)
+        and isinstance(flag := page.get("hasNext"), (bool, int))
+        and flag in (False, True)
+    )
+
+
+def _inventory_fetch(
+    fetch: Callable[[int], dict[str, Any]],
+) -> Callable[[int], dict[str, Any]]:
+    retry_available = True
+
+    def fetch_page(offset: int) -> dict[str, Any]:
+        nonlocal retry_available
+        payload = fetch(offset)
+        if retry_available and (
+            not _has_page_flag(payload)
+            or (payload.get("deviceInfos") and "resourceInfos" not in payload)
+        ):
+            retry_available = False
+            payload = fetch(offset)
+        if not _has_page_flag(payload):
+            raise PyEzvizError("Device inventory page requires an explicit hasNext flag")
+        return payload
+
+    return fetch_page
+
+
 def collect_pagelist(
     fetch: Callable[[int], dict[str, Any]],
     *,
     json_key: str | None,
     limit: int,
     offset: int,
+    recover_inventory: bool = False,
 ) -> Any:
     """Collect at most 1000 progressing pages and retain right-fold merge rules."""
     pages: list[Any] = []
     seen: set[bytes] = set()
+    fetch_page = _inventory_fetch(fetch) if recover_inventory else fetch
     for _ in range(MAX_PAGELIST_PAGES):
-        payload = fetch(offset)
+        payload = fetch_page(offset)
         page = payload.get("page")
         if page is None:
             page = {}

@@ -183,3 +183,40 @@ def test_get_device_default_accepts_legacy_page_without_metadata(monkeypatch) ->
     )
 
     assert client.get_device() == devices
+
+
+@pytest.mark.parametrize("missing", ["page", "resourceInfos"])
+def test_projected_pagelist_retries_once_at_same_offset(monkeypatch, missing) -> None:
+    client = _client()
+    first = {"page": {"hasNext": True}, "deviceInfos": [{"deviceSerial": "A"}], "resourceInfos": []}
+    last = {"page": {"hasNext": False}, "deviceInfos": [{"deviceSerial": "B"}], "resourceInfos": []}
+    partial = {key: value for key, value in last.items() if key != missing}
+    offsets = []
+    responses = {0: iter([first]), 30: iter([partial, last])}
+
+    def fetch(_method, _path, *, params, **_kwargs):
+        offsets.append(params["offset"])
+        return {"meta": {"code": 200}, **next(responses[params["offset"]])}
+
+    monkeypatch.setattr(client, "_request_json", fetch)
+    records = client.get_device_records()
+    assert isinstance(records, dict)
+    assert set(records) == {"A", "B"}
+    assert offsets == [0, 30, 30]
+
+
+def test_raw_pagelist_still_returns_incomplete_payload_without_retry(monkeypatch) -> None:
+    client = _client()
+    payload = {"meta": {"code": 200}, "deviceInfos": [{"deviceSerial": "A"}]}
+    calls = []
+
+    def fetch(*_args, **kwargs):
+        calls.append(kwargs["params"]["offset"])
+        return payload
+
+    monkeypatch.setattr(client, "_request_json", fetch)
+    assert client.get_page_list() == payload
+    assert calls == [0]
+    with pytest.raises(PyEzvizError, match="explicit hasNext"):
+        client.get_device_records()
+    assert calls == [0, 0, 0]

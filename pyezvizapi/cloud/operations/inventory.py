@@ -36,7 +36,7 @@ def get_device_messages_list(
             :class:`~pyezvizapi.constants.UnifiedMessageSubtype`.
         limit: Clamp between 1 and 50 as enforced by the public API.
         date: Accepts ``YYYYMMDD`` string, :class:`datetime.date`, or
-            :class:`datetime.datetime`. Defaults to "today" in API format.
+            :class:`datetime.datetime`. Defaults to the process-local date.
         end_time: Pass the last message's raw ``time`` from the previous page,
         without converting units or substituting ``msgId``. An empty string
         requests the newest messages.

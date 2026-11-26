@@ -47,6 +47,41 @@ operations if run with your own credentials; they are not validation commands.
 Default output is human-readable where supported; `--json` requests structured
 output, but command results and error handling remain command-specific.
 
+### Unified alarm history
+
+`unifiedmsg` fetches one page of alarm messages. Omit `--serials` to query all
+devices, or pass a comma-separated list. The default limit is 20 (maximum 50).
+`--date` takes `YYYYMMDD` and defaults to today's date in the CLI process's
+local timezone, not the account or camera timezone.
+
+```bash
+pyezvizapi --json unifiedmsg --serials CAMERA_SERIAL --date 20261126 --limit 20
+pyezvizapi --json unifiedmsg --serials CAMERA_SERIAL --date 20261126 --limit 20 --end-time RAW_TIME
+```
+
+Omit `--end-time` to start with the newest messages for the query. For the next
+page, keep the filters and date the same and replace `RAW_TIME` with the last
+row's raw `time` value, unchanged. Do not use `msgId` or the formatted time shown
+in the table. A timestamp cursor is not a guarantee of exhaustive history when
+multiple messages share a timestamp at a page boundary.
+
+Global `--json` emits an array of message rows (or `[]`), not the full API
+response. `--urls-only` prints a serial and media URL per message that has one,
+even if `--json` is also set.
+
+The Python method `EzvizClient.get_device_messages_list()` returns the full
+response and accepts custom filters through `s_type`. Both it and the CLI use
+the default subtype `92` unless Python callers override it. The SDK sends a
+GET to `/v3/unifiedmsg/list` with `serials` (when provided), `stype`, `limit`,
+`date`, and `endTime` (empty for the first page). The Android playback module
+uses the same endpoint; the Android Message Center uses
+`/v3/unifiedmsg/list/v2` and is not fully reproduced here.
+
+Latest-alarm polling is separate from history paging. When the first result
+doesn't include a camera, polling can issue fresh queries scoped to the missing
+cameras rather than treating an older history page as authoritative. The result
+is the newest matching alarm returned by EZVIZ at poll time.
+
 ### lan rtsp
 
 Use the camera's current **local device password**, not an EZVIZ account password.

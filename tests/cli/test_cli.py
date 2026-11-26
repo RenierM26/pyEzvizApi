@@ -448,9 +448,11 @@ def test_unifiedmsg_json_outputs_messages(monkeypatch, tmp_path, capsys) -> None
                 "end_time": end_time,
             }
             return {
+                "meta": {"code": 200},
                 "message": [
                     {
                         "deviceSerial": "CAM123",
+                        "time": 1777276800000,
                         "timeStr": "2026-04-27 08:00:00",
                         "subType": "motion",
                         "title": "Motion detected",
@@ -477,7 +479,7 @@ def test_unifiedmsg_json_outputs_messages(monkeypatch, tmp_path, capsys) -> None
                 "--date",
                 "20260427",
                 "--end-time",
-                "cursor-1",
+                "1777276801000",
             ]
         )
         == 0
@@ -488,11 +490,12 @@ def test_unifiedmsg_json_outputs_messages(monkeypatch, tmp_path, capsys) -> None
         "serials": "CAM123",
         "limit": 5,
         "date": "20260427",
-        "end_time": "cursor-1",
+        "end_time": "1777276801000",
     }
     assert json.loads(capsys.readouterr().out) == [
         {
             "deviceSerial": "CAM123",
+            "time": 1777276800000,
             "timeStr": "2026-04-27 08:00:00",
             "subType": "motion",
             "title": "Motion detected",

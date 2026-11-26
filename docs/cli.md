@@ -69,13 +69,9 @@ Global `--json` emits an array of message rows (or `[]`), not the full API
 response. `--urls-only` prints a serial and media URL per message that has one,
 even if `--json` is also set.
 
-The Python method `EzvizClient.get_device_messages_list()` returns the full
-response and accepts custom filters through `s_type`. Both it and the CLI use
-the default subtype `92` unless Python callers override it. The SDK sends a
-GET to `/v3/unifiedmsg/list` with `serials` (when provided), `stype`, `limit`,
-`date`, and `endTime` (empty for the first page). The Android playback module
-uses the same endpoint; the Android Message Center uses
-`/v3/unifiedmsg/list/v2` and is not fully reproduced here.
+The CLI uses the default subtype `92`. For custom subtype filters, the full
+response, or direct HTTP requests, see the
+[Unified message list API reference](unified-message-list.md).
 
 Latest-alarm polling is separate from history paging. When the first result
 doesn't include a camera, polling can issue fresh queries scoped to the missing

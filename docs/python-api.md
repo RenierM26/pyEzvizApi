@@ -78,6 +78,7 @@ first-device recovery and shutdown semantics.
 | `load_devices(refresh=True)` | Combined supported device mappings |
 | `get_device_infos(serial=None)` | Raw normalized sections for exploration |
 | `get_device_records(serial=None)` | Typed device records |
+| `get_device_messages_list(...)` | One raw [UnifiedMsg page](unified-message-list.md), with custom alarm filters |
 | `export_token()` | Deep snapshot for secure persistence |
 
 Raw fields can change upstream. See the [HA contract](home-assistant-contract.md)

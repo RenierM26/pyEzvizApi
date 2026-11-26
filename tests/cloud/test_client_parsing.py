@@ -148,6 +148,34 @@ def test_serial_lookup_prefers_scoped_response_and_falls_back(monkeypatch, scena
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize(
+    "resources",
+    [
+        None,
+        {},
+        [],
+        [None],
+        [{"deviceSerial": "OTHER", "resourceId": "res-other"}],
+        [{"deviceSerial": "CAM123", "resourceId": " "}],
+    ],
+)
+def test_serial_lookup_recovers_missing_resource_metadata(monkeypatch, resources) -> None:
+    client = client_module.EzvizClient()
+    account = _page_list_fixture()
+    account["VTM"] = {"res-cam": {"port": 8554}}
+    scoped = {"meta": {"code": 200}, "deviceInfos": account["deviceInfos"][:1]}
+    if resources is not None:
+        scoped["resourceInfos"] = resources
+    monkeypatch.setattr(client, "_request_json", lambda *a, **kw: scoped)
+    monkeypatch.setattr(client, "_get_page_list", lambda: account)
+
+    record = client.get_device_records("CAM123")
+
+    assert isinstance(record, client_module.EzvizDeviceRecord)
+    assert record.source["resourceInfos"] == account["resourceInfos"][:1]
+    assert record.raw["VTM"] == {"res-cam": {"port": 8554}}
+
+
 def test_serial_lookup_falls_back_to_pagelist_session_recovery(monkeypatch) -> None:
     client = client_module.EzvizClient()
     events = []

@@ -113,8 +113,9 @@ does not establish streaming, alarm, or control capability.
 - `get_device_infos(serial)` attempts the separate
   `GET /v3/userdevices/v1/resources/{serial}` route with only `filter` in the
   query. If that route is unsupported or returns an unsuitable response (for
-  example, more than one resource row), the SDK uses account pagelist and
-  selects the serial locally. If no matching row is found, it returns `{}`.
+  example, missing or ambiguous resource rows), the SDK uses account
+  pagelist and selects the serial locally. If no matching row is found,
+  it returns `{}`.
 
 See [pagelist state](pagelist-state.md) for field meanings and capability
 checks. Never publish raw captures: they can contain device identifiers, LAN

@@ -4493,9 +4493,16 @@ class EzvizClient:
             return None
         rows = payload.get("deviceInfos")
         resources = payload.get("resourceInfos")
-        # The scoped endpoint can reorder resource rows. Some legacy callers
-        # select the first row, so retain the account ordering when ambiguous.
-        if isinstance(resources, list) and len(resources) > 1:
+        # Missing resource metadata would discard routing information. For
+        # multiple resources, retain the account ordering used by legacy callers.
+        if (
+            not isinstance(resources, list)
+            or len(resources) != 1
+            or not isinstance(resource := resources[0], dict)
+            or resource.get("deviceSerial") != serial
+            or not isinstance(resource_id := resource.get("resourceId"), str)
+            or not resource_id.strip()
+        ):
             return None
         if (
             isinstance(rows, list)

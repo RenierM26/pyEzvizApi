@@ -3,7 +3,8 @@
 `EzvizClient.get_page_list()` returns the merged pages from the authenticated
 cloud inventory endpoint `GET /v3/userdevices/v1/resources/pagelist`.
 It is a snapshot of reported metadata, state, and routing, not a complete
-schema or a list of supported writes. Use `get_device_infos()` for the
+schema or a list of supported writes. For request parameters, section filters,
+and paging rules, see the [Pagelist API](pagelist-api.md). Use `get_device_infos()` for the
 per-serial projection or `get_device_records()` for typed records with a raw
 mapping of that projection. The projection is not lossless: for example it
 selects one resource ID for several legacy sections and omits some raw sections.

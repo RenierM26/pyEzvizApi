@@ -413,7 +413,10 @@ python examples/mqtt_listener.py --save-token
 
 ### pagelist
 
-Dump the complete raw pagelist JSON. Great for exploring unknown fields in an editor (e.g. Notepad++).
+Dump the merged account inventory JSON for the SDK's standard set of
+[pagelist sections](pagelist-api.md). It fetches all pages for that query,
+not every possible section. The raw output can contain private routing
+metadata and credentials; keep it local or redact it before sharing.
 
 ```bash
 pyezvizapi pagelist > pagelist.json
@@ -421,7 +424,10 @@ pyezvizapi pagelist > pagelist.json
 
 ### device_infos
 
-Dump the processed device infos mapping (what the integration consumes). Optionally filter to one serial:
+Dump the processed device infos mapping (what the integration consumes).
+With `--serial`, the SDK attempts a single-device resource request and
+[falls back to account inventory](pagelist-api.md#choose-an-sdk-or-cli-view)
+when needed:
 
 ```bash
 # All devices

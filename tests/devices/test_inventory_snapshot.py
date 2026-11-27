@@ -1,7 +1,7 @@
 """Bounded mixed-device polling contracts; no account, device or HA required."""
 
 from copy import deepcopy
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -18,6 +18,7 @@ from pyezvizapi.constants import DeviceSwitchType
 from pyezvizapi.devices import factory
 from pyezvizapi.devices.channels import CameraChannel
 from pyezvizapi.devices.observation import camera_switch_states
+from pyezvizapi.devices.payload import switch_values
 from pyezvizapi.devices.snapshot import (
     CameraState,
     DetectorState,
@@ -485,6 +486,7 @@ def test_poll_preserves_only_matching_omitted_channel_labels(client, monkeypatch
         "page": {"hasNext": False},
         "deviceInfos": [{"deviceSerial": "cam", "deviceCategory": "IPC", "status": 1}],
         "resourceInfos": [row],
+        "SWITCH": {"cam": [{"type": 7, "enable": 1}]},
     }
     monkeypatch.setattr(client, "_request_json", lambda *_args, **_kwargs: deepcopy(payload))
     opts = DevicePollOptions(include_camera_alarms=False)
@@ -504,8 +506,23 @@ def test_poll_preserves_only_matching_omitted_channel_labels(client, monkeypatch
     assert second.channels == ()
     assert second.motion is None
     assert second.stale_channels == (expected if change == "omit" else ())
+    exported = second.as_dict()
+    assert exported["resourceInfos"] == payload["resourceInfos"]
+    assert switch_values(exported["SWITCH"]) == {7: True}
     assert client.poll_devices(opts).devices["cam"].stale_channels == ()
     payload["resourceInfos"] = [row]
     recovered = client.poll_devices(opts).devices["cam"]
     assert recovered.channels == expected
     assert recovered.stale_channels == ()
+
+
+def test_snapshot_replacement_preserves_nested_lists_and_real_tuples():
+    camera = CameraState("cam", "camera", {"nested": [{"values": ([1],)}]})
+    with_hint = replace(camera, stale_channels=(CameraChannel("Video", "1"),))
+    cleared = replace(with_hint, stale_channels=())
+
+    for state in (with_hint, cleared):
+        exported = state.as_dict()
+        assert exported == {"nested": [{"values": ([1],)}]}
+        exported["nested"][0]["values"][0].append(2)
+        assert state.as_dict() == camera.as_dict()

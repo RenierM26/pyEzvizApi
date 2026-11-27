@@ -94,6 +94,19 @@ The SDK rejects repeated pages and caps collection at 1,000 pages; see
   No exhaustive inventory error-code mapping was verified. Redact response
   messages and `moreInfo` before sharing them.
 
+### Home Assistant logging
+
+Once Home Assistant is running a pyEzvizApi version with these diagnostics,
+enable just this namespace for a short trial, for example with the
+`logger.set_level` action and data `pyezvizapi.cloud.pagination: debug`.
+Search the Home Assistant logs for `Pagelist page` and `Pagelist scan`.
+Scan summaries appear per inventory collection that reaches a final page or
+invalid pagination flag, including when no anomalies occurred. A retry is
+logged separately; deferred filter names are allowlisted, and server
+messages, identifiers, credentials and response bodies are not logged by
+this namespace. Logging does not add API calls. Restore the previous log level
+after the trial; log retention depends on the HA installation.
+
 ## Device categories and types
 
 Look for `deviceCategory` in each `deviceInfos` row. It is a

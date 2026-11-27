@@ -220,3 +220,33 @@ def test_raw_pagelist_still_returns_incomplete_payload_without_retry(monkeypatch
     with pytest.raises(PyEzvizError, match="explicit hasNext"):
         client.get_device_records()
     assert calls == [0, 0, 0]
+
+
+def test_inventory_debug_logs_only_safe_diagnostics(monkeypatch, caplog) -> None:
+    client = _client()
+    private = "PRIVATE_CANARY"
+    responses = iter(
+        [
+            {
+                "deviceInfos": [{"deviceSerial": private}],
+                "meta": {
+                    "code": 200,
+                    "message": private,
+                    "moreInfo": {"STATUS": private, private: private},
+                },
+            },
+            {
+                "deviceInfos": [{"deviceSerial": private}],
+                "resourceInfos": [],
+                "meta": {"code": 200},
+                "page": {"hasNext": False},
+            },
+        ]
+    )
+    monkeypatch.setattr(client, "_request_json", lambda *a, **kw: next(responses))
+    with caplog.at_level("DEBUG", logger="pyezvizapi.cloud.pagination"):
+        client.get_device_records()
+    assert private not in caplog.text
+    assert "deferred_sections=['STATUS']" in caplog.text
+    assert "phase=retry invalid_has_next=False missing_resources=False" in caplog.text
+    assert "pages_checked=1 incomplete_pages=1 retries_recovered=1" in caplog.text

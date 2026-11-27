@@ -13,7 +13,7 @@ import requests
 from pyezvizapi import EzvizClient
 from pyezvizapi.devices import settings
 from pyezvizapi.devices.channels import CameraChannel, CameraChannelError
-from pyezvizapi.devices.tracking import set_app_auto_tracking
+from pyezvizapi.devices.tracking import set_app_auto_tracking, set_intelligent_app_config
 from pyezvizapi.exceptions import PyEzvizError
 
 
@@ -471,6 +471,62 @@ def test_app_tracking_action() -> None:
             }
         },
     )
+
+
+def test_app_tracking_preserves_explicit_route_and_full_app_id() -> None:
+    client = Mock()
+    set_app_auto_tracking(
+        client,
+        "TEST",
+        "app_human_detect$:$v3",
+        True,
+        resource_identifier="Video_1",
+        local_index="2",
+    )
+    client.set_iot_action.assert_called_once_with(
+        "TEST",
+        "Video_1",
+        "2",
+        "IntelligentAPP",
+        "ModifyAppFunctionCfgs",
+        {
+            "value": {
+                "configLists": [
+                    {
+                        "appId": "app_human_detect$:$v3",
+                        "path": "/PTZTrace/AutoTraceSwitch/prop",
+                        "payload": "true",
+                    }
+                ]
+            }
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"app_id": ""},
+        {"resource_identifier": ""},
+        {"local_index": ""},
+        {"path": "relative"},
+        {"path": "/"},
+        {"payload": {"enabled": True}},
+    ],
+)
+def test_app_config_rejects_unknown_route_or_unencoded_values(invalid) -> None:
+    client = Mock()
+    args = {
+        "app_id": "app_human_detect$:$v3",
+        "resource_identifier": "Video",
+        "local_index": "1",
+        "path": "/Example/prop",
+        "payload": "true",
+        **invalid,
+    }
+    with pytest.raises(PyEzvizError):
+        set_intelligent_app_config(client, "TEST", **args)
+    client.set_iot_action.assert_not_called()
 
 
 @pytest.mark.parametrize("enabled", [True, False])

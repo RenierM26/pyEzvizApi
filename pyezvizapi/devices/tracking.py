@@ -167,27 +167,54 @@ def intelligent_app_available(camera_data: dict[str, Any], app_name: str) -> boo
     return any(name == app_name for name, _enabled in iter_intelligent_apps(camera_data) or [])
 
 
-def set_app_auto_tracking(client: EzvizClient, serial: str, app_id: str, enabled: bool) -> None:
+def set_intelligent_app_config(
+    client: EzvizClient,
+    serial: str,
+    app_id: str,
+    *,
+    resource_identifier: str,
+    local_index: str,
+    path: str,
+    payload: str,
+) -> None:
+    """Write one app property using the reported resource, full app ID and encoded value."""
+    if not all(
+        isinstance(value, str) and value.strip()
+        for value in (app_id, resource_identifier, local_index)
+    ):
+        raise PyEzvizError("App config requires a reported app ID and resource route")
+    if not isinstance(path, str) or not path.startswith("/") or not path.strip("/").strip():
+        raise PyEzvizError("App config requires an absolute property path")
+    if not isinstance(payload, str):
+        raise PyEzvizError("App config requires a device-encoded string payload")
+    client.set_iot_action(
+        serial,
+        resource_identifier,
+        local_index,
+        "IntelligentAPP",
+        "ModifyAppFunctionCfgs",
+        {"value": {"configLists": [{"appId": app_id, "path": path, "payload": payload}]}},
+    )
+
+
+def set_app_auto_tracking(
+    client: EzvizClient,
+    serial: str,
+    app_id: str,
+    enabled: bool,
+    *,
+    resource_identifier: str = "Video",
+    local_index: str = "1",
+) -> None:
     """Set tracking for an app the caller verified is enabled and supports tracking."""
     if not isinstance(enabled, bool):
         raise PyEzvizError("App tracking state must be boolean")
-    if not isinstance(app_id, str) or not app_id.strip():
-        raise PyEzvizError("App tracking requires a reported app ID")
-    client.set_iot_action(
+    set_intelligent_app_config(
+        client,
         serial,
-        "Video",
-        "1",
-        "IntelligentAPP",
-        "ModifyAppFunctionCfgs",
-        {
-            "value": {
-                "configLists": [
-                    {
-                        "appId": app_id,
-                        "path": "/PTZTrace/AutoTraceSwitch/prop",
-                        "payload": "true" if enabled else "false",
-                    }
-                ]
-            }
-        },
+        app_id,
+        resource_identifier=resource_identifier,
+        local_index=local_index,
+        path="/PTZTrace/AutoTraceSwitch/prop",
+        payload="true" if enabled else "false",
     )

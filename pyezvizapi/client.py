@@ -4512,13 +4512,36 @@ class EzvizClient:
         ):
             return None
         if (
-            isinstance(rows, list)
-            and len(rows) == 1
-            and isinstance(rows[0], dict)
-            and rows[0].get("deviceSerial") == serial
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or not isinstance(rows[0], dict)
+            or rows[0].get("deviceSerial") != serial
         ):
-            return payload
-        return None
+            return None
+
+        return None if self._has_deferred_device_routing(payload, serial, resource_id) else payload
+
+    @staticmethod
+    def _has_deferred_device_routing(payload: JsonDict, serial: str, resource_id: str) -> bool:
+        """Detect missing routing rows explicitly marked deferred by EZVIZ."""
+        meta = payload.get("meta")
+        deferred = meta.get("moreInfo") if isinstance(meta, Mapping) else None
+        if not isinstance(deferred, Mapping):
+            return False
+        for section, key in (
+            ("CLOUD", resource_id),
+            ("CHANNEL", resource_id),
+            ("VTM", resource_id),
+            ("CONNECTION", serial),
+            ("WIFI", serial),
+            ("P2P", serial),
+        ):
+            if section not in deferred:
+                continue
+            reported = payload.get(section)
+            if not isinstance(reported, Mapping) or not reported.get(key):
+                return True
+        return False
 
     def get_page_list(self) -> Any:
         """Return the merged payload for the standard section filter."""

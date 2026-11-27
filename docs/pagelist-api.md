@@ -152,8 +152,11 @@ does not establish streaming, alarm, or control capability.
   `GET /v3/userdevices/v1/resources/{serial}` route with only `filter` in the
   query. If that route is unsupported or returns an unsuitable response (for
   example, missing or ambiguous resource rows), the SDK uses account
-  pagelist and selects the serial locally. If no matching row is found,
-  it returns `{}`.
+  pagelist and selects the serial locally. It also falls back if
+  `meta.moreInfo` names a routing section whose matching row is missing
+  (`CLOUD`, `CHANNEL`, `VTM`, `CONNECTION`, `WIFI`, or `P2P`).
+  Missing optional sections without a matching hint do not trigger this check.
+  If no matching device is found, it returns `{}`.
 
 See [pagelist state](pagelist-state.md) for field meanings and capability
 checks. Never publish raw captures: they can contain device identifiers, LAN

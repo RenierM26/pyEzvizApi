@@ -176,6 +176,62 @@ def test_serial_lookup_recovers_missing_resource_metadata(monkeypatch, resources
     assert record.raw["VTM"] == {"res-cam": {"port": 8554}}
 
 
+@pytest.mark.parametrize(
+    ("section", "reported", "hint", "fallback"),
+    [
+        ("CONNECTION", None, "CONNECTION", True),
+        ("VTM", {"other": {"port": 8554}}, "VTM", True),
+        ("CLOUD", {}, "CLOUD", True),
+        ("CHANNEL", None, "CHANNEL", True),
+        ("CONNECTION", None, None, False),
+        ("CONNECTION", None, "UNKNOWN", False),
+        ("VTM", {"res-cam": {"port": 8554}}, "VTM", False),
+    ],
+)
+def test_serial_lookup_recovers_explicitly_deferred_routing(
+    monkeypatch, section, reported, hint, fallback
+) -> None:
+    client = client_module.EzvizClient()
+    account = {
+        **_page_list_fixture(),
+        "meta": {"code": 200},
+        "page": {"hasNext": False},
+        "CONNECTION": {"CAM123": {"localIp": "192.0.2.10"}},
+        "VTM": {"res-cam": {"port": 8554}},
+        "CHANNEL": {"res-cam": {"channelNo": 1}},
+    }
+    scoped = {
+        **account,
+        "meta": {"code": 200, "moreInfo": {hint: True} if hint else None},
+        "deviceInfos": account["deviceInfos"][:1],
+        "resourceInfos": account["resourceInfos"][:1],
+    }
+    if reported is None:
+        scoped.pop(section)
+    else:
+        scoped[section] = reported
+    paths = []
+
+    def request(_method, path, **_kwargs):
+        paths.append(path)
+        return account if path.endswith("/pagelist") else scoped
+
+    monkeypatch.setattr(client, "_request_json", request)
+    info = client.get_device_infos("CAM123")
+
+    expected = ["/v3/userdevices/v1/resources/CAM123"]
+    if fallback:
+        expected.append("/v3/userdevices/v1/resources/pagelist")
+        expected_section = account[section]
+        if section == "CONNECTION":
+            expected_section = expected_section["CAM123"]
+        else:
+            expected_section = {"res-cam": expected_section["res-cam"]}
+        assert info[section] == expected_section
+        assert info["VTM"] == account["VTM"]
+    assert paths == expected
+
+
 def test_serial_lookup_falls_back_to_pagelist_session_recovery(monkeypatch) -> None:
     client = client_module.EzvizClient()
     events = []

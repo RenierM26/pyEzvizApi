@@ -87,6 +87,35 @@ def test_one_acquisition_for_mixed_inventory_and_pure_selectors(client, monkeypa
     alarms.assert_called_once_with(["cam"])
 
 
+def test_pagelist_lb1_projects_to_current_light_state(client, monkeypatch):
+    """Reconstructed from ha-ezviz issue #173, not a captured Pagelist response."""
+    # https://github.com/RenierM26/ha-ezviz/issues/173
+    # Test values, pagination metadata and the explicit empty resource list are synthetic.
+    fixture = Path(__file__).parents[1] / "fixtures" / "issue_173_lb1_pagelist.json"
+    page = json.loads(fixture.read_text(encoding="utf-8"))
+    request = Mock(return_value=page)
+    monkeypatch.setattr(client, "_request_json", request)
+
+    snapshot = client.poll_devices()
+
+    assert set(snapshot.devices) == {"TEST_LB1"}
+    light = snapshot.devices["TEST_LB1"]
+    assert isinstance(light, LightState)
+    assert light.kind == "light"
+    assert snapshot.health["TEST_LB1"].current
+    assert light.is_on is True
+    assert light.values["device_sub_category"] == "LB1"
+    assert light.values["supported_channels"] == 0
+    assert light.values["productId"] == "test-lb1-product"
+    assert light.values["brightness"] == 73
+    assert light.values["color_temperature"] == 3200
+    assert light.values["switches"][DeviceSwitchType.ALARM_LIGHT.value] is True
+    features = {item["itemKey"]: item["dataValue"] for item in light.values["featureItems"]}
+    assert features["light_mode"] == "white"
+    assert features["color_rgb"] == "#FFA040"
+    request.assert_called_once()
+
+
 def test_snapshot_deep_immutability_and_detached_adapters():
     raw: dict[str, Any] = {"nested": [{"flag": False}], "tuple": ("value",), "status": 1}
     state = DeviceState("x", "camera", raw)

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 # ruff: noqa: SLF001 -- inventory operation owns the client's private poll lock/cache
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 import time
 from typing import Any
 
 from pyezvizapi.cloud.deadline import remaining_request_budget, request_deadline
-from pyezvizapi.constants import DeviceCatagories, DeviceSwitchType
+from pyezvizapi.cloud.operations.devices import _device_kind
+from pyezvizapi.constants import DeviceSwitchType
 from pyezvizapi.devices import factory
+from pyezvizapi.devices.channels import camera_channels
 from pyezvizapi.devices.detector import EzvizDetector
 from pyezvizapi.devices.intercom_events import IntercomEvent, get_intercom_events
 from pyezvizapi.devices.monitor import monitor_status
@@ -37,30 +40,12 @@ from pyezvizapi.exceptions import (
 from pyezvizapi.models import EzvizDeviceRecord
 
 
-def _kind(record: EzvizDeviceRecord, supported: list[str]) -> DeviceKind | None:
-    category = record.device_category
-    if category not in supported:
-        return None
-    info = record.raw.get("deviceInfos")
-    if category == DeviceCatagories.COMMON_DEVICE_CATEGORY.value and (
-        not isinstance(info, Mapping) or not info.get("hik")
-    ):
-        return None
-    categories: dict[str, DeviceKind] = {
-        DeviceCatagories.LIGHTING.value: "light",
-        DeviceCatagories.SOCKET.value: "plug",
-        DeviceCatagories.DETECTOR_DEVICE_CATEGORY.value: "detector",
-        DeviceCatagories.INTERCOM_MONITOR_CATEGORY.value: "monitor",
-    }
-    return categories.get(category, "camera")
-
-
 def _render(
     client: Any,
     serial: str,
     record: EzvizDeviceRecord,
     kind: DeviceKind,
-    alarms: dict,
+    alarms: dict[str, dict[str, Any] | None],
     refresh: bool,
 ) -> DeviceState:
     raw = dict(record.raw)
@@ -71,8 +56,14 @@ def _render(
     observed: frozenset[str] = frozenset()
     state_type: type[DeviceState]
     if kind == "camera":
+        alarm = alarms.get(serial)
         values = factory.camera_status(
-            client, serial, raw, refresh=refresh, latest_alarm=alarms.get(serial)
+            client,
+            serial,
+            raw,
+            refresh=refresh and (alarm is not None or serial not in alarms),
+            latest_alarm=alarm,
+            switches=record.switches,
         )
         if not refresh:
             for key in (
@@ -146,6 +137,57 @@ def _events(
     return events, True, None
 
 
+def _retain_channel_hints(
+    state: DeviceState, previous: DeviceSnapshot | None, instant: datetime
+) -> DeviceState:
+    """Expose one-poll-old channel labels only for independently matched resource IDs."""
+    if previous is None or not isinstance(state, CameraState):
+        return state
+    old = previous.devices.get(state.serial)
+    health = previous.health.get(state.serial)
+    if (
+        not isinstance(old, CameraState)
+        or health is None
+        or not health.current
+        or health.last_success is None
+        or not 0 <= (instant - health.last_success).total_seconds() <= 120
+    ):
+        return state
+
+    def rows_by_id(camera: CameraState) -> dict[str, Mapping]:
+        rows = camera.values.get("resourceInfos")
+        result: dict[str, Mapping] = {}
+        if not isinstance(rows, (tuple, list)):
+            return result
+        for row in rows:
+            if not isinstance(row, Mapping) or row.get("deviceSerial") != camera.serial:
+                continue
+            key = row.get("resourceId")
+            if isinstance(key, str) and key.strip():
+                if key in result:
+                    return {}  # Cannot match ambiguous IDs.
+                result[key] = row
+        return result
+
+    old_rows = rows_by_id(old)
+    old_channels = set(old.channels)
+    current = set(state.channels)
+    hints = set()
+    for key, row in rows_by_id(state).items():
+        prior = old_rows.get(key)
+        if prior is None:
+            continue
+        fields = ("resourceIdentifier", "localIndex")
+        if all(field in row for field in fields) or any(
+            field in row and row[field] != prior.get(field) for field in fields
+        ):
+            continue
+        hints.update(old_channels.intersection(camera_channels({"resourceInfos": [prior]})))
+    if not hints - current:
+        return state
+    return replace(state, stale_channels=tuple(sorted(hints - current, key=lambda ch: ch.key)))
+
+
 def poll_devices(client: Any, options: DevicePollOptions) -> DeviceSnapshot:
     """Publish once after a complete bounded poll; global failures keep the prior snapshot."""
     deadline = time.monotonic() + options.timeout
@@ -163,7 +205,7 @@ def poll_devices(client: Any, options: DevicePollOptions) -> DeviceSnapshot:
             if len(records) > options.max_devices:
                 raise PyEzvizError("Inventory device budget exhausted")
             kinds: dict[str, DeviceKind | None] = {
-                s: _kind(r, client.SUPPORTED_CATEGORIES) for s, r in records.items()
+                s: _device_kind(r, client.SUPPORTED_CATEGORIES) for s, r in records.items()
             }
             alarms = (
                 client._prefetch_latest_camera_alarms(
@@ -173,7 +215,16 @@ def poll_devices(client: Any, options: DevicePollOptions) -> DeviceSnapshot:
                 else {}
             )
             previous = client._device_snapshot
-            states = dict(previous.devices) if previous else {}
+            states = (
+                {
+                    s: replace(v, stale_channels=())
+                    if isinstance(v, CameraState) and v.stale_channels
+                    else v
+                    for s, v in previous.devices.items()
+                }
+                if previous
+                else {}
+            )
             health = (
                 {
                     s: DeviceHealth(False, False, v.last_success, "MissingFromInventory")
@@ -193,9 +244,10 @@ def poll_devices(client: Any, options: DevicePollOptions) -> DeviceSnapshot:
                         )
                     continue
                 try:
-                    states[serial] = _render(
+                    state = _render(
                         client, serial, record, kind, alarms, options.include_camera_alarms
                     )
+                    states[serial] = _retain_channel_hints(state, previous, instant)
                 except (EzvizAuthTokenExpired, EzvizAuthVerificationCode):
                     raise  # Account authentication failure is not a device defect.
                 except (PyEzvizError, KeyError, TypeError, ValueError, AttributeError) as error:

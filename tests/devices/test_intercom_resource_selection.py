@@ -169,9 +169,10 @@ def test_cli_discovery_selects_intercom_video_and_preserves_errors(
 
     def request(_client: EzvizClient, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         calls.append((method, path, kwargs))
-        if path.endswith("/pagelist"):
+        if path.endswith(("/pagelist", "/resources/INTERCOM-TEST")):
             return {
                 "meta": {"code": 200},
+                "page": {"hasNext": False},
                 "deviceInfos": [{"deviceSerial": "INTERCOM-TEST", "deviceCategory": "BDoorBell"}],
                 "resourceInfos": [
                     {"deviceSerial": "UNRELATED", **resource("Video", 9)},
@@ -192,7 +193,7 @@ def test_cli_discovery_selects_intercom_video_and_preserves_errors(
         ["--token-file", str(token_path), "camera", "--serial", "INTERCOM-TEST", action]
     )
     assert exit_code == (0 if response_code == 200 else 1)
-    assert [method for method, _path, _kwargs in calls] == ["GET", "GET", "PUT"]
+    assert [method for method, _path, _kwargs in calls] == ["GET", "GET", "GET", "PUT"]
     assert calls[-1][2]["json_body"] == {
         "unLockInfo": {
             "bindCode": "terminaluser",

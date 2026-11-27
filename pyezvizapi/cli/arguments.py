@@ -277,12 +277,12 @@ def add_unifiedmsg_arguments(subparsers: Any) -> None:
     parser_unified.add_argument(
         "--date",
         required=False,
-        help="Date in YYYYMMDD format (default: today in API timezone)",
+        help="Date in YYYYMMDD format (default: today in the process's local timezone)",
     )
     parser_unified.add_argument(
         "--end-time",
         required=False,
-        help="Pagination token (msgId) returned by previous call (default: latest)",
+        help="Raw time of the last message on the previous page (default: latest)",
     )
     parser_unified.add_argument(
         "--urls-only",

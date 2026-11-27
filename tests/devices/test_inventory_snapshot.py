@@ -1,7 +1,7 @@
 """Bounded mixed-device polling contracts; no account, device or HA required."""
 
 from copy import deepcopy
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -16,7 +16,9 @@ from pyezvizapi.cloud import deadline
 from pyezvizapi.cloud.operations import snapshot as operation
 from pyezvizapi.constants import DeviceSwitchType
 from pyezvizapi.devices import factory
+from pyezvizapi.devices.channels import CameraChannel
 from pyezvizapi.devices.observation import camera_switch_states
+from pyezvizapi.devices.payload import switch_values
 from pyezvizapi.devices.snapshot import (
     CameraState,
     DetectorState,
@@ -84,6 +86,35 @@ def test_one_acquisition_for_mixed_inventory_and_pure_selectors(client, monkeypa
     assert client.device_snapshot is snap and all(h.current for h in snap.health.values())
     fetch.assert_called_once_with(None)
     alarms.assert_called_once_with(["cam"])
+
+
+def test_pagelist_lb1_projects_to_current_light_state(client, monkeypatch):
+    """Reconstructed from ha-ezviz issue #173, not a captured Pagelist response."""
+    # https://github.com/RenierM26/ha-ezviz/issues/173
+    # Test values, pagination metadata and the explicit empty resource list are synthetic.
+    fixture = Path(__file__).parents[1] / "fixtures" / "issue_173_lb1_pagelist.json"
+    page = json.loads(fixture.read_text(encoding="utf-8"))
+    request = Mock(return_value=page)
+    monkeypatch.setattr(client, "_request_json", request)
+
+    snapshot = client.poll_devices()
+
+    assert set(snapshot.devices) == {"TEST_LB1"}
+    light = snapshot.devices["TEST_LB1"]
+    assert isinstance(light, LightState)
+    assert light.kind == "light"
+    assert snapshot.health["TEST_LB1"].current
+    assert light.is_on is True
+    assert light.values["device_sub_category"] == "LB1"
+    assert light.values["supported_channels"] == 0
+    assert light.values["productId"] == "test-lb1-product"
+    assert light.values["brightness"] == 73
+    assert light.values["color_temperature"] == 3200
+    assert light.values["switches"][DeviceSwitchType.ALARM_LIGHT.value] is True
+    features = {item["itemKey"]: item["dataValue"] for item in light.values["featureItems"]}
+    assert features["light_mode"] == "white"
+    assert features["color_rgb"] == "#FFA040"
+    request.assert_called_once()
 
 
 def test_snapshot_deep_immutability_and_detached_adapters():
@@ -440,3 +471,58 @@ def test_camera_switch_states_preserve_channel_identity_and_unknown_flags():
     assert camera_switch_states(camera.as_dict()) == {200: True}
     assert camera_switch_states({"switches": {7: "0"}}, channel_no=2) == {7: False}
     assert camera_switch_states({"SWITCH": [], "switches": {7: True}}) == {}
+
+
+@pytest.mark.parametrize("change", ["omit", "clear", "replace", "remove"])
+def test_poll_preserves_only_matching_omitted_channel_labels(client, monkeypatch, change):
+    row = {
+        "deviceSerial": "cam",
+        "resourceId": "resource",
+        "resourceIdentifier": "Video",
+        "localIndex": 1,
+    }
+    payload: dict[str, Any] = {
+        "meta": {"code": 200},
+        "page": {"hasNext": False},
+        "deviceInfos": [{"deviceSerial": "cam", "deviceCategory": "IPC", "status": 1}],
+        "resourceInfos": [row],
+        "SWITCH": {"cam": [{"type": 7, "enable": 1}]},
+    }
+    monkeypatch.setattr(client, "_request_json", lambda *_args, **_kwargs: deepcopy(payload))
+    opts = DevicePollOptions(include_camera_alarms=False)
+    first = client.poll_devices(opts).devices["cam"]
+    expected = (CameraChannel("Video", "1"),)
+    assert first.channels == expected
+    partial = dict(row)
+    partial.pop("resourceIdentifier")
+    if change == "clear":
+        partial["resourceIdentifier"] = ""
+    elif change == "replace":
+        partial["resourceId"] = "different"
+    payload["resourceInfos"] = [] if change == "remove" else [partial]
+    payload["deviceInfos"][0]["status"] = 2
+    second = client.poll_devices(opts).devices["cam"]
+    assert second.online is False
+    assert second.channels == ()
+    assert second.motion is None
+    assert second.stale_channels == (expected if change == "omit" else ())
+    exported = second.as_dict()
+    assert exported["resourceInfos"] == payload["resourceInfos"]
+    assert switch_values(exported["SWITCH"]) == {7: True}
+    assert client.poll_devices(opts).devices["cam"].stale_channels == ()
+    payload["resourceInfos"] = [row]
+    recovered = client.poll_devices(opts).devices["cam"]
+    assert recovered.channels == expected
+    assert recovered.stale_channels == ()
+
+
+def test_snapshot_replacement_preserves_nested_lists_and_real_tuples():
+    camera = CameraState("cam", "camera", {"nested": [{"values": ([1],)}]})
+    with_hint = replace(camera, stale_channels=(CameraChannel("Video", "1"),))
+    cleared = replace(with_hint, stale_channels=())
+
+    for state in (with_hint, cleared):
+        exported = state.as_dict()
+        assert exported == {"nested": [{"values": ([1],)}]}
+        exported["nested"][0]["values"][0].append(2)
+        assert state.as_dict() == camera.as_dict()

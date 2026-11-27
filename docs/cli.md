@@ -47,6 +47,37 @@ operations if run with your own credentials; they are not validation commands.
 Default output is human-readable where supported; `--json` requests structured
 output, but command results and error handling remain command-specific.
 
+### Unified alarm history
+
+`unifiedmsg` fetches one page of alarm messages. Omit `--serials` to query all
+devices, or pass a comma-separated list. The default limit is 20 (maximum 50).
+`--date` takes `YYYYMMDD` and defaults to today's date in the CLI process's
+local timezone, not the account or camera timezone.
+
+```bash
+pyezvizapi --json unifiedmsg --serials CAMERA_SERIAL --date 20261126 --limit 20
+pyezvizapi --json unifiedmsg --serials CAMERA_SERIAL --date 20261126 --limit 20 --end-time RAW_TIME
+```
+
+Omit `--end-time` to start with the newest messages for the query. For the next
+page, keep the filters and date the same and replace `RAW_TIME` with the last
+row's raw `time` value, unchanged. Do not use `msgId` or the formatted time shown
+in the table. A timestamp cursor is not a guarantee of exhaustive history when
+multiple messages share a timestamp at a page boundary.
+
+Global `--json` emits an array of message rows (or `[]`), not the full API
+response. `--urls-only` prints a serial and media URL per message that has one,
+even if `--json` is also set.
+
+The CLI uses the default subtype `92`. For custom subtype filters, the full
+response, or direct HTTP requests, see the
+[Unified message list API reference](unified-message-list.md).
+
+Latest-alarm polling is separate from history paging. When the first result
+doesn't include a camera, polling can issue fresh queries scoped to the missing
+cameras rather than treating an older history page as authoritative. The result
+is the newest matching alarm returned by EZVIZ at poll time.
+
 ### lan rtsp
 
 Use the camera's current **local device password**, not an EZVIZ account password.
@@ -382,7 +413,10 @@ python examples/mqtt_listener.py --save-token
 
 ### pagelist
 
-Dump the complete raw pagelist JSON. Great for exploring unknown fields in an editor (e.g. Notepad++).
+Dump the merged account inventory JSON for the SDK's standard set of
+[pagelist sections](pagelist-api.md). It fetches all pages for that query,
+not every possible section. The raw output can contain private routing
+metadata and credentials; keep it local or redact it before sharing.
 
 ```bash
 pyezvizapi pagelist > pagelist.json
@@ -390,7 +424,10 @@ pyezvizapi pagelist > pagelist.json
 
 ### device_infos
 
-Dump the processed device infos mapping (what the integration consumes). Optionally filter to one serial:
+Dump the processed device infos mapping (what the integration consumes).
+With `--serial`, the SDK attempts a single-device resource request and
+[falls back to account inventory](pagelist-api.md#choose-an-sdk-or-cli-view)
+when needed:
 
 ```bash
 # All devices

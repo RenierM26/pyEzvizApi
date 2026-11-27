@@ -1,0 +1,40 @@
+{
+  "meta": {
+    "code": 200
+  },
+  "page": {
+    "hasNext": false
+  },
+  "deviceInfos": [
+    {
+      "deviceSerial": "TEST_LB1",
+      "deviceCategory": "lighting",
+      "deviceSubCategory": "LB1",
+      "deviceType": "LB1",
+      "name": "Test LB1",
+      "status": 1,
+      "channelNumber": 0,
+      "supportExt": {}
+    }
+  ],
+  "resourceInfos": [],
+  "FEATURE": {
+    "TEST_LB1": {
+      "deviceCategory": "lighting",
+      "deviceSubCategory": "light-rgb-wifi",
+      "featureJson": "{\"category\":\"light-rgb-wifi\",\"channelNo\":0,\"productId\":\"test-lb1-product\",\"productModel\":\"LB1\",\"featureItemDtos\":[{\"itemKey\":\"light_mode\",\"dataType\":\"enum\",\"dataValue\":\"white\"},{\"itemKey\":\"color_temperature\",\"dataType\":\"num\",\"dataValue\":3200},{\"itemKey\":\"color_rgb\",\"dataType\":\"char\",\"dataValue\":\"#FFA040\"},{\"itemKey\":\"light_switch\",\"dataType\":\"bool\",\"dataValue\":true},{\"itemKey\":\"brightness\",\"dataType\":\"num\",\"dataValue\":73}]}"
+    }
+  },
+  "STATUS": {
+    "TEST_LB1": {
+      "upgradeStatus": 2,
+      "optionals": {}
+    }
+  },
+  "WIFI": {
+    "TEST_LB1": {}
+  },
+  "SWITCH": {
+    "TEST_LB1": []
+  }
+}

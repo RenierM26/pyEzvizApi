@@ -24,7 +24,8 @@ class _FrozenList(tuple):
 def _freeze(value: Any) -> Any:
     if isinstance(value, Mapping):
         return MappingProxyType({k: _freeze(v) for k, v in value.items()})
-    if isinstance(value, list):
+    # Replacing a state freezes its values again; keep JSON lists distinguishable.
+    if isinstance(value, (list, _FrozenList)):
         return _FrozenList(_freeze(v) for v in value)
     if isinstance(value, tuple):
         return tuple(_freeze(v) for v in value)
@@ -131,6 +132,9 @@ class DeviceState:
 
 @dataclass(frozen=True)
 class CameraState(DeviceState):
+    # Display hints only; never used by the fresh channel resolver or commands.
+    stale_channels: tuple[CameraChannel, ...] = ()
+
     @property
     def channels(self) -> tuple[CameraChannel, ...]:
         """Expose immutable, reported video identities without acquiring data."""

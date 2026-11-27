@@ -36,6 +36,8 @@ urlunsplit = _compat_module_1.urlunsplit
 from uuid import uuid4
 import zlib
 
+from urllib.parse import quote
+
 import requests
 
 from pyezvizapi.cloud import responses as _api_response
@@ -1492,6 +1494,7 @@ class EzvizClient:
         max_retries: int = 0,
         *,
         validate_page: Callable[[JsonDict], None] | None = None,
+        recover_inventory: bool = False,
     ) -> Any:
         """Get data from pagelist API."""
         if max_retries > MAX_RETRIES:
@@ -1536,7 +1539,13 @@ class EzvizClient:
                 retries += 1
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        return collect_pagelist(fetch_page, json_key=json_key, limit=limit, offset=offset)
+        return collect_pagelist(
+            fetch_page,
+            json_key=json_key,
+            limit=limit,
+            offset=offset,
+            recover_inventory=recover_inventory,
+        )
 
     def get_alarminfo(self, serial: str, limit: int = 1, max_retries: int = 0) -> JsonDict:
         """Get data from alarm info API for camera serial."""
@@ -1584,10 +1593,10 @@ class EzvizClient:
                 :class:`~pyezvizapi.constants.UnifiedMessageSubtype`.
             limit: Clamp between 1 and 50 as enforced by the public API.
             date: Accepts ``YYYYMMDD`` string, :class:`datetime.date`, or
-                :class:`datetime.datetime`. Defaults to "today" in API format.
-            end_time: Pass the ``msgId`` (string) returned by the previous call
-                for pagination. The mobile app sends an empty string to fetch the
-                most recent message, so ``""`` is preserved on purpose here.
+                :class:`datetime.datetime`. Defaults to the process-local date.
+            end_time: Pass the last message's raw ``time`` from the previous page,
+            without converting units or substituting ``msgId``. An empty string
+            requests the newest messages.
             max_retries: Number of additional attempts when the backend reports
                 temporary failures. Capped by :data:`MAX_RETRIES`.
         """
@@ -2423,8 +2432,8 @@ class EzvizClient:
 
     def _prefetch_latest_camera_alarms(
         self, serials: Iterable[str], *, chunk_size: int = 20
-    ) -> dict[str, dict[str, Any]]:
-        """Attempt to fetch the most recent unified message per camera serial."""
+    ) -> dict[str, JsonDict | None]:
+        """Fetch latest alarms; None means a complete query found no alarm."""
         return _devices._prefetch_latest_camera_alarms(
             self, serials, chunk_size=chunk_size, _owner=_sys.modules[__name__]
         )
@@ -4458,22 +4467,86 @@ class EzvizClient:
                 )
             return self.mqtt_client
 
+    _DEVICE_PAGE_FILTER = (
+        "CLOUD, TIME_PLAN, CONNECTION, SWITCH,"
+        "STATUS, WIFI, NODISTURB, KMS,"
+        "P2P, CHANNEL, VTM, DETECTOR,"
+        "FEATURE, CUSTOM_TAG, UPGRADE, VIDEO_QUALITY,"
+        "QOS, PRODUCTS_INFO, SIM_CARD, MULTI_UPGRADE_EXT,"
+        "FEATURE_INFO"
+    )
+
     def _get_page_list(self) -> Any:
         """Get ezviz device info broken down in sections."""
-        return self._api_get_pagelist(
-            page_filter="CLOUD, TIME_PLAN, CONNECTION, SWITCH,"
-            "STATUS, WIFI, NODISTURB, KMS,"
-            "P2P, CHANNEL, VTM, DETECTOR,"
-            "FEATURE, CUSTOM_TAG, UPGRADE, VIDEO_QUALITY,"
-            "QOS, PRODUCTS_INFO, SIM_CARD, MULTI_UPGRADE_EXT,"
-            "FEATURE_INFO",
-            json_key=None,
-        )
+        return self._api_get_pagelist(page_filter=self._DEVICE_PAGE_FILTER, recover_inventory=True)
+
+    def _get_device_page(self, serial: str) -> JsonDict | None:
+        """Try the app's serial-scoped resource endpoint."""
+        if serial in {".", ".."}:
+            return None
+        path = f"{API_ENDPOINT_PAGELIST.rsplit('/', 1)[0]}/{quote(serial, safe='')}"
+        try:
+            payload = self._request_json(
+                "GET",
+                path,
+                params={"filter": self._DEVICE_PAGE_FILTER.replace(" ", "")},
+            )
+        except HTTPError as err:
+            if self._http_error_status(err) in {404, 405, 501}:
+                return None
+            raise
+        # Let the account pagelist handle recovery for metadata-level errors.
+        if self._meta_code(payload) != 200:
+            return None
+        rows = payload.get("deviceInfos")
+        resources = payload.get("resourceInfos")
+        # Missing resource metadata would discard routing information. For
+        # multiple resources, retain the account ordering used by legacy callers.
+        if (
+            not isinstance(resources, list)
+            or len(resources) != 1
+            or not isinstance(resource := resources[0], dict)
+            or resource.get("deviceSerial") != serial
+            or not isinstance(resource_id := resource.get("resourceId"), str)
+            or not resource_id.strip()
+        ):
+            return None
+        if (
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or not isinstance(rows[0], dict)
+            or rows[0].get("deviceSerial") != serial
+        ):
+            return None
+
+        return None if self._has_deferred_device_routing(payload, serial, resource_id) else payload
+
+    @staticmethod
+    def _has_deferred_device_routing(payload: JsonDict, serial: str, resource_id: str) -> bool:
+        """Detect missing routing rows explicitly marked deferred by EZVIZ."""
+        meta = payload.get("meta")
+        deferred = meta.get("moreInfo") if isinstance(meta, Mapping) else None
+        if not isinstance(deferred, Mapping):
+            return False
+        for section, key in (
+            ("CLOUD", resource_id),
+            ("CHANNEL", resource_id),
+            ("VTM", resource_id),
+            ("CONNECTION", serial),
+            ("WIFI", serial),
+            ("P2P", serial),
+        ):
+            if section not in deferred:
+                continue
+            reported = payload.get(section)
+            if not isinstance(reported, Mapping) or not reported.get(key):
+                return True
+        return False
 
     def get_page_list(self) -> Any:
-        """Return the full pagelist payload without filtering."""
+        """Return the merged payload for the standard section filter."""
 
-        return self._get_page_list()
+        return self._api_get_pagelist(page_filter=self._DEVICE_PAGE_FILTER)
 
     def export_token(self) -> dict[str, Any]:
         """Return an independent snapshot of the current authentication token."""

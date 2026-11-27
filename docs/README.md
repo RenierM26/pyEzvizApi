@@ -17,6 +17,8 @@ See the [2.5.0 release notes](release-2.5.0.md) for intercom APIs and compatibil
 | Install, authenticate or fix a token/CLI problem | [Getting started](getting-started.md) |
 | Read gateway-linked contact, water and siren sensor status | [Detectors](detectors.md) |
 | Call the synchronous client from Python | [Python API](python-api.md) |
+| Query device inventory and resource sections | [Pagelist API](pagelist-api.md) |
+| Build a custom alarm or message query | [Unified message list API](unified-message-list.md) |
 | List devices, control a camera or inspect recordings | [CLI](cli.md) |
 | Migrate push and persist its credentials | [Channel-99](channel99.md) |
 | Choose RTSP, finite saves or native stream APIs | [Media paths](media.md) |

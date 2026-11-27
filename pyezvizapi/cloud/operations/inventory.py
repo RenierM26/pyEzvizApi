@@ -36,10 +36,10 @@ def get_device_messages_list(
             :class:`~pyezvizapi.constants.UnifiedMessageSubtype`.
         limit: Clamp between 1 and 50 as enforced by the public API.
         date: Accepts ``YYYYMMDD`` string, :class:`datetime.date`, or
-            :class:`datetime.datetime`. Defaults to "today" in API format.
-        end_time: Pass the ``msgId`` (string) returned by the previous call
-            for pagination. The mobile app sends an empty string to fetch the
-            most recent message, so ``""`` is preserved on purpose here.
+            :class:`datetime.datetime`. Defaults to the process-local date.
+        end_time: Pass the last message's raw ``time`` from the previous page,
+        without converting units or substituting ``msgId``. An empty string
+        requests the newest messages.
         max_retries: Number of additional attempts when the backend reports
             temporary failures. Capped by :data:`MAX_RETRIES`.
     """

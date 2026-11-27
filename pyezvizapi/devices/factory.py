@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from pyezvizapi.devices.camera import EzvizCamera
@@ -17,12 +18,13 @@ def camera_status(
     *,
     refresh: bool,
     latest_alarm: dict[str, Any] | None,
+    switches: Mapping[int, bool] | None = None,
 ) -> dict[str, Any]:
     """Build a camera wrapper and return its status mapping."""
 
     return cast(
         dict[str, Any],
-        EzvizCamera(client, serial, device_obj).status(
+        EzvizCamera(client, serial, device_obj, switches=switches).status(
             refresh=refresh,
             latest_alarm=latest_alarm,
         ),

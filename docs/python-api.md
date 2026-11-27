@@ -76,8 +76,10 @@ first-device recovery and shutdown semantics.
 | `load_light_bulbs(refresh=True)` | Lighting status mappings |
 | `load_smart_plugs(refresh=True)` | Smart-plug status mappings |
 | `load_devices(refresh=True)` | Combined supported device mappings |
-| `get_device_infos(serial=None)` | Raw normalized sections for exploration |
+| `get_page_list()` | Merged [pagelist sections](pagelist-api.md) for device and resource diagnostics |
+| `get_device_infos(serial=None)` | Processed per-serial view; pass a serial for a scoped lookup |
 | `get_device_records(serial=None)` | Typed device records |
+| `get_device_messages_list(...)` | One raw [UnifiedMsg page](unified-message-list.md), with custom alarm filters |
 | `export_token()` | Deep snapshot for secure persistence |
 
 Raw fields can change upstream. See the [HA contract](home-assistant-contract.md)

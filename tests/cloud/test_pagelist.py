@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -183,3 +185,107 @@ def test_get_device_default_accepts_legacy_page_without_metadata(monkeypatch) ->
     )
 
     assert client.get_device() == devices
+
+
+@pytest.mark.parametrize("missing", ["page", "resourceInfos"])
+def test_projected_pagelist_retries_once_at_same_offset(monkeypatch, missing) -> None:
+    client = _client()
+    first = {"page": {"hasNext": True}, "deviceInfos": [{"deviceSerial": "A"}], "resourceInfos": []}
+    last = {"page": {"hasNext": False}, "deviceInfos": [{"deviceSerial": "B"}], "resourceInfos": []}
+    partial = {key: value for key, value in last.items() if key != missing}
+    offsets = []
+    responses = {0: iter([first]), 30: iter([partial, last])}
+
+    def fetch(_method, _path, *, params, **_kwargs):
+        offsets.append(params["offset"])
+        return {"meta": {"code": 200}, **next(responses[params["offset"]])}
+
+    monkeypatch.setattr(client, "_request_json", fetch)
+    records = client.get_device_records()
+    assert isinstance(records, dict)
+    assert set(records) == {"A", "B"}
+    assert offsets == [0, 30, 30]
+
+
+def test_raw_pagelist_still_returns_incomplete_payload_without_retry(monkeypatch) -> None:
+    client = _client()
+    payload = {"meta": {"code": 200}, "deviceInfos": [{"deviceSerial": "A"}]}
+    calls = []
+
+    def fetch(*_args, **kwargs):
+        calls.append(kwargs["params"]["offset"])
+        return payload
+
+    monkeypatch.setattr(client, "_request_json", fetch)
+    assert client.get_page_list() == payload
+    assert calls == [0]
+    with pytest.raises(PyEzvizError, match="explicit hasNext"):
+        client.get_device_records()
+    assert calls == [0, 0, 0]
+
+
+def test_inventory_debug_logs_only_safe_diagnostics(monkeypatch, caplog) -> None:
+    client = _client()
+    private = "PRIVATE_CANARY"
+    responses = iter(
+        [
+            {
+                "deviceInfos": [{"deviceSerial": private}],
+                "meta": {
+                    "code": 200,
+                    "message": private,
+                    "moreInfo": {"STATUS": private, private: private},
+                },
+            },
+            {
+                "deviceInfos": [{"deviceSerial": private}],
+                "resourceInfos": [],
+                "meta": {"code": 200},
+                "page": {"hasNext": False},
+            },
+        ]
+    )
+    monkeypatch.setattr(client, "_request_json", lambda *a, **kw: next(responses))
+    with caplog.at_level("DEBUG", logger="pyezvizapi.cloud.pagination"):
+        client.get_device_records()
+    assert private not in caplog.text
+    assert "deferred_sections=['STATUS']" in caplog.text
+    assert "phase=retry invalid_has_next=False missing_resources=False" in caplog.text
+    assert "pages_checked=1 incomplete_pages=1 retries_recovered=1" in caplog.text
+
+
+def test_mixed_inventory_preserves_resources_and_groups_across_pages(monkeypatch) -> None:
+    """Synthetic inventory: these group assignments are not a live capture."""
+    client = _client()
+    fixture = Path(__file__).resolve().parents[1] / "fixtures/synthetic_mixed_pagelist_pages.json"
+    pages = {page["page"]["offset"]: page for page in json.loads(fixture.read_text())}
+    offsets = []
+
+    def fetch(_method, _path, *, params, **_kwargs):
+        assert params["groupId"] == -1
+        assert params["limit"] == 3
+        offset = params["offset"]
+        offsets.append(offset)
+        return pages[offset]
+
+    request = client._api_get_pagelist
+    monkeypatch.setattr(client, "_api_get_pagelist", lambda **kw: request(limit=3, **kw))
+    monkeypatch.setattr(client, "_request_json", fetch)
+    records = client.get_device_records()
+    assert isinstance(records, dict)
+    assert offsets == [0, 3]
+    assert {key: record.device_category for key, record in records.items()} == {
+        "TEST_DOORBELL": "BDoorBell",
+        "TEST_MONITOR": "DBScreen",
+        "TEST_SOCKET": "Socket",
+        "TEST_DETECTOR": "Detector",
+    }
+    assert {
+        key: [(row["resourceId"], row["groupId"]) for row in record.raw["resourceInfos"]]
+        for key, record in records.items()
+    } == {
+        "TEST_DOORBELL": [("test-video-0", 7), ("test-video-1", 7)],
+        "TEST_MONITOR": [("test-monitor", 7)],
+        "TEST_SOCKET": [("test-socket", 9)],
+        "TEST_DETECTOR": [("test-detector", -1)],
+    }

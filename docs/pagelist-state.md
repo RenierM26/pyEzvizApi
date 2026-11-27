@@ -355,9 +355,10 @@ and the [pagelist fixture](../tests/fixtures/page_list_response.json).
   (Monday 1 through Sunday 7). The app encodes duration in minutes,
   wraps overnight intervals and uses one minute for equal times.
 - `set_app_auto_tracking` targets the app-scoped
-  `IntelligentAPP.ModifyAppFunctionCfgs` action on Video/1. Callers must
+  `IntelligentAPP.ModifyAppFunctionCfgs` action (Video/1 by default). Callers must
   verify that the named app is enabled and advertises tracking.
   It does not replace the device-wide tracking switch or tracking zoom.
+  See [AI detection settings](ai-detection.md) for explicit resource routing.
 - `TimingRecord.ScheduleRecordParams` is reported in pagelist, but its
   write route and gate remain unverified. The fixture schema lists
   storage allocation and overwrite parameters, not schedule slots.

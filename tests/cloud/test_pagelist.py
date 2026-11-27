@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -250,3 +252,40 @@ def test_inventory_debug_logs_only_safe_diagnostics(monkeypatch, caplog) -> None
     assert "deferred_sections=['STATUS']" in caplog.text
     assert "phase=retry invalid_has_next=False missing_resources=False" in caplog.text
     assert "pages_checked=1 incomplete_pages=1 retries_recovered=1" in caplog.text
+
+
+def test_mixed_inventory_preserves_resources_and_groups_across_pages(monkeypatch) -> None:
+    """Synthetic inventory: these group assignments are not a live capture."""
+    client = _client()
+    fixture = Path(__file__).resolve().parents[1] / "fixtures/synthetic_mixed_pagelist_pages.json"
+    pages = {page["page"]["offset"]: page for page in json.loads(fixture.read_text())}
+    offsets = []
+
+    def fetch(_method, _path, *, params, **_kwargs):
+        assert params["groupId"] == -1
+        assert params["limit"] == 3
+        offset = params["offset"]
+        offsets.append(offset)
+        return pages[offset]
+
+    request = client._api_get_pagelist
+    monkeypatch.setattr(client, "_api_get_pagelist", lambda **kw: request(limit=3, **kw))
+    monkeypatch.setattr(client, "_request_json", fetch)
+    records = client.get_device_records()
+    assert isinstance(records, dict)
+    assert offsets == [0, 3]
+    assert {key: record.device_category for key, record in records.items()} == {
+        "TEST_DOORBELL": "BDoorBell",
+        "TEST_MONITOR": "DBScreen",
+        "TEST_SOCKET": "Socket",
+        "TEST_DETECTOR": "Detector",
+    }
+    assert {
+        key: [(row["resourceId"], row["groupId"]) for row in record.raw["resourceInfos"]]
+        for key, record in records.items()
+    } == {
+        "TEST_DOORBELL": [("test-video-0", 7), ("test-video-1", 7)],
+        "TEST_MONITOR": [("test-monitor", 7)],
+        "TEST_SOCKET": [("test-socket", 9)],
+        "TEST_DETECTOR": [("test-detector", -1)],
+    }

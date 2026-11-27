@@ -1,0 +1,76 @@
+[
+  {
+    "meta": {
+      "code": 200
+    },
+    "page": {
+      "offset": 0,
+      "limit": 3,
+      "hasNext": true
+    },
+    "deviceInfos": [
+      {
+        "deviceSerial": "TEST_DOORBELL",
+        "deviceCategory": "BDoorBell"
+      },
+      {
+        "deviceSerial": "TEST_MONITOR",
+        "deviceCategory": "DBScreen"
+      }
+    ],
+    "resourceInfos": [
+      {
+        "deviceSerial": "TEST_DOORBELL",
+        "resourceId": "test-video-0",
+        "groupId": 7,
+        "localIndex": 0
+      },
+      {
+        "deviceSerial": "TEST_MONITOR",
+        "resourceId": "test-monitor",
+        "groupId": 7,
+        "localIndex": 0
+      },
+      {
+        "deviceSerial": "TEST_DOORBELL",
+        "resourceId": "test-video-1",
+        "groupId": 7,
+        "localIndex": 1
+      }
+    ]
+  },
+  {
+    "meta": {
+      "code": 200
+    },
+    "page": {
+      "offset": 3,
+      "limit": 3,
+      "hasNext": false
+    },
+    "deviceInfos": [
+      {
+        "deviceSerial": "TEST_SOCKET",
+        "deviceCategory": "Socket"
+      },
+      {
+        "deviceSerial": "TEST_DETECTOR",
+        "deviceCategory": "Detector"
+      }
+    ],
+    "resourceInfos": [
+      {
+        "deviceSerial": "TEST_SOCKET",
+        "resourceId": "test-socket",
+        "groupId": 9,
+        "localIndex": 0
+      },
+      {
+        "deviceSerial": "TEST_DETECTOR",
+        "resourceId": "test-detector",
+        "groupId": -1,
+        "localIndex": 0
+      }
+    ]
+  }
+]

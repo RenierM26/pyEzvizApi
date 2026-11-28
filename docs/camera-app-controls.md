@@ -116,6 +116,35 @@ part of a routine validation run.
   the refreshed Pagelist STATUS; it returns `None` outside custom mode or
   when no valid ID is reported.
 
+### List and delete custom alarm recordings
+
+Upload the encoded bytes, then use `client.add_voice_info(serial, name, url)`
+to register the recording. To manage saved recordings, read the `voiceInfos`
+list and pass the chosen entry's `voiceId` and `voiceUrl` to the delete
+method. If the recording is active, switch to another sound or silent mode
+(`client.alarm_sound(serial, sound_type=2)`) before deleting it.
+
+With an authenticated `client` and the target camera's `serial`, this
+example lists recordings and deletes only the one whose ID you enter.
+Press Enter without an ID to leave the list unchanged.
+
+```python
+recordings = client.get_voice_info(serial)["voiceInfos"]
+for recording in recordings:
+    print(recording["voiceId"], recording["voiceName"])
+
+voice_id = input("Recording ID to delete (Enter to keep all): ").strip()
+if voice_id:
+    for recording in recordings:
+        if str(recording["voiceId"]) == voice_id:
+            client.delete_voice_info(
+                serial, recording["voiceId"], voice_url=recording["voiceUrl"]
+            )
+            break
+    else:
+        raise ValueError("Recording ID not found")
+```
+
 ## Model-specific IoT property access
 
 Use `get_app_property(client, serial, CameraAppProperty.X)` to read the

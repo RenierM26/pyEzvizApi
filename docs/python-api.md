@@ -154,6 +154,7 @@ readback where available.
 | Identify a lens, route point movement, or choose a capture channel | [Camera channels](camera-channels.md), [point PTZ](ptz-point-control.md) |
 | Change camera switches, AI detection, or image settings | [Switches](device-switches.md), [AI detection](ai-detection.md), [image controls](image-controls.md) |
 | Read or set recording schedules, patrol, privacy masks, or audio | [Camera app controls](camera-app-controls.md) |
+| Upload, list, or delete custom alarm recordings | [Custom alarm recordings](camera-app-controls.md#list-and-delete-custom-alarm-recordings) |
 | Receive background events rather than poll history | [Channel-99 push](channel99.md), including migration, callback persistence, `raise_if_failed()`, and shutdown |
 | Trigger or save a snapshot, or save a bounded clip | [Saving media](media-saving.md): `capture_picture` triggers capture and returns an API payload; `save_image`, `save_clip`, and `save_clip_with_options` write media to an output. |
 | Select a streaming or recording route | [Media paths](media.md) and [streaming reference](streaming.md). `open_stream` returns a lazy packet-stream context, not a player URL or a decoded frame API. |

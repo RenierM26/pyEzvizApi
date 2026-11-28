@@ -627,7 +627,6 @@ def test_set_switch_falls_back_to_legacy_and_preserves_first_error(monkeypatch) 
         client.set_switch("CAM123", 7, True)
 
 
-
 @pytest.mark.parametrize(("primary", "fallback"), [(403, 403), (504, 504), (403, 504), (504, 403)])
 def test_switch_fallback_preserves_primary_http_cause(monkeypatch, primary, fallback) -> None:
     """Exercise real request wrapping and both endpoints, including mixed statuses."""
@@ -667,6 +666,7 @@ def test_switch_fallback_retains_api_error_or_success(monkeypatch, legacy_succes
             client.switch_status("CAM123", 7, True)
         assert caught.value.__cause__ is None
         assert caught.value.__suppress_context__
+
 
 def test_switch_status_updates_cached_camera_switch_state(monkeypatch) -> None:
     client = _client()
@@ -3122,9 +3122,7 @@ def test_native_hcnetsdk_clip_auto_waits_for_clear_video_window(
     client = _client()
     captured: list[ClipOptions] = []
 
-    def capture_options(
-        _serial: str, _output: object, options: ClipOptions
-    ) -> dict[str, bool]:
+    def capture_options(_serial: str, _output: object, options: ClipOptions) -> dict[str, bool]:
         captured.append(options)
         return {"ok": True}
 
@@ -3292,9 +3290,7 @@ def test_save_clip_ecdh_failure_preserves_existing_path(monkeypatch, tmp_path) -
         output.write(b"partial media")
         raise PyEzvizError("unsupported ECDH payload")
 
-    monkeypatch.setattr(
-        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client", fake_copy
-    )
+    monkeypatch.setattr("pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client", fake_copy)
 
     with pytest.raises(PyEzvizError, match="unsupported ECDH payload"):
         client.save_clip("CAM123", output_path, source="local-sdk-ecdh")
@@ -3411,9 +3407,7 @@ def test_save_clip_local_sdk_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> N
     assert result["content_type"] == "video/mpeg"
 
 
-def test_save_clip_local_sdk_ecdh_decryption_defaults_to_mpegts(
-    monkeypatch, tmp_path
-) -> None:
+def test_save_clip_local_sdk_ecdh_decryption_defaults_to_mpegts(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "front.ts"
     calls: list[dict[str, Any]] = []
@@ -3432,9 +3426,7 @@ def test_save_clip_local_sdk_ecdh_decryption_defaults_to_mpegts(
         fake_copy_local_sdk_ecdh_stream_from_client,
     )
 
-    result = client.save_clip(
-        "CAM123", output_path, source="local-sdk-ecdh", decrypt_video=True
-    )
+    result = client.save_clip("CAM123", output_path, source="local-sdk-ecdh", decrypt_video=True)
 
     assert calls[0]["output_format"] == "mpegts"
     assert result["format"] == "mpegts"
@@ -4108,9 +4100,7 @@ def test_save_clip_cloud_unbounded_path_streams_before_capture_returns(
     )
 
     with pytest.raises(RuntimeError, match="capture interrupted"):
-        client.save_clip(
-            "CAM123", output_path, source="cloud", duration_seconds=None
-        )
+        client.save_clip("CAM123", output_path, source="cloud", duration_seconds=None)
 
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
 
@@ -4264,9 +4254,7 @@ def test_save_clip_cloud_unbounded_empty_fifo_is_no_media(
     reader.start()
 
     with pytest.raises(EzvizNoMediaError):
-        client.save_clip(
-            "CAM123", output_path, source="cloud", duration_seconds=None
-        )
+        client.save_clip("CAM123", output_path, source="cloud", duration_seconds=None)
     reader.join(timeout=3)
 
     assert not reader.is_alive()
@@ -4798,19 +4786,23 @@ def test_device_encrypt_key_list_builds_prepared_form_request(monkeypatch) -> No
 
     def fake_send_prepared(req: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
         captured.update({"req": req, **kwargs})
-        return _response(text='{"meta": {"code": 200}, "keys": []}')
+        return _response(text='{"meta": {"code": 200}, "responseDetail": {}}')
 
     monkeypatch.setattr(client, "_send_prepared", fake_send_prepared)
 
-    assert client.get_device_list_encrypt_key(7, {"serial": ["CAM1", "CAM2"]}, max_retries=1) == {
+    assert client.get_device_list_encrypt_key(
+        7,
+        {"checkcode": "123456", "deviceSerialList": "CAM1,CAM2,", "msgType": "synthetic"},
+        max_retries=1,
+    ) == {
         "meta": {"code": 200},
-        "keys": [],
+        "responseDetail": {},
     }
     req = captured["req"]
     assert req.method == "POST"
     assert req.headers["Content-Type"] == "application/x-www-form-urlencoded"
     assert req.headers["areaId"] == "7"
-    assert req.body == "serial=CAM1&serial=CAM2"
+    assert req.body == "checkcode=123456&deviceSerialList=CAM1%2CCAM2%2C&msgType=synthetic"
     assert captured["retry_401"] is True
     assert captured["max_retries"] == 1
 
@@ -5422,13 +5414,15 @@ def test_get_alarminfo_raises_contextual_error(monkeypatch) -> None:
 def test_get_device_records_returns_map_single_record_and_raw_fallback(monkeypatch) -> None:
     client = _client()
     page = {
-        "deviceInfos": [{
-            "deviceSerial": "CAM123",
-            "name": "Front door",
-            "deviceCategory": "camera",
-            "version": "1.0",
-            "status": 1,
-        }],
+        "deviceInfos": [
+            {
+                "deviceSerial": "CAM123",
+                "name": "Front door",
+                "deviceCategory": "camera",
+                "version": "1.0",
+                "status": 1,
+            }
+        ],
         "STATUS": {"CAM123": {"globalStatus": 1, "optionals": {}}},
         "SWITCH": {"CAM123": [{"type": 1, "enable": 1}]},
     }

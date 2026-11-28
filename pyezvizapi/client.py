@@ -4130,7 +4130,15 @@ class EzvizClient:
         *,
         max_retries: int = 0,
     ) -> JsonDict:
-        """Batch query encrypt keys for devices, matching the mobile client's risk API."""
+        """Submit an app-style batch camera key request and return the raw response.
+
+        Pass the account area ID and form fields `deviceSerialList`,
+        `checkcode`, and `msgType`. Android sends one comma-separated
+        serial string with a trailing comma. Use any verification code
+        required by EZVIZ; this method does not initiate verification.
+        The app reads the per-device results from `responseDetail`.
+        Treat the returned payload as sensitive and do not log it.
+        """
         return _settings.get_device_list_encrypt_key(
             self, area_id, form_data, max_retries=max_retries, _owner=_sys.modules[__name__]
         )

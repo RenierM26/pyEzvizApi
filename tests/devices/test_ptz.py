@@ -426,3 +426,12 @@ def test_download_saved_panorama_redacts_request_errors(panorama_download, monke
     with pytest.raises(PyEzvizError, match=r"^Could not download saved panorama$") as error:
         ptz.download_saved_panorama(client, "CAM001")
     assert error.value.__suppress_context__
+
+
+@pytest.mark.parametrize("code", [1310724, "1310724"])
+def test_recall_explains_current_viewpoint_rejection(device_requests, code) -> None:
+    client, sent, replies = device_requests
+    replies.append({"resultCode": code})
+    with pytest.raises(PyEzvizError, match="camera may already be at the saved viewpoint"):
+        ptz.goto_ptz_preset(client, "CAM001", 1, channel=2)
+    assert len(sent) == 1

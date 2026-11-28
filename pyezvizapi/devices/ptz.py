@@ -92,6 +92,15 @@ def _request_preset(
                 "POST", f"{_PRESET_PATH}/{operation}", data=data, retry_401=False
             )
     code = response.get("resultCode")
+    if (
+        operation == "config"
+        and fields.get("configPreset") == "GOTO_PRESET"
+        and str(code) == "1310724"
+    ):
+        raise PyEzvizError(
+            "PTZ preset recall was rejected (code 1310724); "
+            "the camera may already be at the saved viewpoint"
+        )
     if (type(code) is not int or code != 0) and code != "0":
         raise PyEzvizError(
             f"Could not {operation} PTZ preset: {client._response_summary(response)}"

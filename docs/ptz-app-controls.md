@@ -50,6 +50,13 @@ HCNetSDK controls are separate.
   a saved-viewpoint index. The path and the patrol schedule are separate.
   Deleting the preset path is not the app's separate bulk point-reset action.
 
+On the tested H9c, recall succeeded after moving away from the saved
+viewpoint. Recalling from the saved view returned code `1310724`; the SDK
+reports the rejection rather than assuming the camera reached the viewpoint.
+SDK rename returned code `2000` (“Device does not exist”) on both H9c channels,
+although the Android app renamed a test preset on the same camera. Create,
+list and delete were verified independently.
+
 ## Panorama capture
 
 Call `resolve_panorama_capture_route(page_list, serial, channel=channel)`

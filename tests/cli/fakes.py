@@ -379,8 +379,9 @@ class FakeCamera:
         self.calls.append(("status", (refresh,)))
         return {"serial": self.serial, "name": "Front Door", "refresh": refresh}
 
-    def move(self, direction: str, speed: int) -> None:
-        self.calls.append(("move", (direction, speed)))
+    def move(self, direction: str, speed: int, *, channel: int | None = None) -> None:
+        args = (direction, speed) if channel is None else (direction, speed, channel)
+        self.calls.append(("move", args))
 
     def move_coordinates(self, x: float, y: float) -> None:
         self.calls.append(("move_coordinates", (x, y)))

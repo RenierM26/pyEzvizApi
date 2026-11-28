@@ -359,6 +359,8 @@ pyezvizapi camera --serial ABC123 status
 
 # PTZ move
 pyezvizapi camera --serial ABC123 move --direction up --speed 5
+# Or target the camera’s reported cloud playback channel:
+pyezvizapi camera --serial ABC123 move --direction up --channel 2
 
 # Move by coordinates
 pyezvizapi camera --serial ABC123 move_coords --x 0.4 --y 0.6

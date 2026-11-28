@@ -156,7 +156,10 @@ def _handle_camera(
     camera = _owner.EzvizCamera(client, args.serial)
     _owner._LOGGER.debug("Camera loaded")
     if args.camera_action == "move":
-        camera.move(args.direction, args.speed)
+        if args.channel is None:
+            camera.move(args.direction, args.speed)
+        else:
+            camera.move(args.direction, args.speed, channel=args.channel)
         return 0
     if args.camera_action == "move_coords":
         camera.move_coordinates(args.x, args.y)

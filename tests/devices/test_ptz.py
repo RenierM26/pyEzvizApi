@@ -5,11 +5,13 @@ from email.parser import BytesParser
 import json
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+from uuid import UUID
 
 import pytest
 import requests
 
 from pyezvizapi.devices import app_controls, ptz
+from pyezvizapi.devices.camera import EzvizCamera
 from pyezvizapi.devices.channels import CameraChannel
 from pyezvizapi.exceptions import PyEzvizError
 
@@ -29,6 +31,7 @@ def _multipart(request: requests.PreparedRequest) -> dict[str, Any]:
 def test_directional_ptz_wire(device_requests, monkeypatch) -> None:
     client, sent, replies = device_requests
     monkeypatch.setattr("pyezvizapi.client.time.time", lambda: 1_700_000_000.125)
+    monkeypatch.setattr("pyezvizapi.client.uuid4", lambda: UUID("a1234567-89ab-4def-8123-456789abcdef"))
     replies.extend([{"meta": {"code": 200}}] * 2)
     for action in ("START", "STOP"):
         success = client.ptz_control("UPLEFT", "CAM001", action, 4, channel=2)
@@ -38,7 +41,7 @@ def test_directional_ptz_wire(device_requests, monkeypatch) -> None:
         assert urlsplit(request.url).path == "/v3/devices/CAM001/ptzControl"
         form = parse_qs(request.body)
         uuid = form.pop("uuid")
-        assert uuid[0]
+        assert uuid == ["a123456789ab4def8123456789abcdef"]
         assert form == {
             "command": ["UPLEFT"],
             "action": [action],
@@ -155,8 +158,8 @@ def test_resource_panorama_wire(device_requests) -> None:
     replies.extend(
         [{"meta": {"code": 200}}, {"meta": {"code": 200}, "data": info}, {"meta": {"code": 403}}]
     )
-    ptz.start_panorama_capture(client, "CAM001", channel=channel)
-    progress = ptz.get_panorama_info(client, "CAM001", channel=channel)
+    ptz.start_panorama_capture(client, "cam001", channel=channel)
+    progress = ptz.get_panorama_info(client, "cam001", channel=channel)
     assert progress == info
     assert sent[0].method == "POST"
     assert urlsplit(sent[0].url).path == "/v3/panoramicDevices/action/pics/collect/CAM001/2"
@@ -193,4 +196,83 @@ def test_save_patrol_point_uses_distinct_multipart_contract(device_requests) -> 
         ptz.save_patrol_point(client, "CAM001", 2, thumbnail=b"image")
     with pytest.raises(ValueError, match="point name"):
         ptz.save_patrol_point(client, "CAM001", 0, thumbnail=b"image")
+    assert len(sent) == 2
+
+
+
+@pytest.mark.parametrize("payload", [{"resultCode": 0}, {"resultCode": "0", "data": None}])
+def test_empty_preset_list_matches_app(device_requests, payload) -> None:
+    client, _, replies = device_requests
+    replies.append(payload)
+    rows = ptz.list_ptz_presets(client, "CAM001", channel=2)
+    assert rows == []
+
+
+@pytest.mark.parametrize("operation", [ptz.goto_ptz_preset, ptz.delete_ptz_preset])
+@pytest.mark.parametrize("response", [
+    {"meta": {"code": 200}, "resultCode": 4},
+    {"meta": {"code": 200}},
+    {"resultCode": False},
+    {"resultCode": 0.0},
+])
+def test_legacy_preset_requires_legacy_success(device_requests, operation, response) -> None:
+    client, sent, replies = device_requests
+    replies.append(response)
+    with pytest.raises(PyEzvizError, match="config PTZ preset"):
+        operation(client, "CAM001", 1, channel=2)
+    assert len(sent) == 1
+
+
+def test_panorama_interaction_uses_explicit_routes(device_requests) -> None:
+    client, sent, replies = device_requests
+    replies.extend([{"meta": {"code": 200}}] * 3)
+    ptz.move_to_panorama_point(client, "cam001", 0.12556789, 1.0)
+    ptz.move_to_panorama_point(
+        client, "cam001", 0.12556789, 1.0, channel=CameraChannel("Video_2", "2")
+    )
+    ptz.reset_panorama_mark(client, "cam001")
+    assert [(r.method, urlsplit(r.url).path) for r in sent] == [
+        ("POST", "/v3/panoramicDevices/operation"),
+        ("PUT", "/v3/iot-feature/action/CAM001/Video_2/2/Panorama/RotateFixpoint"),
+        ("PUT", "/v3/panoramicDevices/ptz/coordinate/mark"),
+    ]
+    assert parse_qs(sent[0].body) == {
+        "deviceSerial": ["CAM001"], "x": ["0.125568"], "y": ["1"],
+    }
+    assert json.loads(sent[1].body) == {"x": 0.126, "y": 1.0}
+    assert parse_qs(sent[2].body, keep_blank_values=True) == {
+        "deviceSerial": ["CAM001"], "detectorSubSerial": [""], "x": [""], "y": [""],
+        "markType": ["3"],
+    }
+
+
+@pytest.mark.parametrize("axis", [True, -0.1, 1.1, float("nan"), float("inf"), "0.5"])
+def test_invalid_panorama_points_stay_offline(device_requests, axis) -> None:
+    client, sent, _ = device_requests
+    with pytest.raises(ValueError, match="coordinates"):
+        ptz.move_to_panorama_point(client, "CAM001", axis, 0.5)
+    assert not sent
+
+
+@pytest.mark.parametrize("channel", [None, CameraChannel("Video_2", "2")])
+def test_panorama_move_failure_does_not_try_another_route(device_requests, channel) -> None:
+    client, sent, replies = device_requests
+    replies.append({"meta": {"code": 403}})
+    with pytest.raises(PyEzvizError):
+        ptz.move_to_panorama_point(client, "CAM001", 0.25, 0.5, channel=channel)
+    assert len(sent) == 1
+
+
+def test_camera_move_targets_both_legs_and_rejects_invalid_channel(device_requests) -> None:
+
+    client, sent, replies = device_requests
+    camera = EzvizCamera(client, "CAM001", device_obj={"resourceInfos": []})
+    replies.extend([{"meta": {"code": 200}}] * 2)
+    camera.move("left", channel=2)
+    assert [(f["channelNo"], f["action"]) for f in (parse_qs(r.body) for r in sent)] == [
+        (["2"], ["START"]),
+        (["2"], ["STOP"]),
+    ]
+    with pytest.raises(PyEzvizError, match="channel"):
+        camera.move("left", channel=-1)
     assert len(sent) == 2

@@ -411,7 +411,7 @@ def ptz_control(
             "action": action,
             "channelNo": channel,
             "speed": speed,
-            "uuid": str(_owner.uuid4()),
+            "uuid": _owner.uuid4().hex,
             "time": int(_owner.time.time() * 1000),
         },
         retry_401=False,

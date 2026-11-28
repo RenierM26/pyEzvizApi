@@ -12,13 +12,15 @@ There is no automatic fallback to another lens or from cloud to LAN.
 | Patrol sequence | `get_patrol_path`, `create_patrol_path`, `set_patrol_path`, `delete_patrol_path` in `pyezvizapi.devices.app_controls` |
 | Save a patrol point | `pyezvizapi.devices.ptz.save_patrol_point` |
 | Resource-scoped panorama | `start_panorama_capture` and `get_panorama_info` in `pyezvizapi.devices.ptz` |
+| Panorama movement and mark reset | `move_to_panorama_point` and `reset_panorama_mark` in `pyezvizapi.devices.ptz` |
 | Patrol schedule, homing preset, calibration | [Camera app controls](camera-app-controls.md) |
 | Human/subject tracking and linked-lens behavior | [AI detection and tracking](ai-detection.md) |
 
 ## Direction and zoom
 
 The direct cloud form includes `channelNo`, `command`, `action`, `speed`, `uuid`,
-and the current Unix time in milliseconds. Channel 1 remains the default for
+and the current Unix time in milliseconds. The UUID is 32 hex characters
+without hyphens. Channel 1 remains the default for
 existing callers. Use the device's reported playback channel, not a guessed
 resource name. Android maps the cardinal and supported diagonal commands
 (`UPLEFT`, `UPRIGHT`, `DOWNLEFT`, `DOWNRIGHT`) and optical zoom
@@ -27,11 +29,14 @@ successful HTTP response proves the lens supports a given command.
 
 This low-level method sends **one** request: pair `START` with `STOP` for
 continuous controls. `EzvizCamera.move()` retains its existing immediate
-start/stop behavior. Local HCNetSDK controls are separate.
+start/stop behavior and accepts an optional `channel=` for both requests.
+The cloud CLI accepts the same route via `camera move --channel`. Local
+HCNetSDK controls are separate.
 
 ## Saved viewpoints and patrol points are different
 
-- The saved-viewpoint list returns Android's raw `data` rows. Use the row's
+- The saved-viewpoint list returns Android's raw `data` rows, or an empty
+  list on a successful response with no rows. Use the row's
   `subSerial`, `channelNo` and `index` for recall, rename or deletion. Recall
   and deletion post `GOTO_PRESET` and `CLE_PRESET` respectively to
   `/api/device/preset/config`.
@@ -53,6 +58,12 @@ completion. `get_panorama_info` reads the raw `data` object (including
 uploading or stitching media. The legacy `create_panoramic` and
 `return_panoramic` client methods are unchanged; the SDK does not silently
 switch between panorama variants.
+
+`move_to_panorama_point` takes normalized coordinates (0–1) on the panorama
+image, not the live image. Pass a `CameraChannel` for the resource-scoped
+`RotateFixpoint` action, or omit it to explicitly use the legacy device-wide
+route. `reset_panorama_mark` sends Android's device-wide mark-type 3
+operation; other mark types are not exposed.
 
 ## Evidence and limits
 

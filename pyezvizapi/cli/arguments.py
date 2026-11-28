@@ -150,7 +150,10 @@ def add_camera_arguments(subparsers: Any) -> None:
         help="Speed of the movement",
         default=5,
         type=int,
-        choices=range(1, 10),
+        choices=range(1, 11),
+    )
+    parser_camera_move.add_argument(
+        "--channel", type=int, help="Reported cloud playback channel (default: 1)"
     )
 
     parser_camera_move_coords = subparsers_camera.add_parser(

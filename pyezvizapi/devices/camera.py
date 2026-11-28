@@ -487,11 +487,18 @@ class EzvizCamera:
     # essential_status() was removed in favor of including all top-level
     # pagelist keys directly in status().
 
-    def move(self, direction: Literal["right", "left", "down", "up"], speed: int = 5) -> bool:
+    def move(
+        self,
+        direction: Literal["right", "left", "down", "up"],
+        speed: int = 5,
+        *,
+        channel: int | None = None,
+    ) -> bool:
         """Move camera in a given direction.
 
         direction: one of "right", "left", "down", "up".
         speed: movement speed, expected range 1..10 (inclusive).
+        channel: reported playback channel; omit for the existing channel-1 default.
 
         Raises:
             PyEzvizError: On invalid parameters or API failures.
@@ -503,10 +510,10 @@ class EzvizCamera:
 
         dir_up = direction.upper()
         _LOGGER.debug("PTZ %s at speed %s for %s", dir_up, speed, self._serial)
-        # launch the start command
-        self._client.ptz_control(dir_up, self._serial, "START", speed)
-        # launch the stop command
-        self._client.ptz_control(dir_up, self._serial, "STOP", speed)
+        # Omit the new keyword for existing client adapters on the default route.
+        route = {} if channel is None else {"channel": channel}
+        self._client.ptz_control(dir_up, self._serial, "START", speed, **route)
+        self._client.ptz_control(dir_up, self._serial, "STOP", speed, **route)
 
         return True
 

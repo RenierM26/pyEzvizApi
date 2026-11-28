@@ -11,7 +11,10 @@ from urllib.parse import quote
 from requests import Request
 
 from pyezvizapi.cloud.deadline import request_budget_lock
-from pyezvizapi.cloud.endpoints import API_ENDPOINT_IOT_ACTION
+from pyezvizapi.cloud.endpoints import (
+    API_ENDPOINT_IOT_ACTION,
+    API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
+)
 from pyezvizapi.cloud.responses import object_section
 from pyezvizapi.exceptions import PyEzvizError
 
@@ -76,7 +79,11 @@ def _request_preset(
             response = client._request_json(
                 "POST", f"{_PRESET_PATH}/{operation}", data=data, retry_401=False
             )
-    client._ensure_ok(response, f"Could not {operation} PTZ preset")
+    code = response.get("resultCode")
+    if (type(code) is not int or code != 0) and code != "0":
+        raise PyEzvizError(
+            f"Could not {operation} PTZ preset: {client._response_summary(response)}"
+        )
     return response
 
 
@@ -84,6 +91,8 @@ def list_ptz_presets(client: EzvizClient, serial: str, *, channel: int) -> list[
     """List saved viewpoints for the specified playback channel."""
     response = _request_preset(client, "list", _preset_route(serial, channel))
     rows = response.get("data")
+    if rows is None:
+        return []
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise PyEzvizError("Missing or invalid PTZ preset list")
     return cast("list[dict[str, Any]]", rows)
@@ -188,11 +197,17 @@ def save_patrol_point(client: EzvizClient, serial: str, name: int, *, thumbnail:
     return index
 
 
+def _panorama_serial(serial: str) -> str:
+    if not serial.strip():
+        raise ValueError("Expected a panorama device serial")
+    return serial.upper()
+
+
 def start_panorama_capture(client: EzvizClient, serial: str, *, channel: CameraChannel) -> None:
     """Start a resource-scoped panorama capture (can move the camera)."""
     response = client._request_json(
         "POST",
-        f"/v3/panoramicDevices/action/pics/collect/{quote(serial, safe='')}/{channel.local_index}",
+        f"/v3/panoramicDevices/action/pics/collect/{quote(_panorama_serial(serial), safe='')}/{channel.local_index}",
         json_body={
             "resourceId": channel.resource_identifier,
             "domainId": "Panorama",
@@ -211,7 +226,7 @@ def get_panorama_info(
     response = client._iot_request(
         "PUT",
         API_ENDPOINT_IOT_ACTION,
-        quote(serial, safe=""),
+        quote(_panorama_serial(serial), safe=""),
         channel.resource_identifier,
         channel.local_index,
         "Panorama",
@@ -220,3 +235,68 @@ def get_panorama_info(
         error_message="Could not read panorama info",
     )
     return object_section(response, "data", required=True)
+
+
+
+def _panorama_point(x: float, y: float) -> None:
+    if any(
+        isinstance(axis, bool) or not isinstance(axis, (int, float)) or not 0 <= axis <= 1
+        for axis in (x, y)
+    ):
+        raise ValueError("Panorama coordinates must be numbers between 0 and 1")
+
+
+def move_to_panorama_point(
+    client: EzvizClient,
+    serial: str,
+    x: float,
+    y: float,
+    *,
+    channel: CameraChannel | None = None,
+) -> None:
+    """Move to a normalized point on the panorama, not on the live view.
+
+    Pass an explicit resource channel for RotateFixpoint, or omit it for the
+    legacy device-wide app route. A failed command never tries the other route.
+    """
+    _panorama_point(x, y)
+    device = _panorama_serial(serial)
+    if channel is not None:
+        client.set_iot_action(
+            quote(device, safe=""),
+            channel.resource_identifier,
+            channel.local_index,
+            "Panorama",
+            "RotateFixpoint",
+            {"x": round(x, 3), "y": round(y, 3)},
+        )
+        return
+
+    response = client._request_json(
+        "POST",
+        API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
+        data={
+            "deviceSerial": device,
+            "x": f"{x + 0.0:.6f}".rstrip("0").rstrip("."),
+            "y": f"{y + 0.0:.6f}".rstrip("0").rstrip("."),
+        },
+        retry_401=False,
+    )
+    client._ensure_ok(response, "Could not move to panorama point")
+
+
+def reset_panorama_mark(client: EzvizClient, serial: str) -> None:
+    """Send the app's device-wide panorama coordinate reset (mark type 3)."""
+    response = client._request_json(
+        "PUT",
+        "/v3/panoramicDevices/ptz/coordinate/mark",
+        data={
+            "deviceSerial": _panorama_serial(serial),
+            "detectorSubSerial": "",
+            "x": "",
+            "y": "",
+            "markType": 3,
+        },
+        retry_401=False,
+    )
+    client._ensure_ok(response, "Could not reset panorama coordinate mark")

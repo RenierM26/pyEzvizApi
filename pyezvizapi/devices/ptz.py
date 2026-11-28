@@ -237,7 +237,6 @@ def get_panorama_info(
     return object_section(response, "data", required=True)
 
 
-
 def _panorama_point(x: float, y: float) -> None:
     if any(
         isinstance(axis, bool) or not isinstance(axis, (int, float)) or not 0 <= axis <= 1

@@ -71,8 +71,12 @@ tooling under `tools/apk-re`. `save image` triggers the camera capture endpoint
 unless `--image-url` is supplied, then downloads and decrypts EZVIZ encrypted
 image payloads when needed.
 
-Integrations can use the same behavior directly from `client.py` without
-shelling out:
+Integrations can call these methods on a signed-in
+[`EzvizClient`](python-api.md#authenticate-and-read-status) without shelling out.
+`capture_picture(serial, channel)` only triggers the capture and returns an API
+payload; use `save_image()` when you need the downloaded image written to an
+output. For multi-lens cameras, use [reported channel routing](camera-channels.md)
+rather than assuming the default channel targets the intended lens.
 
 ```python
 result = client.save_clip(

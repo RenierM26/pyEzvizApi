@@ -40,8 +40,9 @@ pyezvizapi --token-file ezviz_token.json --json device_infos --serial CAMERA_SER
 Global flags precede the command. Credentials in arguments can appear in shell
 history and process listings; do not use real credentials in shared examples.
 The first command may prompt for an MFA code. See [CLI login verification](cli.md#login-verification)
-to select SMS or email, or [Python login](python-api.md#authenticate-and-read-status)
-for the equivalent SDK flow.
+to select a delivery method. If you are integrating the library rather than
+using the CLI, start with [Python login and polling](python-api.md#authenticate-and-read-status);
+the Python client does not read or write the CLI token file automatically.
 
 ## Token and region rules
 

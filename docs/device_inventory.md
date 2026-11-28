@@ -1,22 +1,32 @@
-# Polling an inventory for Home Assistant
+# Polling typed device inventory
+
+[Python client usage](python-api.md) · [Documentation index](README.md)
 
 `EzvizClient.poll_devices()` acquires one device-record inventory for cameras,
-detectors, lights and plugs. Selectors are in-memory views, not new cloud calls:
+detectors, lights, plugs and intercom monitors. With a signed-in client, read
+multiple families from the same snapshot without making new cloud calls:
 
 ```python
-from pyezvizapi import DevicePollOptions, EzvizClient
+from pyezvizapi.devices.snapshot import DevicePollOptions
 
-client = EzvizClient(token=saved_token)
-# Run login and polling in an executor when called from an async application.
-client.login()
-snapshot = client.poll_devices(DevicePollOptions(timeout=20))
-cameras = snapshot.as_dict("camera")  # detached legacy-shaped dictionaries
+snapshot = client.poll_devices(DevicePollOptions(include_camera_alarms=False))
+cameras = snapshot.as_dict("camera")  # detached compatibility dictionaries
 for serial, detector in snapshot.select("detector").items():
     health = snapshot.health[serial]
     if health.present and health.current and detector.online is True:
         print(detector.battery_level)
-client.close_session()
 ```
+
+| `DevicePollOptions` field | Default | Meaning |
+| --- | --- | --- |
+| `timeout` | `20.0` | Total poll budget in seconds, not a per-request timeout. |
+| `include_camera_alarms` | `True` | Enrich camera state with latest alarms. Set to `False` for inventory without camera alarm I/O. |
+| `max_devices` | `10000` | Reject an inventory exceeding this count; it is not a pagination limit or truncation option. |
+| `include_intercom_events` | `False` | Opt in to [read-only intercom events](intercom.md). Polling monitor state does not require this. |
+
+The selector kinds are `"camera"`, `"detector"`, `"light"`, `"plug"`, and
+`"monitor"`. Omitting the kind selects all states. A selector does not filter
+by freshness; apply the corresponding `health` entry yourself.
 
 ## Ownership and freshness
 
@@ -29,14 +39,18 @@ client.close_session()
   the existing page-list implementation supplies its own page bounds.
 - A global acquisition/budget failure raises and leaves `client.device_snapshot`
   unchanged. A malformed supported device is isolated: siblings can remain current.
-- Known failed, disappeared or newly unsupported devices are retained with
-  `current=False`; `present` distinguishes omission from rendering failure.
-  `last_success` belongs to that device, not the latest whole-account request.
+- Previously known states can be retained with `current=False`; `present`
+  distinguishes an omitted row from one that is present but failed to render
+  or is no longer supported. A new row that fails to render can have a
+  `health` entry without a corresponding state. `last_success` belongs to
+  that device, not the latest whole-account request.
 - Snapshot values are recursively immutable. `as_dict()` returns an independent
   deep compatibility copy. `select()` returns a new mapping of immutable states.
 - `device_snapshot`, `select()` and `as_dict()` do not use the network. Legacy
-  `load_devices()`/`load_cameras()`/family loaders retain their historical semantics
-  and caches. The status corrections below apply to both old and typed entrypoints.
+  `load_devices()` and the family loaders retain their historical status maps
+  and do not publish a typed snapshot. Even `refresh=False` fetches inventory;
+  it opts out of camera alarm enrichment. The status corrections below apply
+  to both legacy and typed APIs.
 
 ## Partial routing metadata
 

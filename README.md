@@ -27,7 +27,7 @@ for changes and upgrade notes.
 
 ## Where to go next
 
-- [Python API](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/python-api.md) — sign in and read camera status from Python.
+- [Python API](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/python-api.md) — authenticate, persist tokens, poll typed device state, and find control and media APIs.
 - [CLI guide](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/cli.md) — list devices, inspect recordings, and control supported cameras.
 - [Media guide](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/media.md) — choose a path for live streams, images, and recordings.
 - [Home Assistant](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/home-assistant.md) — check what each integration supports.

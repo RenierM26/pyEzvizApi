@@ -9,7 +9,7 @@ These guides track `main`. For an installed PyPI version, use the docs at its
 | I want to… | Start here |
 | --- | --- |
 | Install, sign in, and list devices | [Getting started](getting-started.md) |
-| Use the library from Python | [Python API](python-api.md) |
+| Integrate the Python SDK: sign in, persist tokens, and poll device state | [Python API](python-api.md) |
 | Use the command line | [CLI guide](cli.md) |
 | Fix sign-in, MFA, or token errors | [Getting started troubleshooting](getting-started.md#common-problems) and [login recovery](auth/login-recovery.md) |
 | Receive push notifications or migrate an old push token | [Channel-99 push](channel99.md) |
@@ -31,8 +31,9 @@ These guides track `main`. For an installed PyPI version, use the docs at its
 
 ## Integration and maintainer references
 
-- **Authentication:** [Persisted installation identity](auth/persisted-client-identity.md)
-  for containers and other hosts whose MAC address may change.
+- **Authentication:** [Login and MFA recovery](auth/login-recovery.md), and
+  [persisted installation identity](auth/persisted-client-identity.md) for
+  containers and other hosts whose MAC address may change.
 - **Home Assistant:** [Integration contract](home-assistant-contract.md),
   [feature boundaries](ha-feature-boundary.md), and
   [pinned custom integration acceptance](../examples/ha_ezviz/README.md).

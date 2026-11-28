@@ -13,6 +13,11 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from pyezvizapi._shared.coercion import decode_json
+from pyezvizapi.cloud.endpoints import (
+    API_ENDPOINT_ALARM_SOUND,
+    API_ENDPOINT_DEVICE_SYS_OPERATION,
+    API_ENDPOINT_DEVICES,
+)
 from pyezvizapi.cloud.responses import object_section
 from pyezvizapi.devices.channels import CameraChannel
 from pyezvizapi.exceptions import PyEzvizError
@@ -205,7 +210,7 @@ def calibrate_ptz(client: EzvizClient, serial: str) -> None:
     """Start app-style PTZ calibration; the camera can physically move."""
     response = client._request_json(
         "POST",
-        f"/api/device/v2/sysOper/{serial}",
+        f"{API_ENDPOINT_DEVICE_SYS_OPERATION}{serial}",
         params={"oper": 4, "delay": 0},
         data={"sessionId": client._token.get("session_id")},
         retry_401=False,
@@ -415,7 +420,7 @@ def set_custom_alarm_sound(client: EzvizClient, serial: str, *, voice_id: int) -
         raise ValueError("voice_id must be a positive integer")
     response = client._request_json(
         "PUT",
-        f"/v3/devices/{serial}/alarm/sound",
+        f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_ALARM_SOUND}",
         params={"enable": 1, "soundType": 3, "voiceId": voice_id},
     )
     client._ensure_ok(response, "Could not select custom alarm sound")

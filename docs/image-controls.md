@@ -7,10 +7,10 @@ local indices, and native LAN channels are separate routing inputs.
 
 | Control | SDK route | Limits |
 | --- | --- | --- |
-| Color and saturation presets | `set_display_mode`, devconfig `display_mode` | Android's graphics presenters and the SDK send an object with `mode` on channel 1. This is a preset, not a saturation slider. |
+| Color and saturation presets | `get_display_mode`, `set_display_mode`, devconfig `display_mode` | Android's graphics presenters and the SDK send an object with `mode` on channel 1. The direct getter returns 1–3 or `None` when the response doesn't contain a recognized preset. This is not a saturation slider. |
 | Individual brightness, contrast, saturation and sharpness | Native LAN `set_camera_video_effect(effect, level)` | Sets one level (0–100) on the default camera configuration and verifies it by reading back. See the [LAN SDK notes](cli.md#lan-wdr). No equivalent cloud setter was established in this audit. |
-| Backlight region compensation | `set_dev_config_kv`, key `inverse_mode` | Android's advanced graphics presenter uses channel 1. It preserves the reported `mode`; disabling also preserves `position`. Not image rotation. No named SDK setter. |
-| Color, black-and-white and smart night vision | `set_night_vision_mode`, devconfig `NightVision_Model` | The helper sends `graphicType` and `luminance` on channel 1. Unlike the traced Android request, the helper omits duration. See the query-based alternative below. |
+| Backlight region compensation | `get_backlight_compensation`, `set_backlight_compensation` | Android's advanced graphics presenter uses channel 1. It preserves the reported `mode`; disabling also preserves `position`. Not image rotation. |
+| Color, black-and-white and smart night vision | `set_night_vision_settings`, devconfig `NightVision_Model` | Sends `graphicType`, `luminance`, and `duration` on channel 1. The legacy `set_night_vision_mode` still sends only the first two. |
 | Day/night filter and sensitivity | Cloud `device_ICR_DSS` via `set_dev_config_kv`; native LAN `set_camera_day_night_mode` | These are different contracts. Don't map cloud values to native values without checking the model. |
 | Wide dynamic range | `devices.settings.set_iot_wdr_enabled`, `set_iot_wdr_level`; native LAN `set_camera_wdr` | The IoT setter reads the current property on the same local index. The binary LAN setting and cloud switch are not equivalent to the IoT level control. |
 | Orientation | `device_mirror`, `flip_image`, `set_image_flip_iot` | Legacy mirror/toggle and IoT enabled-state routes differ. Do not retry a toggle merely because readback is unavailable. |
@@ -36,8 +36,12 @@ preserves the reported mode (automatic = 0, manual = 1) and sets
 `enable` to 0 or 1. When disabling it also preserves the reported position.
 The manual region choices are 1 = up, 2 = down, 3 = left, 4 = right, 5 = center.
 The app prompts for a region rather than writing an enabled manual mode with
-no selection. There is no dedicated SDK writer; use the generic form helper
-only with known values for the device.
+no selection. The SDK getter returns `mode`, `enabled`, and `position`, or
+`None` for an unrecognized response. Call `set_backlight_compensation(serial,
+enabled, position=...)` to update the switch; it reads the current settings
+first and refuses to write if the response is unusable. Supply a position only
+when enabling manual compensation. With no position supplied the setter keeps
+the reported one.
 
 ### Night vision
 
@@ -46,6 +50,10 @@ The Android night-vision and graphics screens send `NightVision_Model` with
 query parameters `key` and `value`. When changing luminance alone, the UI
 passes the current mode and duration. The SDK's `set_device_key_value`
 matches that transport and takes a JSON string as `value`.
+`set_night_vision_settings(serial, mode, luminance, duration)` builds this
+complete request without guessing missing values. To read reported values,
+pass the camera snapshot to `devices.features.reported_night_vision_settings`.
+It returns `mode`, `luminance`, and `duration`, with `None` for unknown fields.
 
 The existing `set_night_vision_mode` helper instead uses the form variant
 and sends only mode and luminance. Whether omitting duration preserves or

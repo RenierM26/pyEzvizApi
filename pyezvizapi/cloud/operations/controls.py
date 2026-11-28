@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping as _StaticMapping
 from types import ModuleType as _ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
+from pyezvizapi._shared.coercion import decode_json
 from pyezvizapi.cloud.endpoints import API_ENDPOINT_PEOPLE_DETECTION_SWITCH
 
 if TYPE_CHECKING:
@@ -280,6 +281,96 @@ def set_night_vision_mode(
     return self.set_device_config_by_key(
         serial, value=f'{{"graphicType":{mode},"luminance":{luminance}}}', key="NightVision_Model"
     )
+
+
+def set_night_vision_settings(
+    self: _owner_types.EzvizClient,
+    serial: str,
+    mode: int,
+    luminance: int,
+    duration: int,
+    *,
+    _owner: _ModuleType,
+) -> bool:
+    """Send the Android app's complete channel-1 night-vision request."""
+    if any(type(value) is not int or value < 0 for value in (mode, luminance, duration)):
+        raise _owner.PyEzvizError("Night vision settings must be non-negative integers")
+    value = {"graphicType": mode, "luminance": luminance, "duration": duration}
+    self.set_device_key_value(
+        serial, 1, "NightVision_Model", _owner.json.dumps(value, separators=(",", ":"))
+    )
+    return True
+
+
+class BacklightCompensation(TypedDict):
+    """Reported legacy backlight compensation configuration."""
+
+    mode: int
+    enabled: bool
+    position: int
+
+
+def _dev_config_object(
+    self: _owner_types.EzvizClient, serial: str, key: str
+) -> _owner_types.Mapping[str, _owner_types.Any]:
+    data = decode_json(self.get_dev_config(serial, 1, key).get("valueInfo"))
+    return data if isinstance(data, _StaticMapping) else {}
+
+
+def get_backlight_compensation(
+    self: _owner_types.EzvizClient, serial: str
+) -> BacklightCompensation | None:
+    """Read the supported backlight compensation shape without defaulting to off."""
+    data = _dev_config_object(self, serial, "inverse_mode")
+    mode, enabled, position = data.get("mode"), data.get("enable"), data.get("position")
+    if (
+        type(mode) is not int
+        or mode not in (0, 1)
+        or type(enabled) is not int
+        or enabled not in (0, 1)
+        or type(position) is not int
+        or not 0 <= position <= 5
+    ):
+        return None
+    return {"mode": mode, "enabled": enabled == 1, "position": position}
+
+
+def set_backlight_compensation(
+    self: _owner_types.EzvizClient,
+    serial: str,
+    enabled: bool,
+    *,
+    position: int | None,
+    _owner: _ModuleType,
+) -> bool:
+    """Update the switch, preserving the device's mode and disabled position."""
+    if not isinstance(enabled, bool):
+        raise _owner.PyEzvizError("Backlight compensation enabled must be a boolean")
+    if position is not None and (
+        not enabled or type(position) is not int or not 1 <= position <= 5
+    ):
+        raise _owner.PyEzvizError("Supply a region from 1 to 5 only when enabling compensation")
+    current = self.get_backlight_compensation(serial)
+    if current is None:
+        raise _owner.PyEzvizError("Camera did not report usable backlight compensation settings")
+    if position is not None and current["mode"] != 1:
+        raise _owner.PyEzvizError("Selecting a backlight region requires manual mode")
+    region = current["position"] if position is None else position
+    if enabled and current["mode"] == 1 and region == 0:
+        raise _owner.PyEzvizError("Select a region before enabling manual backlight compensation")
+    self.set_dev_config_kv(
+        serial,
+        1,
+        "inverse_mode",
+        {"mode": current["mode"], "enable": int(enabled), "position": region},
+    )
+    return True
+
+
+def get_display_mode(self: _owner_types.EzvizClient, serial: str) -> int | None:
+    """Read the camera's display preset, if recognized."""
+    mode = _dev_config_object(self, serial, "display_mode").get("mode")
+    return mode if type(mode) is int and mode in (1, 2, 3) else None
 
 
 def set_display_mode(

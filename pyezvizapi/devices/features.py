@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 from pyezvizapi._shared.utils import WILDCARD_STEP, coerce_int, decode_json, first_nested
 from pyezvizapi.devices._port_payload import normalized_port_security
@@ -334,6 +334,31 @@ def night_vision_config(camera_data: Mapping[str, Any]) -> dict[str, Any]:
     config = decode_json(config)
 
     return dict(config) if isinstance(config, Mapping) else {}
+
+
+class NightVisionSettings(TypedDict):
+    """Night-vision values reported by the camera, without defaults."""
+
+    mode: int | None
+    luminance: int | None
+    duration: int | None
+
+
+def reported_night_vision_settings(camera_data: Mapping[str, Any]) -> NightVisionSettings:
+    """Read night-vision settings from a camera snapshot without defaulting missing fields."""
+    config = night_vision_config(camera_data)
+
+    def reported_int(field: str) -> int | None:
+        value = config.get(field)
+        if isinstance(value, str) and value.isascii() and value.isdecimal():
+            value = coerce_int(value)
+        return value if type(value) is int and value >= 0 else None
+
+    return {
+        "mode": reported_int("graphicType"),
+        "luminance": reported_int("luminance"),
+        "duration": reported_int("duration"),
+    }
 
 
 def night_vision_mode_value(camera_data: Mapping[str, Any]) -> int:

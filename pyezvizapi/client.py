@@ -1897,6 +1897,30 @@ class EzvizClient:
             self, serial, mode, luminance, _owner=_sys.modules[__name__]
         )
 
+    def set_night_vision_settings(
+        self, serial: str, mode: int, luminance: int, duration: int
+    ) -> bool:
+        """Set all three night-vision fields on channel 1 via the Android query route."""
+        return _controls.set_night_vision_settings(
+            self, serial, mode, luminance, duration, _owner=_sys.modules[__name__]
+        )
+
+    def get_backlight_compensation(self, serial: str) -> _controls.BacklightCompensation | None:
+        """Read channel-1 backlight compensation; return None for unknown settings."""
+        return _controls.get_backlight_compensation(self, serial)
+
+    def set_backlight_compensation(
+        self, serial: str, enabled: bool, *, position: int | None = None
+    ) -> bool:
+        """Update channel-1 compensation, optionally selecting a manual region (1-5)."""
+        return _controls.set_backlight_compensation(
+            self, serial, enabled, position=position, _owner=_sys.modules[__name__]
+        )
+
+    def get_display_mode(self, serial: str) -> int | None:
+        """Read the channel-1 display preset without substituting a default."""
+        return _controls.get_display_mode(self, serial)
+
     def set_display_mode(self, serial: str, mode: int) -> bool:
         """Change video color and saturation mode."""
         return _controls.set_display_mode(self, serial, mode, _owner=_sys.modules[__name__])

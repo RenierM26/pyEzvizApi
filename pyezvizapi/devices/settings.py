@@ -366,6 +366,21 @@ def set_cloud_day_night_settings(
     )
 
 
+def set_enhanced_infrared_sensitivity(client: EzvizClient, serial: str, sensitivity: int) -> None:
+    """Set the channel-1 sensitivity for an active enhanced-infrared mode.
+
+    Callers must verify the device exposes the enhanced-infrared picker.
+    This does not enable or select enhanced infrared.
+    """
+    if type(sensitivity) is not int or sensitivity not in (1, 2, 3):
+        raise PyEzvizError("Day/night sensitivity must be an integer from 1 to 3")
+    if get_black_and_white_mode(client, serial) is not BlackAndWhiteMode.ENHANCED_INFRARED:
+        raise PyEzvizError("Enhanced infrared must be active before setting its sensitivity")
+    client.set_device_key_value(
+        serial, 1, "device_ICR_DSS", json.dumps({"mode": 3, "sensitivity": sensitivity})
+    )
+
+
 class WdrSettings(TypedDict):
     """Reported IoT WDR state and strength."""
 

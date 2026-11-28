@@ -72,9 +72,13 @@ on the screen's legacy channel, even when only one value changes.
 `reported_cloud_day_night_settings` reads the snapshot without inventing
 defaults. `set_cloud_day_night_settings` requires both values and defaults to
 legacy channel 1. Use this helper only for the legacy branches and values
-above. The app's separate enhanced-infrared branch can also pass mode 3 to
-its sensitivity screen; the legacy SDK helper deliberately does not cover
-that combination.
+above. For the separate enhanced-infrared branch, the app only opens
+`DayNightSensitivity` when `Video/1/FillLight/BlackAndWhiteCfg` reports
+mode 3. The sensitivity screen still writes `device_ICR_DSS` via the legacy
+query route, now with `{"mode":3,"sensitivity":N}`. On a device exposing
+that picker, use `set_enhanced_infrared_sensitivity` for channel 1. It checks
+the current IoT mode first and refuses to write if it is not 3. To select
+enhanced infrared itself, use `set_black_and_white_mode` instead.
 
 ## IoT graphics properties
 
@@ -141,6 +145,7 @@ super-night mode.
   The Android playback brightness path reaches `SystemSetting.setAppBrightness`
   and changes the phone window's brightness, not the camera's. No cloud
   write was established for `image_para`, `Auto_night_vision`, or `ICR`.
+  These are distinct from the traced `device_ICR_DSS` setter.
   For native LAN, `camera_param_config()` reads the levels and
   `set_camera_video_effect()` updates one supported field with read-back.
 

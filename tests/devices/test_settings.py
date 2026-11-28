@@ -870,3 +870,37 @@ def test_image_snapshot_readers_do_not_coerce_malformed_values() -> None:
     assert settings.reported_cloud_image_levels({}) == dict.fromkeys(
         ("brightness", "contrast", "saturation", "sharpness")
     )
+
+
+@pytest.mark.parametrize("sensitivity", [1, 2, 3])
+def test_enhanced_infrared_sensitivity_uses_legacy_write(device_requests, sensitivity) -> None:
+    client, sent, replies = device_requests
+    replies.extend([{"meta": {"code": 200}, "data": {"mode": 3}}, {"meta": {"code": 200}}])
+    settings.set_enhanced_infrared_sensitivity(client, "CAM001", sensitivity)
+    read, write = sent
+    assert read.method == "GET"
+    assert urlsplit(read.url).path.endswith("/CAM001/Video/1/FillLight/BlackAndWhiteCfg")
+    assert write.method == "PUT" and not write.body
+    url = urlsplit(write.url)
+    assert url.path == "/v3/devconfig/v1/keyValue/CAM001/1/op"
+    query = parse_qs(url.query)
+    assert query["key"] == ["device_ICR_DSS"]
+    assert json.loads(query["value"][0]) == {"mode": 3, "sensitivity": sensitivity}
+
+
+@pytest.mark.parametrize("mode", [0, None, "3"])
+def test_enhanced_infrared_sensitivity_without_active_mode_does_not_write(
+    device_requests, mode
+) -> None:
+    client, sent, replies = device_requests
+    replies.append({"meta": {"code": 200}, "data": {"mode": mode}})
+    with pytest.raises(PyEzvizError, match="must be active"):
+        settings.set_enhanced_infrared_sensitivity(client, "CAM001", 2)
+    assert [request.method for request in sent] == ["GET"]
+
+
+def test_enhanced_infrared_sensitivity_rejects_bool_before_request(device_requests) -> None:
+    client, sent, _ = device_requests
+    with pytest.raises(PyEzvizError, match="sensitivity"):
+        settings.set_enhanced_infrared_sensitivity(client, "CAM001", True)
+    assert sent == []

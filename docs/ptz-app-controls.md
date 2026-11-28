@@ -80,3 +80,12 @@ observed setup, not support across all cameras. Request tests use offline
 prepared HTTP requests. No live camera movement or setting changes were
 performed. App-specific timed/group PTZ, relay panorama processing and the
 bulk patrol-point reset are not covered by the new helpers.
+
+The Android device-wide stored-image route is exposed as
+`get_stored_panorama`. It returns the raw `picInfo` record and does not
+trigger capture or download files. A successful read can return an empty
+`levelPicInfoList`. The V3 capture and read helpers require `meta.code=200`;
+a successful HTTP status or a legacy success code cannot override a V3 error.
+The app gates resource-scoped capture on the reported panorama action and
+uses a separate workflow for relay capture. The SDK does not try another
+route after a rejection.

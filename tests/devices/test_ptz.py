@@ -276,3 +276,33 @@ def test_camera_move_targets_both_legs_and_rejects_invalid_channel(device_reques
     with pytest.raises(PyEzvizError, match="channel"):
         camera.move("left", channel=-1)
     assert len(sent) == 2
+
+
+@pytest.mark.parametrize("operation", ["save", "capture", "move", "reset", "stored"])
+def test_v3_ptz_does_not_accept_legacy_success(device_requests, operation) -> None:
+    client, sent, replies = device_requests
+    ch = CameraChannel("Video_2", "2")
+    calls = {
+        "save": lambda: ptz.save_patrol_point(client, "CAM001", 1, thumbnail=b"jpeg"),
+        "capture": lambda: ptz.start_panorama_capture(client, "CAM001", channel=ch),
+        "move": lambda: ptz.move_to_panorama_point(client, "CAM001", 0.2, 0.4),
+        "reset": lambda: ptz.reset_panorama_mark(client, "CAM001"),
+        "stored": lambda: ptz.get_stored_panorama(client, "CAM001"),
+    }
+    replies.append({"meta": {"code": 2009}, "resultCode": 0, "index": 7, "picInfo": {}})
+    with pytest.raises(PyEzvizError, match="2009"):
+        calls[operation]()
+    assert len(sent) == 1
+
+
+def test_stored_panorama_reads_empty_record_without_starting_capture(device_requests) -> None:
+    client, sent, replies = device_requests
+    info = {"progress": 0, "levelPicInfoList": []}
+    replies.append({"meta": {"code": 200}, "picInfo": info})
+    actual = ptz.get_stored_panorama(client, "cam001")
+    assert actual == info
+    (request,) = sent
+    assert request.method == "GET"
+    url = urlsplit(request.url)
+    assert url.path == "/v3/panoramicDevices/pics"
+    assert parse_qs(url.query) == {"deviceSerial": ["CAM001"]}

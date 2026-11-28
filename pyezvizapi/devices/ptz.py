@@ -223,11 +223,16 @@ def save_patrol_point(client: EzvizClient, serial: str, name: int, *, thumbnail:
             "filedata": (f"{name}.jpg", thumbnail, "image/jpg"),
         },
     )
-    client._ensure_ok(response, "Could not save patrol point")
+    _require_v3_success(client, response, "Could not save patrol point")
     index = response.get("index")
     if isinstance(index, bool) or not isinstance(index, int) or index < 0:
         raise PyEzvizError("Missing or invalid patrol point index")
     return index
+
+
+def _require_v3_success(client: EzvizClient, response: dict[str, Any], context: str) -> None:
+    if not client._meta_ok(response):
+        raise PyEzvizError(f"{context}: {client._response_summary(response)}")
 
 
 def _panorama_serial(serial: str) -> str:
@@ -254,7 +259,7 @@ def start_panorama_capture(client: EzvizClient, serial: str, *, channel: CameraC
         },
         retry_401=False,
     )
-    client._ensure_ok(response, "Could not start panorama capture")
+    _require_v3_success(client, response, "Could not start panorama capture")
 
 
 def get_panorama_info(
@@ -278,6 +283,23 @@ def get_panorama_info(
         error_message="Could not read panorama info",
     )
     return object_section(response, "data", required=True)
+
+
+def get_stored_panorama(client: EzvizClient, serial: str) -> dict[str, Any]:
+    """Return the Android device-wide panorama record without downloading images.
+
+    The returned picInfo object can contain progress and levelPicInfoList.
+    An empty list means no images were returned. This is a separate read route,
+    not a fallback for resource-scoped capture or progress.
+    """
+    response = client._request_json(
+        "GET",
+        "/v3/panoramicDevices/pics",
+        params={"deviceSerial": _panorama_serial(serial)},
+        retry_401=False,
+    )
+    _require_v3_success(client, response, "Could not read stored panorama")
+    return object_section(response, "picInfo", required=True)
 
 
 def _panorama_point(x: float, y: float) -> None:
@@ -327,7 +349,7 @@ def move_to_panorama_point(
         },
         retry_401=False,
     )
-    client._ensure_ok(response, "Could not move to panorama point")
+    _require_v3_success(client, response, "Could not move to panorama point")
 
 
 def reset_panorama_mark(client: EzvizClient, serial: str) -> None:
@@ -349,4 +371,4 @@ def reset_panorama_mark(client: EzvizClient, serial: str) -> None:
         },
         retry_401=False,
     )
-    client._ensure_ok(response, "Could not reset panorama coordinate mark")
+    _require_v3_success(client, response, "Could not reset panorama coordinate mark")

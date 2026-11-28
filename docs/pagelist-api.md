@@ -144,7 +144,9 @@ does not establish streaming, alarm, or control capability.
 - `get_page_list()` / [`pyezvizapi pagelist`](cli.md#pagelist): merged sections
   with device and resource rows. Use this for resource-level diagnostics.
 - `get_device()` and `get_switch()`: narrower reads that return `deviceInfos`
-  and `SWITCH` respectively, rather than the full response.
+  and `SWITCH` respectively, rather than the full response. Use
+  `get_device(strict=True)` when device-row validation and an explicit final page
+  are required; it is not a strict mode for the other views.
 - `get_device_infos()` / [`pyezvizapi device_infos`](cli.md#device_infos):
   processed per-serial view. It normalizes some fields and is not a lossless
   copy of the resource-level response.
@@ -156,7 +158,12 @@ does not establish streaming, alarm, or control capability.
   `meta.moreInfo` names a routing section whose matching row is missing
   (`CLOUD`, `CHANNEL`, `VTM`, `CONNECTION`, `WIFI`, or `P2P`).
   Missing optional sections without a matching hint do not trigger this check.
-  If no matching device is found, it returns `{}`.
+  The return value is the single projected dictionary, not wrapped in another
+  serial-keyed mapping. If no matching device is found, it returns `{}`.
+- `get_device_records()` wraps those projections as `EzvizDeviceRecord` values.
+  With a serial it returns one record, or `{}` if the device is not found.
+  For periodic polling and per-device freshness, use [typed inventory](device_inventory.md)
+  instead of inferring freshness from raw section presence.
 
 See [pagelist state](pagelist-state.md) for field meanings and capability
 checks. Never publish raw captures: they can contain device identifiers, LAN

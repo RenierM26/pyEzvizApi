@@ -2,23 +2,28 @@
 
 [Documentation index](README.md) · [Getting started](getting-started.md)
 
-The cloud client is synchronous. In async applications, run login, polling,
-controls and cleanup in the application's executor; do not call them directly
-on an event loop. Home Assistant owns its own executor and storage lifecycle.
+`EzvizClient` signs in to the EZVIZ consumer cloud using an EZVIZ account
+or a saved SDK token. It is not a client for the EZVIZ Open Platform
+app-key/access-token API. These examples track `main`; use the matching
+[release tag](https://github.com/RenierM26/pyEzvizApi/releases) for an installed version.
 
-Point-based camera movement is documented in [point PTZ control](ptz-point-control.md).
-For cloud schedules, patrol paths, privacy masks, and storage settings, see
-[camera app controls](camera-app-controls.md).
+- [Sign in and read camera status](#authenticate-and-read-status)
+- [Save and restore credentials](#reuse-and-persist-the-complete-token)
+- [Choose an inventory or history API](#devicestatus-apis)
+- [Handle failures and manage the client lifetime](#errors-and-client-lifetime)
+- [Find device controls, push, and media APIs](#controls-push-and-media)
 
 ## Authenticate and read status
 
-This example is interactive and contacts EZVIZ. Credentials are read rather than
-embedded in source; the returned status and token can contain private data.
+This interactive example contacts EZVIZ. It polls once without fetching camera
+alarm history, then selects only camera states from that snapshot. An unknown
+`online` value (`None`) is not the same as offline.
 
 ```python
 from getpass import getpass
 
 from pyezvizapi.client import EzvizClient
+from pyezvizapi.devices.snapshot import DevicePollOptions
 from pyezvizapi.exceptions import EzvizAuthVerificationCode
 
 client = EzvizClient(account=input("EZVIZ account: "), password=getpass())
@@ -26,24 +31,40 @@ try:
     try:
         client.login()
     except EzvizAuthVerificationCode as challenge:
-        if not challenge.code_sent:
-            raise  # Choose a supported delivery method or recover in the app.
+        if challenge.reason != "verification_required" or not challenge.code_sent:
+            raise  # Use the relevant recovery flow rather than retrying blindly.
         client.login(sms_code=getpass("MFA code: ").strip())
-    cameras = client.load_cameras()
-    # Consume cameras without logging private identifiers or URLs.
+
+    snapshot = client.poll_devices(DevicePollOptions(include_camera_alarms=False))
+    for serial, camera in snapshot.select("camera").items():
+        health = snapshot.health[serial]
+        if health.present and health.current:
+            print("Camera online:", camera.online)
 finally:
     client.close_session()
 ```
 
-Keep the verification code as text so leading zeros survive. For cases where no
-code was requested, see [login recovery](auth/login-recovery.md).
-
-`close_session()` closes/recreates HTTP session state; it is not a push-worker
-shutdown method or account logout. Stop an owned push client separately before
-closing HTTP state. Device operations may fetch fresh data; they are not pure
-accessors simply because they return a dictionary.
+- The initial MFA channel defaults to email. `sms_code` is the submission
+  argument for the selected delivery method, including email. Keep it as text
+  so leading zeros survive. `code_sent` means the server accepted a code
+  request, not that the message arrived. See [login recovery](auth/login-recovery.md)
+  for contact selection, `request_mfa=False`, explicit resend, and human CAPTCHA.
+- For a fresh login, `url=` takes the regional **host name**, not a full URL;
+  the default is `apiieu.ezvizlife.com`. Do not use it to reroute an existing
+  token. Password login uses v6 by default; only select `login_api="v5"`
+  when the account's region is independently known to require it.
 
 ## Reuse and persist the complete token
+
+After the first successful login, save `client.export_token()` into a
+private, application-owned store. For a standalone file, use
+`save_private_token(str(path), client.export_token())` before closing the client.
+The parent directory must already exist and be private. Do not put tokens in
+source control, logs, or world-readable directories.
+
+On subsequent runs, restore the **whole** token and install a synchronous
+callback to persist rotation. This example expects the file to exist and
+assumes the same default installation identity on the same host:
 
 ```python
 import json
@@ -52,8 +73,8 @@ from pathlib import Path
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.cloud.token_store import save_private_token
 
-path = Path("ezviz_token.json")  # Choose a private application-owned path.
-saved_token = json.loads(path.read_text())
+path = Path("ezviz_token.json")  # Use a private, stable path in production.
+saved_token = json.loads(path.read_text(encoding="utf-8"))
 
 def persist(snapshot):
     save_private_token(str(path), snapshot)
@@ -61,38 +82,80 @@ def persist(snapshot):
 client = EzvizClient(token=saved_token, on_token_updated=persist)
 try:
     client.login()
-    persist(client.export_token())
-    cameras = client.load_cameras()
+    snapshot = client.poll_devices()
 finally:
     client.close_session()
 ```
 
-The file must already exist in this reuse example. `export_token()` returns a
-separate deep snapshot; persist all fields, not only session/refresh strings.
-The CLI storage helper is suitable for standalone files; HA integrations must
-implement storage appropriate to HA. In channel-99 use, the callback runs on a
-worker and must not return before durable storage completes. Do not introduce
-an event-loop/worker deadlock. See [channel-99](channel99.md) for migration,
-first-device recovery and shutdown semantics.
+A saved session ID **and** refresh ID take the refresh path first. If refresh
+raises `EzvizAuthTokenExpired`, a client with account credentials can attempt
+password login; a token-only client needs caller-managed reauthentication.
+For containers or hosts with changing MAC addresses, use a
+[persisted installation identity](auth/persisted-client-identity.md) and pass the
+same `feature_code=` on restore.
+
+Treat the dictionary passed as `token=` as owned by that client. Use
+`export_token()` for a detached snapshot, rather than mutating or sharing the
+input or the return value of `login()`. The callback also receives a detached
+snapshot. Do not share one mutable token across clients or let stale copies
+overwrite rotated credentials. Push requires durable persistence **before**
+the callback returns; see [channel-99 lifecycle](channel99.md#receiving-events).
 
 ## Device/status APIs
 
-| Method | Result/use |
-| --- | --- |
-| `load_cameras(refresh=True)` | Camera-like status mappings keyed by serial |
-| `load_light_bulbs(refresh=True)` | Lighting status mappings |
-| `load_smart_plugs(refresh=True)` | Smart-plug status mappings |
-| `load_devices(refresh=True)` | Combined supported device mappings |
-| `get_page_list()` | Merged [pagelist sections](pagelist-api.md) for device and resource diagnostics |
-| `get_device_infos(serial=None)` | Processed per-serial view; pass a serial for a scoped lookup |
-| `get_device_records(serial=None)` | Typed device records |
-| `get_device_messages_list(...)` | One raw [UnifiedMsg page](unified-message-list.md), with custom alarm filters |
-| `export_token()` | Deep snapshot for secure persistence |
+| Use case | API | Return shape and I/O |
+| --- | --- | --- |
+| Periodic polling for multiple device families | `poll_devices(options=None)` | One [typed snapshot](device_inventory.md) from a bounded acquisition, which may paginate and fetch alarms. |
+| Reuse the last published snapshot | `device_snapshot`, then `select(kind)` or `as_dict(kind)` | Property is `None` before the first successful poll. Selectors do no I/O; `as_dict` returns detached compatibility data. |
+| Keep an existing dictionary-based consumer working | `load_devices(refresh=True)` or `load_cameras`, `load_detectors`, `load_light_bulbs`, `load_smart_plugs` | Serial-keyed status dictionaries. Each family call fetches inventory; `refresh=False` skips camera alarm enrichment, **not** inventory fetch. Legacy maps can retain stale entries. |
+| Inspect one device or the processed inventory | `get_device_infos(serial=None)` / `get_device_records(serial=None)` | A mapping keyed by serial when omitted; a single projected dictionary or `EzvizDeviceRecord` when found by serial, or `{}` when not found. A scoped lookup can fall back to account pagelist. |
+| Inspect reported resources or validate raw device rows | `get_page_list()` / `get_device(strict=True)` | Merged [pagelist sections](pagelist-api.md) or just the device rows with strict row and final-page validation. |
+| Query alarm/message history | `get_device_messages_list(...)` | One raw [UnifiedMsg page](unified-message-list.md), not live motion state, and not automatically paginated. |
 
-Raw fields can change upstream. See the [HA contract](home-assistant-contract.md)
-for status keys, device routing and exception categories. Controls such as
-`set_camera_defence(serial, enable)` can affect real devices; an accepted API
-response does not establish physical completion.
+Use one `poll_devices()` call per update cycle and select all needed families
+from it instead of polling each family separately. A successful poll can still
+retain stale device states; check `snapshot.health[serial]` for `present` and
+`current`. A failed poll raises and leaves the previous snapshot in place.
+Treat both cases explicitly when deciding what is available. For polls that
+exclude alarms, alarm-derived fields such as camera motion are unknown.
+
+## Errors and client lifetime
+
+The SDK is synchronous. In async applications, run blocking SDK operations
+in an executor, coordinate one poll at a time per client, and wait for
+outstanding work before cleanup. Cancelling an async waiter does not stop the
+worker. The constructor's HTTP timeout is not a deadline for all operations;
+`DevicePollOptions.timeout` bounds a whole poll, including its inventory lock
+and optional alarm/history reads. See [polling details](device_inventory.md#ownership-and-freshness).
+
+| Failure | Handle it as |
+| --- | --- |
+| `EzvizAuthVerificationCode` or other `EzvizLoginError` | Inspect `reason` and follow [login recovery](auth/login-recovery.md#stable-error-categories). Catch the verification subtype first if you handle it separately. |
+| `EzvizAuthTokenExpired` | Restore the matching installation identity if applicable, or reauthenticate; do not blindly reuse rejected credentials. |
+| SDK `HTTPError`, other `PyEzvizError`, Requests transport errors, or `TimeoutError` | Keep HTTP, API payload rejection, transport, and bounded timeout failures distinct. Not every transport exception subclasses `PyEzvizError`. Inspect the endpoint-specific contract before retrying; a timed-out write may already have reached the device or service. |
+
+`close_session()` closes and recreates local HTTP session state without
+removing the stored credentials. `logout()` is a remote session operation,
+not the normal cleanup for a reusable token. If you own a push worker, stop
+it before closing HTTP state; close any open media context separately.
+Do not log raw tokens, device records, alarm payloads or signed URLs.
+
+## Controls, push, and media
+
+Start with the feature guide for the target device and channel. A device
+serial, a resource ID, and a channel number are not interchangeable. Missing
+reported state does not prove a feature is off or unsupported. A successful
+write response is not proof of physical completion; use the documented
+readback where available.
+
+| Task | Guide |
+| --- | --- |
+| Identify a lens, route point movement, or choose a capture channel | [Camera channels](camera-channels.md), [point PTZ](ptz-point-control.md) |
+| Change camera switches, AI detection, or image settings | [Switches](device-switches.md), [AI detection](ai-detection.md), [image controls](image-controls.md) |
+| Read or set recording schedules, patrol, privacy masks, or audio | [Camera app controls](camera-app-controls.md) |
+| Receive background events rather than poll history | [Channel-99 push](channel99.md), including migration, callback persistence, `raise_if_failed()`, and shutdown |
+| Trigger or save a snapshot, or save a bounded clip | [Saving media](media-saving.md): `capture_picture` triggers capture and returns an API payload; `save_image`, `save_clip`, and `save_clip_with_options` write media to an output. |
+| Select a streaming or recording route | [Media paths](media.md) and [streaming reference](streaming.md). `open_stream` returns a lazy packet-stream context, not a player URL or a decoded frame API. |
 
 ## Imports and media
 
@@ -100,9 +163,5 @@ Use `pyezvizapi.client`, `pyezvizapi.devices.*`, `pyezvizapi.cloud.*`,
 `pyezvizapi.push.*` and `pyezvizapi.streaming.*` canonical owners for new code.
 Package-level lazy exports remain available. Only four narrow legacy shims are
 retained for the pinned HA consumer; see [compatibility](ha-compatibility.md).
-
-For `save_clip`, `save_clip_with_options`, `save_image` and source-specific
-requirements, see [media saving](media-saving.md) and the [streaming reference](streaming.md).
-
-For clients running in containers, see
-[persisted installation identity](auth/persisted-client-identity.md).
+See [media dependencies](media.md#install-only-the-selected-dependencies)
+before installing optional extras or system tools.

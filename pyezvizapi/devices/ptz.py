@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
-from requests import Request
+from requests import Request, RequestException, Session
 
 from pyezvizapi.cloud.deadline import request_budget_lock
 from pyezvizapi.cloud.endpoints import (
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
     from pyezvizapi.client import EzvizClient
     from pyezvizapi.devices.channels import CameraChannel
 
+_PANORAMA_DOWNLOAD_LIMIT = 12 * 1024 * 1024
+_PANORAMA_DOWNLOAD_TIMEOUT = 15
 _PRESET_PATH = "/api/device/preset"
 _LEGACY_IDENTITY = (
     "sessionId",
@@ -410,7 +413,8 @@ def get_stored_panorama(client: EzvizClient, serial: str) -> dict[str, Any]:
 
     The returned picInfo object can contain progress and levelPicInfoList.
     An empty list means no images were returned. This is a separate read route,
-    not a fallback for resource-scoped capture or progress.
+    not a fallback for resource-scoped capture or progress. Use
+    download_saved_panorama for the finished JPEG uploaded by the app.
     """
     response = client._request_json(
         "GET",
@@ -420,6 +424,79 @@ def get_stored_panorama(client: EzvizClient, serial: str) -> dict[str, Any]:
     )
     _require_v3_success(client, response, "Could not read stored panorama")
     return object_section(response, "picInfo", required=True)
+
+
+def _validate_panorama_url(url: str) -> None:
+    try:
+        parsed = urlsplit(url)
+        host = parsed.hostname or ""
+        valid = (
+            parsed.scheme == "https"
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port in (None, 443, 8444)
+            and host.endswith(".ezvizlife.com")
+            and host.isascii()
+            and all(c.isalnum() or c in ".-" for c in host)
+            and not any(c.isspace() or ord(c) < 32 or c == "\\" for c in url)
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        raise PyEzvizError("Unsupported saved panorama URL; expected an EZVIZ HTTPS host")
+
+
+def _fetch_panorama_jpeg(url: str) -> bytes:
+    _validate_panorama_url(url)
+    deadline = monotonic() + _PANORAMA_DOWNLOAD_TIMEOUT
+    data = bytearray()
+    try:
+        with Session() as media:
+            media.trust_env = False
+            with media.get(url, allow_redirects=False, stream=True, timeout=(5, 5)) as response:
+                if response.status_code != 200:
+                    raise PyEzvizError(
+                        f"Saved panorama download returned HTTP {response.status_code}"
+                    )
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if monotonic() >= deadline:
+                        raise PyEzvizError("Saved panorama download exceeded its time limit")
+                    if len(data) + len(chunk) > _PANORAMA_DOWNLOAD_LIMIT:
+                        raise PyEzvizError("Saved panorama download exceeded its size limit")
+                    data.extend(chunk)
+    except RequestException:
+        # Request exception messages can contain the signed URL.
+        raise PyEzvizError("Could not download saved panorama") from None
+    if not data.startswith(b"\xff\xd8\xff") or not data.endswith(b"\xff\xd9"):
+        raise PyEzvizError("Saved panorama did not return JPEG data")
+    return bytes(data)
+
+
+def download_saved_panorama(client: EzvizClient, serial: str) -> bytes | None:
+    """Download the finished device-wide panorama JPEG without moving the camera.
+
+    Read fresh inventory and use the selected serial's STATUS.levelPicUrl.
+    Return None when no saved image is advertised for that serial. Android
+    stitches and uploads the image; capture progress alone does not make one
+    available. This helper does not capture, stitch, or upload anything.
+
+    The bounded media download uses HTTPS without account headers, cookies, or
+    redirects. Raise PyEzvizError for malformed status, an unsupported URL, or
+    a failed or non-JPEG download. The returned JPEG bytes are not decoded.
+    """
+    serial = _panorama_serial(serial)
+    status = client.get_page_list().get("STATUS")
+    if status is None:
+        return None
+    row = _panorama_mapping(status, "STATUS").get(serial)
+    if row is None:
+        return None
+    url = _panorama_mapping(row, "STATUS row").get("levelPicUrl")
+    if url is None or url == "":
+        return None
+    if not isinstance(url, str):
+        raise PyEzvizError("Malformed saved panorama URL")
+    return _fetch_panorama_jpeg(url)
 
 
 def _panorama_point(x: float, y: float) -> None:

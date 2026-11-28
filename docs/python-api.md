@@ -150,7 +150,7 @@ readback where available.
 
 | Task | Guide |
 | --- | --- |
-| Move or zoom a camera, use saved viewpoints, manage patrol, or check panorama progress | [Cloud PTZ](ptz-app-controls.md) |
+| Move or zoom a camera, use saved viewpoints, manage patrol, or download a saved panorama | [Cloud PTZ](ptz-app-controls.md) |
 | Identify a lens, route point movement, or choose a capture channel | [Camera channels](camera-channels.md), [point PTZ](ptz-point-control.md) |
 | Change camera switches, AI detection, or image settings | [Switches](device-switches.md), [AI detection](ai-detection.md), [image controls](image-controls.md) |
 | Read or set recording schedules, patrol, privacy masks, or audio | [Camera app controls](camera-app-controls.md) |

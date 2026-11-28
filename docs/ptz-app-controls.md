@@ -12,6 +12,7 @@ There is no automatic fallback to another lens or from cloud to LAN.
 | Patrol sequence | `get_patrol_path`, `create_patrol_path`, `set_patrol_path`, `delete_patrol_path` in `pyezvizapi.devices.app_controls` |
 | Save a patrol point | `pyezvizapi.devices.ptz.save_patrol_point` |
 | Panorama capture and status | `resolve_panorama_capture_route`, `start_panorama_capture`, `get_panorama_info`, `start_device_panorama_capture`, and `get_stored_panorama` in `pyezvizapi.devices.ptz` |
+| Download a finished device-wide panorama | `pyezvizapi.devices.ptz.download_saved_panorama` |
 | Panorama movement and mark reset | `move_to_panorama_point` and `reset_panorama_mark` in `pyezvizapi.devices.ptz` |
 | Patrol schedule, homing preset, calibration | [Camera app controls](camera-app-controls.md) |
 | Human/subject tracking and linked-lens behavior | [AI detection and tracking](ai-detection.md) |
@@ -79,9 +80,9 @@ resource request index. The resolver does not infer that combined-playback
 mapping from ordinary inventory.
 
 Capture acknowledgment is not completion. Check for image records as well
-as 100% progress. These helpers do not download, decrypt, upload, or stitch
-images. V3 requests require `meta.code=200`; a successful HTTP status or a
-legacy success code cannot override a V3 error. The SDK does not switch
+as 100% progress. The capture helpers do not download, decrypt, upload, or
+stitch tiles. V3 requests require `meta.code=200`; a successful HTTP status
+or a legacy success code cannot override a V3 error. The SDK does not switch
 routes after an error. The legacy `create_panoramic` and `return_panoramic`
 client methods are unchanged.
 
@@ -90,6 +91,29 @@ image, not the live image. Pass a `CameraChannel` for the resource-scoped
 `RotateFixpoint` action, or omit it to explicitly use the legacy device-wide
 route. `reset_panorama_mark` sends Android's device-wide mark-type 3
 operation; other mark types are not exposed.
+
+## Download a finished panorama
+
+Android downloads the temporary tiles, sorts them by index, stitches them
+on-device, and uploads the result to `POST /v3/panoramicDevices/pics/upload`.
+Find the finished image in a fresh pagelist at `STATUS[serial].levelPicUrl`,
+not in the progress response. It can be available while progress is 100%
+and the tile list is empty.
+
+```python
+from pathlib import Path
+
+from pyezvizapi.devices.ptz import download_saved_panorama
+
+jpeg = download_saved_panorama(client, serial)
+if jpeg is not None:
+    Path("panorama.jpg").write_bytes(jpeg)
+```
+
+The helper only reads and downloads: it will not move the camera, stitch
+tiles, or upload an image. It returns `None` when there is no saved URL;
+unsupported URLs and failed or non-JPEG downloads raise `PyEzvizError`.
+The bounded HTTPS request sends no SDK credentials and follows no redirects.
 
 ## Evidence and limits
 
@@ -114,5 +138,7 @@ Scope selection was traced through `PlayDataInfo.supportPanoramaModeNew`,
 device-wide PTZ flag. A read-only live inventory check resolved both lenses
 to device scope. On the tested H9c, the resource capture was rejected
 (code 2009); the device-wide request progressed from 0 to 100% and returned
-12 image records. A later read returned 100% with no image records. Neither
-image download nor stitching was verified.
+12 image records. A later read returned 100% with no image records. On a
+separate app-initiated capture, the handset uploaded the stitched panorama.
+A fresh SDK inventory lookup returned its URL, and the downloaded 3936 × 300
+JPEG decoded successfully.

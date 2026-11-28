@@ -2,8 +2,10 @@
 
 from email import policy
 from email.parser import BytesParser
-from io import BytesIO
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+from threading import Event, Thread
+from time import monotonic
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
@@ -32,7 +34,9 @@ def _multipart(request: requests.PreparedRequest) -> dict[str, Any]:
 def test_directional_ptz_wire(device_requests, monkeypatch) -> None:
     client, sent, replies = device_requests
     monkeypatch.setattr("pyezvizapi.client.time.time", lambda: 1_700_000_000.125)
-    monkeypatch.setattr("pyezvizapi.client.uuid4", lambda: UUID("a1234567-89ab-4def-8123-456789abcdef"))
+    monkeypatch.setattr(
+        "pyezvizapi.client.uuid4", lambda: UUID("a1234567-89ab-4def-8123-456789abcdef")
+    )
     replies.extend([{"meta": {"code": 200}}] * 2)
     for action in ("START", "STOP"):
         success = client.ptz_control("UPLEFT", "CAM001", action, 4, channel=2)
@@ -88,7 +92,9 @@ def test_preset_create_and_rename_multipart(device_requests) -> None:
     replies.extend([{"resultCode": 0, "Preset": row}] * 2)
     created_preset = ptz.create_ptz_preset(client, "CAM001", "Gate", channel=2, thumbnail=b"image")
     assert created_preset == row
-    renamed_preset = ptz.rename_ptz_preset(client, "CAM001", 7, "Drive", channel=2, pic_url="/p.jpg")
+    renamed_preset = ptz.rename_ptz_preset(
+        client, "CAM001", 7, "Drive", channel=2, pic_url="/p.jpg"
+    )
     assert renamed_preset == row
     for request, path in zip(sent, ("set", "update"), strict=True):
         assert request.method == "POST"
@@ -200,7 +206,6 @@ def test_save_patrol_point_uses_distinct_multipart_contract(device_requests) -> 
     assert len(sent) == 2
 
 
-
 @pytest.mark.parametrize("payload", [{"resultCode": 0}, {"resultCode": "0", "data": None}])
 def test_empty_preset_list_matches_app(device_requests, payload) -> None:
     client, _, replies = device_requests
@@ -210,12 +215,15 @@ def test_empty_preset_list_matches_app(device_requests, payload) -> None:
 
 
 @pytest.mark.parametrize("operation", [ptz.goto_ptz_preset, ptz.delete_ptz_preset])
-@pytest.mark.parametrize("response", [
-    {"meta": {"code": 200}, "resultCode": 4},
-    {"meta": {"code": 200}},
-    {"resultCode": False},
-    {"resultCode": 0.0},
-])
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"meta": {"code": 200}, "resultCode": 4},
+        {"meta": {"code": 200}},
+        {"resultCode": False},
+        {"resultCode": 0.0},
+    ],
+)
 def test_legacy_preset_requires_legacy_success(device_requests, operation, response) -> None:
     client, sent, replies = device_requests
     replies.append(response)
@@ -238,11 +246,16 @@ def test_panorama_interaction_uses_explicit_routes(device_requests) -> None:
         ("PUT", "/v3/panoramicDevices/ptz/coordinate/mark"),
     ]
     assert parse_qs(sent[0].body) == {
-        "deviceSerial": ["CAM001"], "x": ["0.125568"], "y": ["1"],
+        "deviceSerial": ["CAM001"],
+        "x": ["0.125568"],
+        "y": ["1"],
     }
     assert json.loads(sent[1].body) == {"x": 0.126, "y": 1.0}
     assert parse_qs(sent[2].body, keep_blank_values=True) == {
-        "deviceSerial": ["CAM001"], "detectorSubSerial": [""], "x": [""], "y": [""],
+        "deviceSerial": ["CAM001"],
+        "detectorSubSerial": [""],
+        "x": [""],
+        "y": [""],
         "markType": ["3"],
     }
 
@@ -341,7 +354,8 @@ def test_download_saved_panorama_isolated_media(panorama_download, monkeypatch) 
         calls.append((session.trust_env, request.method, request.url, request.headers, kwargs))
         response = requests.Response()
         response.status_code = 200
-        response.raw = BytesIO(jpeg)
+        response._content = jpeg  # noqa: SLF001
+        response.__dict__["_content_consumed"] = True
         return response
 
     monkeypatch.setattr(requests.Session, "send", send)
@@ -408,7 +422,8 @@ def test_download_saved_panorama_rejects_bad_media(
     def send(*args, **kwargs):
         response = requests.Response()
         response.status_code = code
-        response.raw = BytesIO(data)
+        response._content = data  # noqa: SLF001
+        response.__dict__["_content_consumed"] = True
         return response
 
     monkeypatch.setattr(requests.Session, "send", send)
@@ -426,6 +441,45 @@ def test_download_saved_panorama_redacts_request_errors(panorama_download, monke
     with pytest.raises(PyEzvizError, match=r"^Could not download saved panorama$") as error:
         ptz.download_saved_panorama(client, "CAM001")
     assert error.value.__suppress_context__
+
+
+def test_download_saved_panorama_stops_a_slow_stream(monkeypatch) -> None:
+    sent_body = Event()
+    stop = Event()
+    disconnected = Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", "65536")
+            self.end_headers()
+            try:
+                while not stop.is_set():
+                    self.wfile.write(b"x")
+                    self.wfile.flush()
+                    sent_body.set()
+                    stop.wait(0.02)
+            except (BrokenPipeError, ConnectionResetError):
+                disconnected.set()
+
+    with HTTPServer(("127.0.0.1", 0), Handler) as server:
+        worker = Thread(target=server.handle_request, daemon=True)
+        worker.start()
+        monkeypatch.setattr(ptz, "_validate_panorama_url", lambda _: None)
+        monkeypatch.setattr(ptz, "_PANORAMA_DOWNLOAD_TIMEOUT", 0.2)
+        started = monotonic()
+        try:
+            with pytest.raises(PyEzvizError, match="exceeded its time limit"):
+                ptz._fetch_panorama_jpeg(  # noqa: SLF001
+                    f"http://127.0.0.1:{server.server_port}/pic"
+                )
+            assert monotonic() - started < 1
+            assert sent_body.is_set()
+            closed = disconnected.wait(1)
+            assert closed
+        finally:
+            stop.set()
+            worker.join(timeout=2)
 
 
 @pytest.mark.parametrize("code", [1310724, "1310724"])

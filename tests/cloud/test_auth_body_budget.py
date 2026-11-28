@@ -207,7 +207,7 @@ def test_materialized_transport_honors_per_request_limit(monkeypatch, size, acce
         assert calls == [{"url": "https://unused.invalid", "stream": True}]
 
 
-@pytest.mark.parametrize("limit", [0, -1, True, 1.5, MAX_BOOTSTRAP_BODY_BYTES + 1])
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5, 12 * 1024 * 1024 + 1])
 def test_invalid_limit_rejected_before_transport(monkeypatch, limit):
     def unexpected(*_args, **_kwargs):
         pytest.fail("Invalid limits must not reach the transport")

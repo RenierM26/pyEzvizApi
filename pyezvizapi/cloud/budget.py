@@ -22,7 +22,12 @@ from pyezvizapi.cloud.transport import isolated_session
 from pyezvizapi.exceptions import PyEzvizError
 
 MAX_BOOTSTRAP_BODY_BYTES = 8 * 1024 * 1024
+MAX_BUDGETED_BODY_BYTES = 12 * 1024 * 1024
 _IDLE_SECONDS = 0.25
+
+
+class BudgetedBodyLimitError(PyEzvizError):
+    """A scoped HTTP response exceeded its configured body limit."""
 
 
 def _commit_cookies(
@@ -61,6 +66,7 @@ class _HttpJob:
     operation: str
     kwargs: dict[str, Any]
     max_body_bytes: int = MAX_BOOTSTRAP_BODY_BYTES
+    body_status: int | None = None
     cancelled: Event = field(default_factory=Event)
     result: Queue[tuple[bool, Any]] = field(default_factory=lambda: Queue(maxsize=1))
     lock: Lock = field(default_factory=Lock)
@@ -85,6 +91,10 @@ class _HttpJob:
         response: requests.Response = getattr(self.session, self.operation)(**self.kwargs)
         accepted = False
         try:
+            if self.body_status is not None and response.status_code != self.body_status:
+                response.close()
+                accepted = True
+                return response
             # Test/custom transports may return an already materialized response.
             content = response._content  # noqa: SLF001
             if not isinstance(content, bytes):
@@ -104,13 +114,15 @@ class _HttpJob:
                         raise TimeoutError("Cloud bootstrap HTTP job cancelled")
                     size += len(chunk)
                     if size > self.max_body_bytes:
-                        raise PyEzvizError("Cloud bootstrap response exceeds its byte limit")
+                        raise BudgetedBodyLimitError(
+                            "Cloud bootstrap response exceeds its byte limit"
+                        )
                     parts.append(chunk)
                 content = b"".join(parts)
                 response._content = content  # noqa: SLF001
                 response.__dict__["_content_consumed"] = True
             if len(content) > self.max_body_bytes:
-                raise PyEzvizError("Cloud bootstrap response exceeds its byte limit")
+                raise BudgetedBodyLimitError("Cloud bootstrap response exceeds its byte limit")
             if self.cancelled.is_set():
                 raise TimeoutError("Cloud bootstrap HTTP job cancelled")
             accepted = True
@@ -172,28 +184,30 @@ def budgeted_http_call(
     operation: str,
     *,
     max_body_bytes: int = MAX_BOOTSTRAP_BODY_BYTES,
+    body_status: int | None = None,
     **kwargs: Any,
 ) -> requests.Response:
     """Bound the caller even if system DNS or server reads ignore socket totals.
 
     Borrow a detached session state, never mutate shared headers/cookies from a
     worker, and never spawn unbounded replacements for stuck system resolvers.
-    Scoped calls may lower the decoded-body limit; reject on the first chunk
+    Scoped calls may set the decoded-body limit; reject on the first chunk
     crossing it (at most one 16 KiB chunk beyond the limit is read, not retained).
-    A custom limit requires a deadline. Ordinary unscoped calls stay synchronous.
+    A custom limit or body status filter requires a deadline. Ordinary unscoped
+    calls stay synchronous.
     """
-    if type(max_body_bytes) is not int or not 0 < max_body_bytes <= MAX_BOOTSTRAP_BODY_BYTES:
-        raise ValueError("HTTP body limit must be a positive integer no larger than 8 MiB")
+    if type(max_body_bytes) is not int or not 0 < max_body_bytes <= MAX_BUDGETED_BODY_BYTES:
+        raise ValueError("HTTP body limit must be a positive integer no larger than 12 MiB")
     remaining = remaining_request_budget()
     if remaining is None:
-        if max_body_bytes != MAX_BOOTSTRAP_BODY_BYTES:
+        if max_body_bytes != MAX_BOOTSTRAP_BODY_BYTES or body_status is not None:
             raise ValueError("A custom HTTP body limit requires a request deadline")
         return getattr(session, operation)(**kwargs)
     borrowed = isolated_session(session)
     initial_cookies = borrowed.cookies.copy()
     if operation == "send" and isinstance(kwargs.get("request"), requests.PreparedRequest):
         kwargs["request"] = kwargs["request"].copy()
-    job = _HttpJob(borrowed, operation, {**kwargs, "stream": True}, max_body_bytes)
+    job = _HttpJob(borrowed, operation, {**kwargs, "stream": True}, max_body_bytes, body_status)
     _WORKER.submit(job)
     try:
         succeeded, value = job.result.get(timeout=remaining)

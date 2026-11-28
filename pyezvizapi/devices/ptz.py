@@ -11,7 +11,7 @@ or falls back to LAN controls.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 import json
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -19,7 +19,12 @@ from urllib.parse import quote, urlsplit
 
 from requests import Request, RequestException, Session
 
-from pyezvizapi.cloud.deadline import request_budget_lock
+from pyezvizapi.cloud.budget import (
+    MAX_BUDGETED_BODY_BYTES,
+    BudgetedBodyLimitError,
+    budgeted_http_call,
+)
+from pyezvizapi.cloud.deadline import request_budget_lock, request_deadline
 from pyezvizapi.cloud.endpoints import (
     API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
@@ -32,7 +37,7 @@ if TYPE_CHECKING:
     from pyezvizapi.client import EzvizClient
     from pyezvizapi.devices.channels import CameraChannel
 
-_PANORAMA_DOWNLOAD_LIMIT = 12 * 1024 * 1024
+_PANORAMA_DOWNLOAD_LIMIT = MAX_BUDGETED_BODY_BYTES
 _PANORAMA_DOWNLOAD_TIMEOUT = 15
 _PRESET_PATH = "/api/device/preset"
 _LEGACY_IDENTITY = (
@@ -455,30 +460,45 @@ def _validate_panorama_url(url: str) -> None:
         raise PyEzvizError("Unsupported saved panorama URL; expected an EZVIZ HTTPS host")
 
 
+class _PanoramaSession(Session):
+    def resolve_redirects(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        # Requests can drain a redirect body even with allow_redirects=False
+        # while building Response.next. No redirect processing is needed here.
+        return iter(())
+
+
 def _fetch_panorama_jpeg(url: str) -> bytes:
     _validate_panorama_url(url)
-    deadline = monotonic() + _PANORAMA_DOWNLOAD_TIMEOUT
-    data = bytearray()
     try:
-        with Session() as media:
+        with (
+            _PanoramaSession() as media,
+            request_deadline(monotonic() + _PANORAMA_DOWNLOAD_TIMEOUT),
+        ):
             media.trust_env = False
-            with media.get(url, allow_redirects=False, stream=True, timeout=(5, 5)) as response:
+            with budgeted_http_call(
+                media,
+                "get",
+                url=url,
+                allow_redirects=False,
+                timeout=(5, 5),
+                max_body_bytes=_PANORAMA_DOWNLOAD_LIMIT,
+                body_status=200,
+            ) as response:
                 if response.status_code != 200:
                     raise PyEzvizError(
                         f"Saved panorama download returned HTTP {response.status_code}"
                     )
-                for chunk in response.iter_content(chunk_size=64 * 1024):
-                    if monotonic() >= deadline:
-                        raise PyEzvizError("Saved panorama download exceeded its time limit")
-                    if len(data) + len(chunk) > _PANORAMA_DOWNLOAD_LIMIT:
-                        raise PyEzvizError("Saved panorama download exceeded its size limit")
-                    data.extend(chunk)
+                data = response.content
+    except TimeoutError:
+        raise PyEzvizError("Saved panorama download exceeded its time limit") from None
+    except BudgetedBodyLimitError:
+        raise PyEzvizError("Saved panorama download exceeded its size limit") from None
     except RequestException:
         # Request exception messages can contain the signed URL.
         raise PyEzvizError("Could not download saved panorama") from None
     if not data.startswith(b"\xff\xd8\xff") or not data.endswith(b"\xff\xd9"):
         raise PyEzvizError("Saved panorama did not return JPEG data")
-    return bytes(data)
+    return data
 
 
 def download_saved_panorama(client: EzvizClient, serial: str) -> bytes | None:

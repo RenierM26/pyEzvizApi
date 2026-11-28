@@ -94,7 +94,9 @@ part of a routine validation run.
   grid's dimensions before writing. Cells are integer 0 or 1.
 - `get_motion_detection_area` and `set_motion_detection_area` use the typed
   cloud route. Pass the exact channel and nonempty detection type used by the
-  app for that editor. The setter replaces the whole grid after checking its
+  app for that editor. For example, the Android human-detection editor passes
+  `Humanoid` when `DetectAreaCapacityIndex` is `3`. The setter replaces
+  the whole grid after checking its
   dimensions against the typed read. Use integer 0/1 cells in row-major
   order and explicitly select `MotionAreaEncoding.ROW_BITMAP` for the app's
   standard bitmap branch or `MotionAreaEncoding.DOORBELL_HIK` for its

@@ -1176,20 +1176,22 @@ def test_motion_detection_area_wire(
     device_requests, encoding: app_controls.MotionAreaEncoding, grid: list[list[int]], encoded: str
 ) -> None:
     client, sent, replies = device_requests
-    area = {"width": len(grid[0]), "height": len(grid), "area": encoded, "type": "human"}
+    area = {"width": len(grid[0]), "height": len(grid), "area": encoded, "type": "Humanoid"}
     state = {"meta": {"code": 200}, "detectAreaInfo": area}
     replies.extend([state, state, {"meta": {"code": 200}}])
     assert (
-        app_controls.get_motion_detection_area(client, "CAM001", channel=2, detection_type="human")
+        app_controls.get_motion_detection_area(
+            client, "CAM001", channel=2, detection_type="Humanoid"
+        )
         == area
     )
     app_controls.set_motion_detection_area(
-        client, "CAM001", grid, channel=2, detection_type="human", encoding=encoding
+        client, "CAM001", grid, channel=2, detection_type="Humanoid", encoding=encoding
     )
     assert [r.method for r in sent] == ["GET", "GET", "PUT"]
     assert [urlsplit(r.url).path for r in sent] == [
-        "/v3/devices/CAM001/2/detectAreaInfo/human",
-        "/v3/devices/CAM001/2/detectAreaInfo/human",
+        "/v3/devices/CAM001/2/detectAreaInfo/Humanoid",
+        "/v3/devices/CAM001/2/detectAreaInfo/Humanoid",
         "/v3/devices/CAM001/2/detectAreaInfo",
     ]
     assert all(not urlsplit(r.url).query for r in sent)
@@ -1198,17 +1200,17 @@ def test_motion_detection_area_wire(
         "width": [str(len(grid[0]))],
         "height": [str(len(grid))],
         "data": [encoded],
-        "type": ["human"],
+        "type": ["Humanoid"],
     }
 
 
 @pytest.mark.parametrize(
     ("grid", "detection_type", "error"),
     [
-        ([[1], [1, 0]], "human", "rectangular"),
-        ([[True]], "human", "rectangular"),
-        ([[0]], "human", "selected cell"),
-        ([[1] * 33], "human", "32 columns"),
+        ([[1], [1, 0]], "Humanoid", "rectangular"),
+        ([[True]], "Humanoid", "rectangular"),
+        ([[0]], "Humanoid", "selected cell"),
+        ([[1] * 33], "Humanoid", "32 columns"),
         ([[1]], "", "detection_type"),
         ([[1]], "../human", "detection_type"),
     ],
@@ -1257,7 +1259,7 @@ def test_motion_detection_area_failed_read_does_not_write(
             "CAM001",
             [[1, 0]],
             channel=2,
-            detection_type="human",
+            detection_type="Humanoid",
             encoding=app_controls.MotionAreaEncoding.ROW_BITMAP,
         )
     assert [r.method for r in sent] == ["GET"]
@@ -1277,7 +1279,7 @@ def test_motion_detection_area_write_error_propagates(device_requests) -> None:
             "CAM001",
             [[1, 0]],
             channel=2,
-            detection_type="human",
+            detection_type="Humanoid",
             encoding=app_controls.MotionAreaEncoding.ROW_BITMAP,
         )
     assert [r.method for r in sent] == ["GET", "PUT"]

@@ -159,6 +159,38 @@ readback where available.
 | Trigger or save a snapshot, or save a bounded clip | [Saving media](media-saving.md): `capture_picture` triggers capture and returns an API payload; `save_image`, `save_clip`, and `save_clip_with_options` write media to an output. |
 | Select a streaming or recording route | [Media paths](media.md) and [streaming reference](streaming.md). `open_stream` returns a lazy packet-stream context, not a player URL or a decoded frame API. |
 
+## Request a camera verification code
+
+`client.get_2fa_check_code(biz_type, username)` requests delivery of a
+one-time code. Use `DEVICE_AUTH_CODE` to retrieve the camera sticker code
+with `get_cam_auth_code`, or `DEVICE_ENCRYPTION` for encryption-key lookup.
+This is separate from login MFA. The response contains delivery metadata,
+not the code, and requesting delivery alone does not authorize the lookup.
+Use the code EZVIZ delivers in the subsequent lookup; don't log it.
+
+If your verification flow supplies a delivery selector, pass it as the
+keyword-only `msg_type` argument. Otherwise omit it; the SDK preserves
+the existing request format. The optional field was traced in Android and
+tested offline, not by sending a live code.
+
+## Camera encryption keys
+
+Use `client.get_cam_key(serial)` for one camera. For multiple cameras,
+`client.get_device_list_encrypt_key(area_id, form_data)` is the low-level
+helper for the Android app's batch request. Pass the account's area ID,
+not a camera's location ID. The Android form contains:
+
+- `deviceSerialList`: one comma-separated string with a trailing comma
+  (for example, `CAM1,CAM2,`), not repeated `serial` fields.
+- `checkcode` and `msgType`: the verification code and message type for
+  the EZVIZ verification flow. The helper does not request a code.
+
+The helper returns the raw response, including `responseDetail` when present.
+The app reads that field as a map keyed by camera serial. Handle missing entries
+individually rather than assuming every requested camera returned a key. Never
+log verification codes or the response. The batch format was traced in Android
+and tested offline; it has not been verified against the live service.
+
 ## Imports and media
 
 Use `pyezvizapi.client`, `pyezvizapi.devices.*`, `pyezvizapi.cloud.*`,

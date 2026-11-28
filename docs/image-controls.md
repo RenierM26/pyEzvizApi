@@ -8,6 +8,7 @@ local indices, and native LAN channels are separate routing inputs.
 | Control | SDK route | Limits |
 | --- | --- | --- |
 | Color and saturation presets | `set_display_mode`, devconfig `display_mode` | Android's graphics presenters and the SDK send an object with `mode` on channel 1. This is a preset, not a saturation slider. |
+| Individual brightness, contrast, saturation and sharpness | Native LAN `set_camera_video_effect(effect, level)` | Sets one level (0–100) on the default camera configuration and verifies it by reading back. See the [LAN SDK notes](cli.md#lan-wdr). No equivalent cloud setter was established in this audit. |
 | Backlight region compensation | `set_dev_config_kv`, key `inverse_mode` | Android's advanced graphics presenter uses channel 1. It preserves the reported `mode`; disabling also preserves `position`. Not image rotation. No named SDK setter. |
 | Color, black-and-white and smart night vision | `set_night_vision_mode`, devconfig `NightVision_Model` | The helper sends `graphicType` and `luminance` on channel 1. Unlike the traced Android request, the helper omits duration. See the query-based alternative below. |
 | Day/night filter and sensitivity | Cloud `device_ICR_DSS` via `set_dev_config_kv`; native LAN `set_camera_day_night_mode` | These are different contracts. Don't map cloud values to native values without checking the model. |
@@ -62,10 +63,10 @@ mode. Do not assume its defaults are the current settings on a camera.
   The Pagelist fixture advertises `AntiBandingParams`,
   `LowLightImageEnhanceCfg`, and `MultiCameraColorBalanceSwitch`, but this
   trace did not confirm the writer, valid values, or accepted resource scope.
-- **Individual image sliders:** `image_para`, `Auto_night_vision`, and the
-  generic `ICR` field appear in inventory. This audit did not establish
-  setters for those fields or for independent brightness, contrast,
-  saturation, or sharpness. Display presets are not evidence of slider support.
+- **Cloud image adjustments:** `image_para`, `Auto_night_vision`, and the
+  generic `ICR` field appear in inventory, but this audit did not establish
+  cloud setters for those fields or for the independent LAN video effects.
+  Cloud display presets are not independent sliders.
 
 See the [Pagelist field map](pagelist-state.md) for device capability gates
 and the [LAN WDR command](cli.md#lan-wdr) for the separate native backlight

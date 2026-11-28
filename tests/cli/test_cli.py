@@ -6194,6 +6194,27 @@ def test_camera_move_and_coordinate_commands_dispatch(monkeypatch, tmp_path) -> 
                 "camera",
                 "--serial",
                 "CAM123",
+                "move",
+                "--direction",
+                "right",
+                "--speed",
+                "10",
+                "--channel",
+                "2",
+            ]
+        )
+        == 0
+    )
+    assert fake_camera.instances[-1].calls == [("move", ("right", 10, 2))]
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "camera",
+                "--serial",
+                "CAM123",
                 "move_coords",
                 "--x",
                 "0.25",

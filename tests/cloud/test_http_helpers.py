@@ -2686,7 +2686,8 @@ def test_ptz_control_builds_request_payload(monkeypatch) -> None:
     assert captured["data"]["action"] == "START"
     assert captured["data"]["channelNo"] == 1
     assert captured["data"]["speed"] == 4
-    assert captured["data"]["serial"] == "CAM123"
+    assert isinstance(captured["data"]["time"], int)
+    assert "serial" not in captured["data"]
     assert isinstance(captured["data"]["uuid"], str)
     assert captured["retry_401"] is False
 

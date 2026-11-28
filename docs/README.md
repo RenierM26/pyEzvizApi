@@ -23,7 +23,7 @@ These guides track `main`. For an installed PyPI version, use the docs at its
   [pagelist API](pagelist-api.md), [reported settings and write routes](pagelist-state.md),
   [detectors](detectors.md), and [alarm/message history](unified-message-list.md).
 - **Control cameras:** [Camera channels](camera-channels.md),
-  [point-based PTZ](ptz-point-control.md), [device switches](device-switches.md),
+  [cloud PTZ](ptz-app-controls.md), [point-based PTZ](ptz-point-control.md), [device switches](device-switches.md),
   [AI detection](ai-detection.md), [image controls](image-controls.md), and
   [recording, patrol, privacy, and audio controls](camera-app-controls.md).
 - **Use an intercom:** [Intercom inventory, settings, and events](intercom.md)

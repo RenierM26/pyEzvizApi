@@ -393,23 +393,26 @@ def ptz_control(
     action: str,
     speed: int,
     *,
+    channel: int,
     _owner: _ModuleType,
-) -> _owner_types.Any:
+) -> bool:
     """PTZ Control by API."""
     if command is None:
         raise _owner.PyEzvizError("Trying to call ptzControl without command")
     if action is None:
         raise _owner.PyEzvizError("Trying to call ptzControl without action")
+    if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:
+        raise _owner.PyEzvizError("PTZ channel must be a non-negative integer")
     json_output = self._request_json(
         "PUT",
         f"{_owner.API_ENDPOINT_DEVICES}{serial}{_owner.API_ENDPOINT_PTZCONTROL}",
         data={
             "command": command,
             "action": action,
-            "channelNo": 1,
+            "channelNo": channel,
             "speed": speed,
-            "uuid": str(_owner.uuid4()),
-            "serial": serial,
+            "uuid": _owner.uuid4().hex,
+            "time": int(_owner.time.time() * 1000),
         },
         retry_401=False,
     )

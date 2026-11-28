@@ -193,7 +193,12 @@ def set_camera_plan(
 
 
 def get_patrol_path(client: EzvizClient, serial: str, *, channel: CameraChannel) -> dict[str, Any]:
-    """Read patrol path 1 through the action on the explicitly selected PTZ resource."""
+    """Return the raw data object for patrol path 1 on the selected resource.
+
+    The returned PatrolSequenceList, when present, is ordered. This reads
+    the path configuration, not the patrol schedule or saved viewpoints.
+    Cloud rejection or a missing or malformed data object raises PyEzvizError.
+    """
     response = client.set_iot_action(
         serial,
         channel.resource_identifier,
@@ -205,15 +210,15 @@ def get_patrol_path(client: EzvizClient, serial: str, *, channel: CameraChannel)
     return object_section(response, "data", required=True)
 
 
-def set_patrol_path(
+def _write_patrol_path(
     client: EzvizClient,
     serial: str,
     sequence: Sequence[Mapping[str, Any]],
     *,
     channel: CameraChannel,
     enabled: bool,
+    action: str,
 ) -> None:
-    """Modify existing patrol path 1; do not create/delete or move the camera directly."""
     if not isinstance(enabled, bool) or not sequence:
         raise ValueError("Expected a boolean and at least one existing patrol point")
     client.set_iot_action(
@@ -221,7 +226,7 @@ def set_patrol_path(
         channel.resource_identifier,
         channel.local_index,
         "PTZPreset",
-        "ModifyPTZPatrolPath",
+        action,
         {
             "value": {
                 "patrolID": 1,
@@ -230,6 +235,59 @@ def set_patrol_path(
                 "PatrolSequenceList": [dict(point) for point in sequence],
             }
         },
+    )
+
+
+def set_patrol_path(
+    client: EzvizClient,
+    serial: str,
+    sequence: Sequence[Mapping[str, Any]],
+    *,
+    channel: CameraChannel,
+    enabled: bool,
+) -> None:
+    """Update existing patrol path 1 on the selected resource.
+
+    Pass existing patrol-point objects in the desired order and a boolean
+    enabled flag. An empty sequence or non-boolean flag raises ValueError.
+    This does not create points or update the patrol schedule.
+    """
+    _write_patrol_path(
+        client, serial, sequence, channel=channel, enabled=enabled, action="ModifyPTZPatrolPath"
+    )
+
+
+def create_patrol_path(
+    client: EzvizClient,
+    serial: str,
+    sequence: Sequence[Mapping[str, Any]],
+    *,
+    channel: CameraChannel,
+) -> None:
+    """Create and enable patrol path 1 on the selected resource.
+
+    Pass a non-empty sequence of existing patrol-point objects in the desired
+    order. This does not capture points or update the patrol schedule. Use
+    set_patrol_path to edit an existing path instead.
+    """
+    _write_patrol_path(
+        client, serial, sequence, channel=channel, enabled=True, action="AddPTZPatrolPath"
+    )
+
+
+def delete_patrol_path(client: EzvizClient, serial: str, *, channel: CameraChannel) -> None:
+    """Delete preset patrol path 1 on the selected resource.
+
+    This does not reset stored patrol points or delete saved viewpoints.
+    Return None on cloud acknowledgment; cloud rejection raises PyEzvizError.
+    """
+    client.set_iot_action(
+        serial,
+        channel.resource_identifier,
+        channel.local_index,
+        "PTZPreset",
+        "DeletePTZPatrolPath",
+        {"value": {"deleteMode": "preset", "PTZPatrolList": [{"patrolID": 1}]}},
     )
 
 

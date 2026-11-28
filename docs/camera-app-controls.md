@@ -79,9 +79,10 @@ part of a routine validation run.
 - `get_patrol_path` reads path 1 with the `PTZPreset.GetPTZPatrolPath` action.
   `set_patrol_path` modifies that existing path with
   `PTZPreset.ModifyPTZPatrolPath`. Pass the exact `CameraChannel` and the
-  device's existing point objects in the desired order. This does not
-  create or delete patrol paths or capture new points. Patrol time and
-  the patrol path are separate settings.
+  device's existing point objects in the desired order. Use
+  `create_patrol_path` to create and enable path 1 or `delete_patrol_path`
+  to remove it. [Cloud PTZ](ptz-app-controls.md) covers saving individual
+  patrol points. Patrol time and the patrol path are separate settings.
 
 ## Privacy, detection and sound
 

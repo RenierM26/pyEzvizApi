@@ -2514,10 +2514,12 @@ class EzvizClient:
             self, serial, channel, key, max_retries=max_retries, _owner=_sys.modules[__name__]
         )
 
-    def ptz_control(self, command: str, serial: str, action: str, speed: int = 5) -> Any:
-        """PTZ Control by API."""
+    def ptz_control(
+        self, command: str, serial: str, action: str, speed: int = 5, *, channel: int = 1
+    ) -> bool:
+        """Send a cloud PTZ command to a playback channel (default 1)."""
         return _devices.ptz_control(
-            self, command, serial, action, speed, _owner=_sys.modules[__name__]
+            self, command, serial, action, speed, channel=channel, _owner=_sys.modules[__name__]
         )
 
     def capture_picture(self, serial: str, channel: int, *, max_retries: int = 0) -> JsonDict:

@@ -205,15 +205,15 @@ def get_patrol_path(client: EzvizClient, serial: str, *, channel: CameraChannel)
     return object_section(response, "data", required=True)
 
 
-def set_patrol_path(
+def _write_patrol_path(
     client: EzvizClient,
     serial: str,
     sequence: Sequence[Mapping[str, Any]],
     *,
     channel: CameraChannel,
     enabled: bool,
+    action: str,
 ) -> None:
-    """Modify existing patrol path 1; do not create/delete or move the camera directly."""
     if not isinstance(enabled, bool) or not sequence:
         raise ValueError("Expected a boolean and at least one existing patrol point")
     client.set_iot_action(
@@ -221,7 +221,7 @@ def set_patrol_path(
         channel.resource_identifier,
         channel.local_index,
         "PTZPreset",
-        "ModifyPTZPatrolPath",
+        action,
         {
             "value": {
                 "patrolID": 1,
@@ -230,6 +230,45 @@ def set_patrol_path(
                 "PatrolSequenceList": [dict(point) for point in sequence],
             }
         },
+    )
+
+
+def set_patrol_path(
+    client: EzvizClient,
+    serial: str,
+    sequence: Sequence[Mapping[str, Any]],
+    *,
+    channel: CameraChannel,
+    enabled: bool,
+) -> None:
+    """Modify existing patrol path 1 from already-created patrol points."""
+    _write_patrol_path(
+        client, serial, sequence, channel=channel, enabled=enabled, action="ModifyPTZPatrolPath"
+    )
+
+
+def create_patrol_path(
+    client: EzvizClient,
+    serial: str,
+    sequence: Sequence[Mapping[str, Any]],
+    *,
+    channel: CameraChannel,
+) -> None:
+    """Create and enable app patrol path 1 from already-created patrol points."""
+    _write_patrol_path(
+        client, serial, sequence, channel=channel, enabled=True, action="AddPTZPatrolPath"
+    )
+
+
+def delete_patrol_path(client: EzvizClient, serial: str, *, channel: CameraChannel) -> None:
+    """Delete preset patrol path 1 (not the individual saved viewpoints)."""
+    client.set_iot_action(
+        serial,
+        channel.resource_identifier,
+        channel.local_index,
+        "PTZPreset",
+        "DeletePTZPatrolPath",
+        {"value": {"deleteMode": "preset", "PTZPatrolList": [{"patrolID": 1}]}},
     )
 
 

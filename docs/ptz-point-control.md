@@ -11,7 +11,8 @@ Repeated calls do not promise that the camera reaches an identical world angle.
 Image orientation, model behavior, permission and point-PTZ support still matter.
 
 For patrol paths, patrol schedules, homing presets, and calibration, see
-[camera app controls](camera-app-controls.md). These are separate from point movement.
+[camera app controls](camera-app-controls.md). These are separate from point movement. For directional PTZ, saved viewpoints
+and panorama, see [cloud PTZ](ptz-app-controls.md).
 
 ## Request contract
 

@@ -1,8 +1,9 @@
 """Cloud controls for saved viewpoints, patrol points, and panoramas.
 
 Use the playback channel number for saved viewpoints and a reported
-CameraChannel for resource-scoped panorama actions. These helpers do not
-discover routes, switch lenses, or fall back to LAN controls.
+CameraChannel for resource-scoped panorama actions. Resolve the capture scope
+from pagelist metadata before sending a command. No helper switches lenses
+or falls back to LAN controls.
 """
 
 # ruff: noqa: SLF001
@@ -10,6 +11,8 @@ discover routes, switch lenses, or fall back to LAN controls.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+import json
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import quote
 
@@ -21,6 +24,7 @@ from pyezvizapi.cloud.endpoints import (
     API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
 )
 from pyezvizapi.cloud.responses import object_section
+from pyezvizapi.devices.channels import resolve_camera_channel
 from pyezvizapi.exceptions import PyEzvizError
 
 if TYPE_CHECKING:
@@ -239,6 +243,106 @@ def _panorama_serial(serial: str) -> str:
     if not serial.strip():
         raise ValueError("Expected a panorama device serial")
     return serial.upper()
+
+
+def _panorama_mapping(value: Any, field: str) -> Mapping[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError as error:
+            raise PyEzvizError(f"Invalid panorama routing metadata: {field}") from error
+    if not isinstance(value, Mapping):
+        raise PyEzvizError(f"Missing or invalid panorama routing metadata: {field}")
+    return value
+
+
+def _panorama_rows(value: Any, field: str) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list) or not all(isinstance(row, Mapping) for row in value):
+        raise PyEzvizError(f"Missing or invalid panorama routing metadata: {field}")
+    return value
+
+
+def _panorama_flag(support: Mapping[str, Any], key: str) -> bool:
+    value = support.get(key, 0)
+    if type(value) is int:
+        return value == 1
+    if isinstance(value, str):
+        try:
+            return int(value) == 1
+        except ValueError as error:
+            raise PyEzvizError(f"Invalid panorama supportExt flag {key}") from error
+    raise PyEzvizError(f"Invalid panorama supportExt flag {key}")
+
+
+def _profile_has_panorama_capture(profile: Mapping[str, Any], channel: CameraChannel) -> bool:
+    for resource in _panorama_rows(profile.get("resources"), "profile.resources"):
+        if resource.get("identifier") != channel.resource_identifier:
+            continue
+        indexes = resource.get("localIndex")
+        if not isinstance(indexes, list):
+            raise PyEzvizError("Missing or invalid panorama routing metadata: profile.localIndex")
+        if not any(
+            type(index) in (int, str) and str(index) == channel.local_index for index in indexes
+        ):
+            continue
+        for domain in _panorama_rows(resource.get("domains"), "profile.domains"):
+            if domain.get("identifier") != "Panorama":
+                continue
+            # Android's haveFeatureDef checks all three definition caches.
+            for section in ("actions", "props", "events"):
+                definitions = _panorama_rows(domain.get(section, []), f"Panorama.{section}")
+                if any(item.get("identifier") == "TriggerPanoramicCapture" for item in definitions):
+                    return True
+    return False
+
+
+def resolve_panorama_capture_route(
+    page_list: Mapping[str, Any], serial: str, *, channel: CameraChannel
+) -> Literal["device", "resource", "relay"]:
+    """Resolve the app's capture scope from a full get_page_list() snapshot.
+
+    Pass the selected, reported playback resource and local index. Relay
+    (supportExt 913) takes precedence. Otherwise an exact product/firmware
+    profile definition for Panorama.TriggerPanoramicCapture selects resource
+    capture; without that definition, supportExt 81 enables device capture.
+
+    This function sends no requests. Relay is a distinct workflow, not a cloud
+    capture option. Raise PyEzvizError for missing or malformed capability
+    metadata, an unavailable channel, or no supported cloud route. In
+    particular, a missing profile is not proof that a resource lacks the action.
+    """
+    serial = _panorama_serial(serial)
+    devices = [
+        row
+        for row in _panorama_rows(page_list.get("deviceInfos"), "deviceInfos")
+        if row.get("deviceSerial") == serial
+    ]
+    if len(devices) != 1:
+        raise PyEzvizError("Missing or ambiguous panorama device in the pagelist")
+    device = devices[0]
+    resources = _panorama_rows(page_list.get("resourceInfos"), "resourceInfos")
+    resolve_camera_channel(
+        {"resourceInfos": [row for row in resources if row.get("deviceSerial") == serial]},
+        channel.key,
+    )
+
+    support = _panorama_mapping(device.get("supportExt"), "supportExt")
+    if _panorama_flag(support, "913"):
+        return "relay"
+
+    model, version = device.get("deviceType"), device.get("version")
+    if not (isinstance(model, str) and model and isinstance(version, str) and version):
+        raise PyEzvizError("Missing panorama device type or firmware version")
+    products = _panorama_mapping(page_list.get("PRODUCTS_INFO"), "PRODUCTS_INFO")
+    product = _panorama_mapping(
+        products.get(f"PV(productId={model}, version={version})"), "product"
+    )
+    profile = _panorama_mapping(product.get("profile"), "product.profile")
+    if _profile_has_panorama_capture(profile, channel):
+        return "resource"
+    if _panorama_flag(support, "81"):
+        return "device"
+    raise PyEzvizError("Panorama capture is not advertised for the selected camera channel")
 
 
 def start_panorama_capture(client: EzvizClient, serial: str, *, channel: CameraChannel) -> None:

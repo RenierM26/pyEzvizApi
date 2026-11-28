@@ -786,11 +786,12 @@ def test_black_and_white_getter_does_not_default_to_infrared(device_requests, mo
     ],
 )
 def test_night_fill_light_distinguishes_off_infrared_and_smart(
-    device_requests, mode, state
+    device_requests, mode: settings.NightFillLightMode, state
 ) -> None:
     client, sent, replies = device_requests
     replies.extend([{"meta": {"code": 200}, "data": state}, {"meta": {"code": 200}}])
-    assert settings.get_night_fill_light_mode(client, "CAM001") is mode
+    reported = settings.get_night_fill_light_mode(client, "CAM001")
+    assert reported is mode
     settings.set_night_fill_light_mode(client, "CAM001", mode)
 
     url = (

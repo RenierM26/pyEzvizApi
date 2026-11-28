@@ -1157,3 +1157,127 @@ def test_stabilization_does_not_overwrite_unknown_state(device_requests) -> None
     with pytest.raises(PyEzvizError, match="unknown"):
         app_controls.set_camera_app_switch(client, "CAM001", prop, enabled=True)
     assert [request.method for request in sent] == ["GET", "GET"]
+
+
+@pytest.mark.parametrize(
+    ("encoding", "grid", "encoded"),
+    [
+        (app_controls.MotionAreaEncoding.ROW_BITMAP, [[1, 0, 1], [0, 1, 0]], "AAAABQAAAAI="),
+        (app_controls.MotionAreaEncoding.ROW_BITMAP, [[0] * 31 + [1]], "gAAAAA=="),
+        (app_controls.MotionAreaEncoding.DOORBELL_HIK, [[1, 0, 1], [0, 1, 0]], "AQABAAEA"),
+        (
+            app_controls.MotionAreaEncoding.ROW_BITMAP,
+            [[1]] * 12,
+            "AAAAAQAAAAEAAAAB" * 3 + "AAAAAQAAAAEA AAAB",
+        ),
+    ],
+)
+def test_motion_detection_area_wire(
+    device_requests, encoding: app_controls.MotionAreaEncoding, grid: list[list[int]], encoded: str
+) -> None:
+    client, sent, replies = device_requests
+    area = {"width": len(grid[0]), "height": len(grid), "area": encoded, "type": "human"}
+    state = {"meta": {"code": 200}, "detectAreaInfo": area}
+    replies.extend([state, state, {"meta": {"code": 200}}])
+    assert (
+        app_controls.get_motion_detection_area(client, "CAM001", channel=2, detection_type="human")
+        == area
+    )
+    app_controls.set_motion_detection_area(
+        client, "CAM001", grid, channel=2, detection_type="human", encoding=encoding
+    )
+    assert [r.method for r in sent] == ["GET", "GET", "PUT"]
+    assert [urlsplit(r.url).path for r in sent] == [
+        "/v3/devices/CAM001/2/detectAreaInfo/human",
+        "/v3/devices/CAM001/2/detectAreaInfo/human",
+        "/v3/devices/CAM001/2/detectAreaInfo",
+    ]
+    assert all(not urlsplit(r.url).query for r in sent)
+    assert sent[2].headers["Content-Type"] == "application/x-www-form-urlencoded"
+    assert parse_qs(sent[2].body) == {
+        "width": [str(len(grid[0]))],
+        "height": [str(len(grid))],
+        "data": [encoded],
+        "type": ["human"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("grid", "detection_type", "error"),
+    [
+        ([[1], [1, 0]], "human", "rectangular"),
+        ([[True]], "human", "rectangular"),
+        ([[0]], "human", "selected cell"),
+        ([[1] * 33], "human", "32 columns"),
+        ([[1]], "", "detection_type"),
+        ([[1]], "../human", "detection_type"),
+    ],
+)
+def test_motion_detection_area_invalid_input(
+    device_requests, grid: list[list[int]], detection_type: str, error: str
+) -> None:
+    client, sent, _ = device_requests
+    with pytest.raises(ValueError, match=error):
+        app_controls.set_motion_detection_area(
+            client,
+            "CAM001",
+            grid,
+            channel=2,
+            detection_type=detection_type,
+            encoding=app_controls.MotionAreaEncoding.ROW_BITMAP,
+        )
+    assert not sent
+
+
+@pytest.mark.parametrize(
+    ("reply", "error", "message"),
+    [
+        ({"meta": {"code": 403}}, PyEzvizError, "Could not read"),
+        ({"meta": {"code": 200}}, PyEzvizError, "Missing or invalid"),
+        (
+            {"meta": {"code": 200}, "detectAreaInfo": {"width": True, "height": 1}},
+            PyEzvizError,
+            "Invalid motion detection area dimensions",
+        ),
+        (
+            {"meta": {"code": 200}, "detectAreaInfo": {"width": 3, "height": 1}},
+            ValueError,
+            "dimensions do not match",
+        ),
+    ],
+)
+def test_motion_detection_area_failed_read_does_not_write(
+    device_requests, reply: dict[str, Any], error: type[Exception], message: str
+) -> None:
+    client, sent, replies = device_requests
+    replies.append(reply)
+    with pytest.raises(error, match=message):
+        app_controls.set_motion_detection_area(
+            client,
+            "CAM001",
+            [[1, 0]],
+            channel=2,
+            detection_type="human",
+            encoding=app_controls.MotionAreaEncoding.ROW_BITMAP,
+        )
+    assert [r.method for r in sent] == ["GET"]
+
+
+def test_motion_detection_area_write_error_propagates(device_requests) -> None:
+    client, sent, replies = device_requests
+    replies.extend(
+        [
+            {"meta": {"code": 200}, "detectAreaInfo": {"width": 2, "height": 1}},
+            {"meta": {"code": 403}},
+        ]
+    )
+    with pytest.raises(PyEzvizError, match="Could not write motion detection area"):
+        app_controls.set_motion_detection_area(
+            client,
+            "CAM001",
+            [[1, 0]],
+            channel=2,
+            detection_type="human",
+            encoding=app_controls.MotionAreaEncoding.ROW_BITMAP,
+        )
+    assert [r.method for r in sent] == ["GET", "PUT"]

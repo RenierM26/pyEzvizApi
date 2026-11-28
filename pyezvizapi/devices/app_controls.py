@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+from base64 import b64encode
 from collections.abc import Mapping, Sequence
 from enum import Enum, IntEnum
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 from pyezvizapi._shared.coercion import decode_json
@@ -239,7 +241,7 @@ def set_privacy_mask(
     client.set_device_key_value(serial, channel, "pri_cover_area", json.dumps(value))
 
 
-def _pir_grid(grid: object) -> bool:
+def _binary_grid(grid: object) -> bool:
     return (
         isinstance(grid, list)
         and bool(grid)
@@ -264,7 +266,7 @@ def get_pir_detection_grid(
     grid = decode_json(area.get("area"))
     if (
         not isinstance(grid, list)
-        or not _pir_grid(grid)
+        or not _binary_grid(grid)
         or (area.get("rows"), area.get("cols")) != (len(grid), len(grid[0]))
     ):
         raise PyEzvizError("Invalid PIR grid")
@@ -275,7 +277,7 @@ def set_pir_detection_grid(
     client: EzvizClient, sub_serial: str, grid: list[list[int]], *, channel: int
 ) -> None:
     """Replace the PIR grid; require dimensions matching the current device grid."""
-    if not _pir_grid(grid):
+    if not _binary_grid(grid):
         raise ValueError("Expected a rectangular grid of 0/1 integers")
     current = get_pir_detection_grid(client, sub_serial, channel=channel)
     if (len(grid), len(grid[0])) != (len(current), len(current[0])):
@@ -297,6 +299,93 @@ def get_legacy_motion_area(client: EzvizClient, serial: str, *, channel: int) ->
     )
     client._ensure_ok(response, "Could not read legacy motion area")
     return _object(response.get("motionDetectAreaInfo"), "legacy motion area")
+
+
+class MotionAreaEncoding(Enum):
+    """Model-dependent grid encodings used by the Android motion-area editor."""
+
+    ROW_BITMAP = "row_bitmap"
+    DOORBELL_HIK = "doorbell_hik"
+
+
+def _motion_area_path(serial: str, channel: int, detection_type: str) -> str:
+    for label, value in (("serial", serial), ("detection_type", detection_type)):
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise ValueError(f"{label} must be a nonempty identifier")
+    if type(channel) is not int or channel < 0:
+        raise ValueError("channel must be a nonnegative integer")
+    return f"/v3/devices/{serial}/{channel}/detectAreaInfo"
+
+
+def get_motion_detection_area(
+    client: EzvizClient, serial: str, *, channel: int, detection_type: str
+) -> dict[str, Any]:
+    """Read the app's type-specific area object, including the reported dimensions."""
+    path = _motion_area_path(serial, channel, detection_type)
+    response = client._request_json("GET", f"{path}/{detection_type}")
+    client._ensure_ok(response, "Could not read motion detection area")
+    return _object(response.get("detectAreaInfo"), "motion detection area")
+
+
+def _motion_area_data(grid: list[list[int]], encoding: MotionAreaEncoding) -> str:
+    if encoding is MotionAreaEncoding.DOORBELL_HIK:
+        raw = bytes(cell for row in grid for cell in row)
+    else:
+        raw = b"".join(
+            sum(cell << column for column, cell in enumerate(row)).to_bytes(4, "big")
+            for row in grid
+        )
+    # The app inserts a space for every 15 complete Base64 groups (45 bytes).
+    chunks = (raw[offset : offset + 45] for offset in range(0, len(raw), 45))
+    return "".join(
+        b64encode(chunk).decode("ascii") + (" " if len(chunk) == 45 else "") for chunk in chunks
+    )
+
+
+def set_motion_detection_area(
+    client: EzvizClient,
+    serial: str,
+    grid: list[list[int]],
+    *,
+    channel: int,
+    detection_type: str,
+    encoding: MotionAreaEncoding,
+) -> None:
+    """Replace the typed cloud grid, preserving its reported dimensions."""
+    path = _motion_area_path(serial, channel, detection_type)
+    if not isinstance(encoding, MotionAreaEncoding):
+        raise ValueError("Select the app's grid encoding for this model")
+    if not _binary_grid(grid) or not any(any(row) for row in grid):
+        raise ValueError("Expected a rectangular 0/1 grid with at least one selected cell")
+    height, width = len(grid), len(grid[0])
+    if encoding is MotionAreaEncoding.ROW_BITMAP and width > 32:
+        raise ValueError("Row bitmaps support at most 32 columns")
+
+    current = get_motion_detection_area(
+        client, serial, channel=channel, detection_type=detection_type
+    )
+    current_width, current_height = current.get("width"), current.get("height")
+    if (
+        type(current_width) is not int
+        or type(current_height) is not int
+        or current_width <= 0
+        or current_height <= 0
+    ):
+        raise PyEzvizError("Invalid motion detection area dimensions")
+    if (current_width, current_height) != (width, height):
+        raise ValueError("Motion detection grid dimensions do not match the current device grid")
+
+    response = client._request_json(
+        "PUT",
+        path,
+        data={
+            "width": width,
+            "height": height,
+            "data": _motion_area_data(grid, encoding),
+            "type": detection_type,
+        },
+    )
+    client._ensure_ok(response, "Could not write motion detection area")
 
 
 def reported_custom_alarm_sound(camera_data: Mapping[str, Any]) -> int | None:

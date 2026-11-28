@@ -13,7 +13,8 @@ to another lens when a request fails.
 | Sleep and patrol schedules, patrol paths | Read/replace | Android trace and offline HTTP tests; controls seen in the H9c app |
 | PTZ calibration | Action only | Android trace and offline HTTP tests; control seen in the H9c app |
 | Privacy mask and PIR grid | Read/replace | Android trace and offline HTTP tests |
-| Legacy motion area | Read only | Android trace and offline HTTP test; no verified write contract |
+| Typed motion detection area | Read/replace | Android 7.4.1 and 7.6.1 trace and offline HTTP tests |
+| Untyped legacy motion area | Read only | The app's untyped editor uses a separate native SDK path |
 | Recording schedules and storage allocation | Read only | Existing SDK readers; no verified write contract for these properties |
 | Custom alarm sound | Select an existing voice; read selection from refreshed inventory | Android trace and offline tests |
 | Cloud SD formatting | Erase action and progress reader | Android trace and offline HTTP tests |
@@ -91,9 +92,16 @@ part of a routine validation run.
 - `get_pir_detection_grid` and `set_pir_detection_grid` use the PIR
   **sub-device serial** and explicit channel. The setter checks the current
   grid's dimensions before writing. Cells are integer 0 or 1.
-- `get_legacy_motion_area` reads the channel's legacy motion area. There is
-  no universal detection-area setter; PIR, plate, and legacy motion areas
-  are different contracts.
+- `get_motion_detection_area` and `set_motion_detection_area` use the typed
+  cloud route. Pass the exact channel and nonempty detection type used by the
+  app for that editor. The setter replaces the whole grid after checking its
+  dimensions against the typed read. Use integer 0/1 cells in row-major
+  order and explicitly select `MotionAreaEncoding.ROW_BITMAP` for the app's
+  standard bitmap branch or `MotionAreaEncoding.DOORBELL_HIK` for its
+  byte-per-cell branch (not all doorbells). An all-zero grid is rejected;
+  pass all ones explicitly to cover the full frame.
+- `get_legacy_motion_area` is unchanged. The typed setter is not a fallback
+  for the untyped editor, PIR grids, or app-scoped plate regions.
 - `set_custom_alarm_sound` selects an existing voice ID from
   `get_voice_info`. It uses sound type 3 and does not change the older
   `alarm_sound` API. `reported_custom_alarm_sound` reads the selected ID from

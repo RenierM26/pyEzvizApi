@@ -4,10 +4,10 @@
 
 ## Choose a release or a source checkout
 
-The library requires Python 3.12+. Current `main` includes unreleased changes;
-its package version alone does not identify a development checkout. Record
-`git rev-parse HEAD` as well as `python -m pip show pyezvizapi` when reporting it.
-For a released installation, read the docs at the matching GitHub tag.
+Use Python 3.12 or newer. If you installed from PyPI, read the docs at the
+[matching release tag](https://github.com/RenierM26/pyEzvizApi/releases).
+For a source checkout, record `git rev-parse HEAD` when asking for support:
+the version in `pyproject.toml` may still match the last release.
 
 ```bash
 python -m venv .venv
@@ -17,17 +17,17 @@ python -m pip install --upgrade pip
 python -m pip install pyezvizapi
 ```
 
-To work on current main instead:
+### Optional dependencies
 
-```bash
-git clone https://github.com/RenierM26/pyEzvizApi.git
-cd pyEzvizApi
-python -m pip install -e '.[dev,streaming]'
-```
+- `python -m pip install 'pyezvizapi[images]'` adds Pillow for image-processing
+  helpers. Basic image download and decryption do not need Pillow.
+- `python -m pip install 'pyezvizapi[streaming]'` adds PyAV for PyAV-backed
+  streaming APIs.
+- FFmpeg and FFprobe are separate system programs. See the [media path table](media.md)
+  to check whether the route you want needs them.
 
-Declare dependencies through the project metadata, not a hand-maintained list of
-requests/Paho/crypto packages. The `streaming` extra adds PyAV 19.x. FFmpeg and
-FFprobe are system dependencies for the paths that invoke them; see [media](media.md).
+To work from source, clone the [repository](https://github.com/RenierM26/pyEzvizApi)
+and follow [development setup](../CONTRIBUTING.md#development-environment).
 
 ## CLI login and status
 
@@ -39,8 +39,9 @@ pyezvizapi --token-file ezviz_token.json --json device_infos --serial CAMERA_SER
 
 Global flags precede the command. Credentials in arguments can appear in shell
 history and process listings; do not use real credentials in shared examples.
-The first command may request an MFA code interactively. Python applications
-should handle `EzvizAuthVerificationCode`; see [Python usage](python-api.md).
+The first command may prompt for an MFA code. See [CLI login verification](cli.md#login-verification)
+to select SMS or email, or [Python login](python-api.md#authenticate-and-read-status)
+for the equivalent SDK flow.
 
 ## Token and region rules
 

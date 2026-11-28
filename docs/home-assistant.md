@@ -50,5 +50,5 @@ The [consumer-runtime review bundle](consumer-runtime-review/README.md) and olde
 HA qualification pages retain pinned source patches and evidence. They are not
 upstream-merged HA/Pion/relay features, supported installation instructions, or
 proof that a running system has those patches. Use the
-[documentation index](README.md#historical-plans-and-qualification-evidence) to
+[historical evidence index](development-and-evidence.md#historical-plans-and-qualification-evidence) to
 find these records without treating them as current product status.

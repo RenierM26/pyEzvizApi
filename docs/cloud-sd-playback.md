@@ -10,8 +10,8 @@ must be online and have SD footage for the selected range.
 This feature builds on **Alejandro Dirgan (@adirgan)**'s
 [original PR #266](https://github.com/RenierM26/pyEzvizApi/pull/266), including
 his playback selector and observed channel-2 media behavior. It has been adapted
-to the current capture API, deadlines and publication contracts. It is unreleased
-until included in a published version; use the matching source checkout/docs.
+to the SDK's capture API, deadlines, and file publication rules. For a released
+installation, check the docs at its [matching tag](https://github.com/RenierM26/pyEzvizApi/releases).
 
 ## CLI
 

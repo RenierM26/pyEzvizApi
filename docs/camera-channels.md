@@ -1,7 +1,8 @@
 # Camera channels and multi-lens applications
 
-This is an **unreleased additive API**, planned for SDK 2.6.0. No publication,
-device-control test or Home Assistant deployment is implied by this change.
+The multi-lens inventory and routing APIs were introduced in SDK 2.6.0.
+Support varies by device and route; an SDK release does not imply a Home Assistant
+integration upgrade or live device qualification.
 
 ## Immutable inventory, no implicit I/O
 

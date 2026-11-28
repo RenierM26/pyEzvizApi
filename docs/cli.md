@@ -34,6 +34,7 @@ or send extra codes for them. See [login recovery](auth/login-recovery.md).
 | `camera`, `light`, `devices_light`, `home_defence_mode` | Device status and controls; support depends on model/account |
 | `unifiedmsg` | Unified alarm/message listing |
 | `cloud_videos`, `sdcard_videos` | Recording descriptors, not a universal playable URL |
+| `recordings list`, `recordings download` | [SD recording catalog and resumable batch downloads](recording-catalog.md) |
 | `cloud_video_download`, `cloud_video_decrypt` | Cloud replay download and offline decryption |
 | `save clip`, `save image` | [Finite clips and images](media-saving.md) |
 | `stream` | [Specialist stream transport/debug commands](stream-cli.md) |

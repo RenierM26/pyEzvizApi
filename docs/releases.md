@@ -54,3 +54,16 @@ Use a clean build output directory when inspecting the intended wheel. Do not
 reuse an old artifact just because its version text matches. Record the source
 commit and wheel hash for consumer qualification. See
 [development setup](../CONTRIBUTING.md) for checks and optional HA environments.
+
+## Version-specific notes
+
+Use the [changelog](../CHANGELOG.md) for the complete version history. These
+notes expand on changes that affect upgrades or downstream integrations:
+
+- [2.0.0: removed imports and channel-99 migration](release-2.0.0.md)
+- [2.1.0: persisted installation identity](release-2.1.0.md)
+- [2.2.0: switch HTTP diagnostics](release-2.2.0.md)
+- [2.3.0: device and image helper APIs](release-2.3.0.md)
+- [2.4.0: multi-image framing and decoding](release-2.4.0.md)
+- [2.5.0: intercom support and event compatibility](release-2.5.0.md)
+- [2.5.1: image-position PTZ fix](release-2.5.1.md)

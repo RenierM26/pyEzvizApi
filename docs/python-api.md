@@ -25,13 +25,18 @@ client = EzvizClient(account=input("EZVIZ account: "), password=getpass())
 try:
     try:
         client.login()
-    except EzvizAuthVerificationCode:
-        client.login(sms_code=int(input("MFA code: ")))
+    except EzvizAuthVerificationCode as challenge:
+        if not challenge.code_sent:
+            raise  # Choose a supported delivery method or recover in the app.
+        client.login(sms_code=getpass("MFA code: ").strip())
     cameras = client.load_cameras()
     # Consume cameras without logging private identifiers or URLs.
 finally:
     client.close_session()
 ```
+
+Keep the verification code as text so leading zeros survive. For cases where no
+code was requested, see [login recovery](auth/login-recovery.md).
 
 `close_session()` closes/recreates HTTP session state; it is not a push-worker
 shutdown method or account logout. Stop an owned push client separately before
@@ -99,5 +104,5 @@ retained for the pinned HA consumer; see [compatibility](ha-compatibility.md).
 For `save_clip`, `save_clip_with_options`, `save_image` and source-specific
 requirements, see [media saving](media-saving.md) and the [streaming reference](streaming.md).
 
-See [authentication and MFA recovery](auth/login-recovery.md) for selected channels,
-explicit code requests and structured login failure handling.
+For clients running in containers, see
+[persisted installation identity](auth/persisted-client-identity.md).

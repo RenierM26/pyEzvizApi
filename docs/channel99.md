@@ -25,9 +25,10 @@ synchronous callback saves rotated credentials **before** subsequent service
 discovery, so a discovery outage cannot lose a successful token refresh.
 
 Persist the complete returned token securely. It contains the Android profile,
-stable feature code, user ID and refresh credentials. Subsequent starts can use
-`EzvizClient(token=saved_token)` and the existing `login()` refresh method. Save
-the resulting token after refresh, too.
+stable feature code, user ID, and refresh credentials. On subsequent starts,
+pass the saved token and the same durable callback to `EzvizClient`, then call
+`login()` to refresh. If you configured an explicit installation identity, pass
+that same identity when restoring the token.
 
 ### CLI storage and reuse
 
@@ -44,23 +45,15 @@ export does not change the live client. Resetting the HTTP session with
 
 ### Feature-code identity
 
-Keep the existing host-based calculation: `FEATURE_CODE` is the MD5 of the
-colon-separated MAC address returned by `uuid.getnode()`. Channel-99 does not
-introduce a random UUID, a separate installation ID, or another identity file.
-Clients on the same host can share this feature code; per-installation uniqueness
-is not required.
+By default the SDK uses the legacy MAC-derived `FEATURE_CODE`. Python
+applications can select a [persisted installation identity](auth/persisted-client-identity.md)
+with `EzvizClient(..., feature_code=...)`. Login, refresh, push, and CAS use the
+selected identity. The SDK does not silently adopt the identity from a token.
 
-Always use `FEATURE_CODE` for login, refresh, push and CAS. Values stored in a
-token never override it. The existing `feature_code` token field is only a marker
-of the host identity used at login.
-
-If a saved channel-99 token's marker is missing or differs from `FEATURE_CODE`,
-the client raises `EzvizAuthTokenExpired` before using those credentials. Create
-a fresh client with account credentials and no old token, call
-`enable_channel99()` (including MFA if required), and replace the saved token.
-Old push-device keys must not be reused with a changed host identity. This means
-a container MAC change requires reauthentication; no UUID or fallback identity
-is introduced.
+A missing or mismatched identity marker on a channel-99 token raises
+`EzvizAuthTokenExpired`. Restore the identity originally selected for that
+installation, or start a fresh login and channel-99 migration under the intended
+identity. Do not copy push keys or relabel old credentials.
 
 Login and its factory-created push client share a credential lock: token
 mutation, snapshot creation and persistence are serialized. The handshake keeps
@@ -166,8 +159,8 @@ code are included in the library or its portable tests.
   automatic reconnect is intentionally not used because each reconnect must
   first negotiate fresh EZVIZ keys through LBS.
 
-These internal refactors do not change the MAC-based `FEATURE_CODE`, public
-callbacks, token file format, lifecycle, or direct-event delivery behavior.
+These internal refactors do not change public callbacks, token file format,
+lifecycle, or direct-event delivery behavior.
 
 
 ### Migration and persistence ordering

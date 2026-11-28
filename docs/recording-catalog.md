@@ -1,7 +1,8 @@
 # Stored SD video: catalog and batch download
 
-Current development-branch API. These commands query **camera SD recordings**,
-not subscription cloud storage. Discovery supports the cloud v2 index or native
+[Documentation index](README.md) · [Media paths](media.md)
+
+These commands query **camera SD recordings**, not subscription cloud storage. Discovery supports the cloud v2 index or native
 LAN-only HCNetSDK file search. LAN discovery and downloads require no account.
 LAN-only `recordings list` and `recordings download` commands do not construct an
 account client or load a token file, even if `--token-file` is supplied.

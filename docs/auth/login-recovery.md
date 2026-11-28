@@ -1,8 +1,10 @@
 # Authentication, MFA and login recovery
 
-This guide tracks **unreleased main**, including the follow-up to PR #450.
-Refresh-token behavior, feature-code identity and token persistence contracts
-are unchanged. See [persisted client identity](persisted-client-identity.md).
+[Documentation index](../README.md) · [Getting started](../getting-started.md)
+
+The recovery flow below includes MFA handling introduced in 2.6.0. See
+[persisted client identity](persisted-client-identity.md) for token and
+installation identity requirements.
 
 ## Password login and compatibility
 

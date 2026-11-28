@@ -905,3 +905,16 @@ def test_enhanced_infrared_sensitivity_rejects_bool_before_request(device_reques
     with pytest.raises(PyEzvizError, match="sensitivity"):
         settings.set_enhanced_infrared_sensitivity(client, "CAM001", True)
     assert sent == []
+
+
+@pytest.mark.parametrize("level", [False, -1, 101, "50"])
+def test_invalid_reported_wdr_level_is_unknown_but_cannot_be_written(
+    device_requests, level
+) -> None:
+    client, sent, replies = device_requests
+    reply = {"meta": {"code": 200}, "data": {"hdrSwitchEnabled": "open", "WDRLevel1": level}}
+    replies.extend([reply, reply])
+    assert settings.get_iot_wdr_settings(client, "CAM001") == {"enabled": True, "level": None}
+    with pytest.raises(PyEzvizError, match="WDR level"):
+        settings.set_iot_wdr_enabled(client, "CAM001", False)
+    assert [request.method for request in sent] == ["GET", "GET"]

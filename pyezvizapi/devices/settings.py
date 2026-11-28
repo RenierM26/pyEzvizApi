@@ -95,15 +95,20 @@ def set_recording_mode(
     client.set_device_key_value(serial, channel, "Record_Mode", json.dumps({"mode": int(mode)}))
 
 
+def _fetch_video_setting_data(
+    client: EzvizClient, serial: str, domain: str, prop: str, local_index: str = "1"
+) -> Any:
+    # Validate the Video route's syntax only; it does not prove profile support.
+    route = CameraChannel("Video", local_index)
+    return client.get_device_feature_value(
+        serial, route.resource_identifier, domain, prop, local_index=route.local_index
+    ).get("data")
+
+
 def _read_video_setting(
     client: EzvizClient, serial: str, domain: str, prop: str, local_index: str
 ) -> dict[str, Any]:
-    # Validate the Video route's syntax only; it does not prove profile support.
-    route = CameraChannel("Video", local_index)
-    response = client.get_device_feature_value(
-        serial, route.resource_identifier, domain, prop, local_index=route.local_index
-    )
-    data = response.get("data")
+    data = _fetch_video_setting_data(client, serial, domain, prop, local_index)
     if not isinstance(data, dict):
         raise PyEzvizError(f"Missing or invalid {domain}.{prop} configuration")
     return dict(data)
@@ -255,8 +260,7 @@ def _image_switch_property(setting: ImageSwitch) -> tuple[str, str]:
 def get_image_switch(client: EzvizClient, serial: str, setting: ImageSwitch) -> bool | None:
     """Read the app's Video/1 switch; return None for unrecognized enabled state."""
     domain, prop = _image_switch_property(setting)
-    response = client.get_device_feature_value(serial, "Video", domain, prop, local_index="1")
-    data = response.get("data")
+    data = _fetch_video_setting_data(client, serial, domain, prop)
     enabled = data.get("enabled") if isinstance(data, Mapping) else None
     return enabled if isinstance(enabled, bool) else None
 
@@ -278,10 +282,9 @@ class NightFillLightMode(Enum):
 
 def get_night_fill_light_mode(client: EzvizClient, serial: str) -> NightFillLightMode | None:
     """Read both fields of the app's Video/1 fill-light picker."""
-    response = client.get_device_feature_value(
-        serial, "Video", NIGHT_FILL_LIGHT_DOMAIN, NIGHT_FILL_LIGHT_PROPERTY, local_index="1"
+    data = _fetch_video_setting_data(
+        client, serial, NIGHT_FILL_LIGHT_DOMAIN, NIGHT_FILL_LIGHT_PROPERTY
     )
-    data = response.get("data")
     if not isinstance(data, Mapping) or type(data.get("enabled")) is not bool:
         return None
     pair = (data["enabled"], data.get("supplementLightSwitchMode"))
@@ -314,10 +317,7 @@ class BlackAndWhiteMode(IntEnum):
 
 def get_black_and_white_mode(client: EzvizClient, serial: str) -> BlackAndWhiteMode | None:
     """Read Video/1 BlackAndWhiteCfg without treating an unknown mode as infrared."""
-    response = client.get_device_feature_value(
-        serial, "Video", "FillLight", "BlackAndWhiteCfg", local_index="1"
-    )
-    data = response.get("data")
+    data = _fetch_video_setting_data(client, serial, "FillLight", "BlackAndWhiteCfg")
     mode = data.get("mode") if isinstance(data, Mapping) else None
     return next(
         (choice for choice in BlackAndWhiteMode if type(mode) is int and mode == choice), None
@@ -404,12 +404,17 @@ def get_iot_wdr_settings(
     state, level = data.get("hdrSwitchEnabled"), data.get("WDRLevel1")
     return {
         "enabled": state == "open" if state in ("open", "close") else None,
-        "level": level if type(level) is int and 0 <= level <= _WDR_LEVEL_MAX else None,
+        "level": _parse_wdr_level(level),
     }
 
 
+def _parse_wdr_level(level: object) -> int | None:
+    return level if type(level) is int and 0 <= level <= _WDR_LEVEL_MAX else None
+
+
 def _require_wdr_level(level: object) -> int:
-    if type(level) is not int or not 0 <= level <= _WDR_LEVEL_MAX:
+    level = _parse_wdr_level(level)
+    if level is None:
         raise PyEzvizError("WDR level must be an integer from 0 to 100")
     return level
 

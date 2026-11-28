@@ -76,6 +76,19 @@ model-specific schemas.
 | `ENERGY_MODE` | `Video/1/EnergySaving/EnergyModeCfg` | App sends `energyMode`; distinct from the legacy battery work mode. |
 | `TIME_LAPSE` | `Video/1/BatCustomSpecial/TimeLapseMode` | Interval changes preserve the current `enable` value. |
 
+## Additional model-gated switches
+
+Use `get_camera_app_switch` and `set_camera_app_switch` with these
+`CameraAppProperty` values. The read returns `None` for a missing or
+non-boolean flag. Check the exact property in the product profile first.
+
+| Property | App route | Write behavior |
+| --- | --- | --- |
+| `ELECTRONIC_STABILIZATION` | `Video/1/ImageEnhance/EIS` | Preserves reported EIS mode and level; refuses to write if the current flag is unknown. |
+| `HORIZON_ENHANCEMENT` | `Video/1/ImageEnhance/HorizonEnhancement` | Preserves the reported level and other fields. |
+| `RADAR_INTERFERENCE_SUPPRESSION` | `Video/1/SensorLight/RadarFMCfg` | Writes only `enabled`; the app exposes this in supported battery-doorbell wake-up settings. |
+| `NIGHTTIME_PROMPT` | `global/0/SoundSetting/PromptParam` | Writes `enabled` with `mode: "nighttime"`; separate from the mute schedule. |
+
 The request shapes were traced in Android 7.4.1.0421
 (`RevisionSetting` 5.0.0.22639082, `RevisionFunctionSetting` 5.0.0.22396515,
 `RevisionAlgorithmSetting` 5.0.0.22635469, and `ModulePIRSetting`

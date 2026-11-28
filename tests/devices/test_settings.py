@@ -975,7 +975,8 @@ def test_app_base_plan_wire(device_requests, plan) -> None:
     assert all(urlsplit(r.url).path == "/v3/devconfig/v2/base/plan" for r in sent)
     assert parse_qs(urlsplit(sent[0].url).query) == common
     form = parse_qs(sent[1].body)
-    assert json.loads(form.pop("timingPlanQos")[0]) == [slot]
+    slots = form.pop("timingPlanQos")
+    assert json.loads(slots[0]) == [slot]
     assert form == {**common, "enable": ["1"]}
 
 
@@ -1098,3 +1099,61 @@ def test_custom_voice_selection_comes_from_status_only() -> None:
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("prop", "route", "current", "expected", "methods"),
+    [
+        (
+            app_controls.CameraAppProperty.ELECTRONIC_STABILIZATION,
+            "Video/1/ImageEnhance/EIS",
+            {"enabled": False, "EISMode": "auto", "EISLevel": 2},
+            {"enabled": True, "EISMode": "auto", "EISLevel": 2},
+            ["GET", "GET", "PUT"],
+        ),
+        (
+            app_controls.CameraAppProperty.HORIZON_ENHANCEMENT,
+            "Video/1/ImageEnhance/HorizonEnhancement",
+            {"enabled": False, "level": 2},
+            {"enabled": True, "level": 2},
+            ["GET", "GET", "PUT"],
+        ),
+        (
+            app_controls.CameraAppProperty.RADAR_INTERFERENCE_SUPPRESSION,
+            "Video/1/SensorLight/RadarFMCfg",
+            {"enabled": False},
+            {"enabled": True},
+            ["GET", "PUT"],
+        ),
+        (
+            app_controls.CameraAppProperty.NIGHTTIME_PROMPT,
+            "global/0/SoundSetting/PromptParam",
+            {"enabled": False, "mode": "nighttime"},
+            {"enabled": True, "mode": "nighttime"},
+            ["GET", "PUT"],
+        ),
+    ],
+)
+def test_additional_camera_app_switches(
+    device_requests, prop, route, current, expected, methods
+) -> None:
+    client, sent, replies = device_requests
+    replies.extend([{"meta": {"code": 200}, "data": current}] * methods.count("GET"))
+    replies.append({"meta": {"code": 200}})
+    assert app_controls.get_camera_app_switch(client, "CAM001", prop) is False
+    app_controls.set_camera_app_switch(client, "CAM001", prop, enabled=True)
+    assert [request.method for request in sent] == methods
+    assert all(
+        urlsplit(request.url).path == f"/v3/iot-feature/feature/CAM001/{route}" for request in sent
+    )
+    assert json.loads(sent[-1].body) == {"value": expected}
+
+
+def test_stabilization_does_not_overwrite_unknown_state(device_requests) -> None:
+    client, sent, replies = device_requests
+    prop = app_controls.CameraAppProperty.ELECTRONIC_STABILIZATION
+    replies.extend([{"meta": {"code": 200}, "data": {"enabled": "false"}}] * 2)
+    assert app_controls.get_camera_app_switch(client, "CAM001", prop) is None
+    with pytest.raises(PyEzvizError, match="unknown"):
+        app_controls.set_camera_app_switch(client, "CAM001", prop, enabled=True)
+    assert [request.method for request in sent] == ["GET", "GET"]

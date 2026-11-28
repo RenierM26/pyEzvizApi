@@ -30,6 +30,10 @@ class CameraAppProperty(Enum):
     WAKEUP_STRATEGY = ("Video", "1", "EnergySaving", "WakeupStrategyCfg")
     ENERGY_MODE = ("Video", "1", "EnergySaving", "EnergyModeCfg")
     TIME_LAPSE = ("Video", "1", "BatCustomSpecial", "TimeLapseMode")
+    ELECTRONIC_STABILIZATION = ("Video", "1", "ImageEnhance", "EIS")
+    HORIZON_ENHANCEMENT = ("Video", "1", "ImageEnhance", "HorizonEnhancement")
+    RADAR_INTERFERENCE_SUPPRESSION = ("Video", "1", "SensorLight", "RadarFMCfg")
+    NIGHTTIME_PROMPT = ("global", "0", "SoundSetting", "PromptParam")
     SMART_COMPRESSION = ("Video", "1", "RecordStorage", "RecordCompressionParams")
 
 
@@ -69,6 +73,39 @@ def set_smart_recording_compression(client: EzvizClient, serial: str, *, enabled
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be a boolean")
     set_app_property(client, serial, CameraAppProperty.SMART_COMPRESSION, {"enabled": enabled})
+
+
+_APP_SWITCH_WRITES = {
+    CameraAppProperty.ELECTRONIC_STABILIZATION: None,
+    CameraAppProperty.HORIZON_ENHANCEMENT: None,
+    CameraAppProperty.RADAR_INTERFERENCE_SUPPRESSION: {},
+    CameraAppProperty.NIGHTTIME_PROMPT: {"mode": "nighttime"},
+}
+
+
+def get_camera_app_switch(client: EzvizClient, serial: str, prop: CameraAppProperty) -> bool | None:
+    """Read a traced switch, keeping an unknown flag distinct from off."""
+    if prop not in _APP_SWITCH_WRITES:
+        raise ValueError("Not a supported camera app switch")
+    enabled = get_app_property(client, serial, prop).get("enabled")
+    return enabled if isinstance(enabled, bool) else None
+
+
+def set_camera_app_switch(
+    client: EzvizClient, serial: str, prop: CameraAppProperty, *, enabled: bool
+) -> None:
+    """Set a traced switch using its app-specific payload."""
+    if prop not in _APP_SWITCH_WRITES or not isinstance(enabled, bool):
+        raise ValueError("Expected a supported camera app switch and a boolean")
+    template = _APP_SWITCH_WRITES[prop]
+    if template is None:
+        config = get_app_property(client, serial, prop)
+        if not isinstance(config.get("enabled"), bool):
+            raise PyEzvizError("Cannot update an image switch with unknown current state")
+    else:
+        config = dict(template)
+    config["enabled"] = enabled
+    set_app_property(client, serial, prop, config)
 
 
 class CameraPlan(IntEnum):

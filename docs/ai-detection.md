@@ -59,3 +59,7 @@ or sound-classification setters are not mapped by this audit. A message
 filter only selects events already reported by EZVIZ; it cannot enable any
 of those features. See the [Pagelist field map](pagelist-state.md) and
 [Unified message list filters](unified-message-list.md).
+
+For model-specific PIR grids, privacy masks, and plate regions, see
+[Camera app controls](camera-app-controls.md). These are not interchangeable
+with intelligent-app detection areas.

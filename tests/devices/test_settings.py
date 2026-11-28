@@ -1,6 +1,6 @@
 """Offline checks for the app-traced cloud settings."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import time
 import json
 from typing import Any
@@ -8,9 +8,7 @@ from unittest.mock import Mock
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-import requests
 
-from pyezvizapi import EzvizClient
 from pyezvizapi.devices import settings
 from pyezvizapi.devices.channels import CameraChannel, CameraChannelError
 from pyezvizapi.devices.tracking import (
@@ -207,31 +205,6 @@ def test_reported_indicator_daylight_mode(
 ) -> None:
     data = {"supportExt": {"331": support}, "STATUS": {"optionals": optionals}}
     assert settings.reported_indicator_daylight_mode(data) is expected
-
-
-@pytest.fixture
-def device_requests(
-    monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[tuple[EzvizClient, list[requests.PreparedRequest], list[dict[str, Any]]]]:
-    client = EzvizClient(token={"session_id": "synthetic", "api_url": "api.example.invalid"})
-    sent: list[requests.PreparedRequest] = []
-    replies: list[dict[str, Any]] = []
-
-    def send(
-        _session: requests.Session, request: requests.PreparedRequest, **_kwargs: Any
-    ) -> requests.Response:
-        sent.append(request)
-        assert replies, f"Unexpected request: {request.method} {request.url}"
-        response = requests.Response()
-        response.status_code = 200
-        response._content = json.dumps(replies.pop(0)).encode()  # noqa: SLF001 - offline response.
-        return response
-
-    monkeypatch.setattr(requests.Session, "send", send)
-    try:
-        yield client, sent, replies
-    finally:
-        client.close_session()
 
 
 def test_query_and_form_key_value_puts_keep_distinct_wire_contracts(device_requests) -> None:

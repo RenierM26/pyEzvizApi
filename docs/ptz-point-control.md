@@ -10,6 +10,9 @@ They are not absolute pan/tilt angles, degrees or physical position feedback.
 Repeated calls do not promise that the camera reaches an identical world angle.
 Image orientation, model behavior, permission and point-PTZ support still matter.
 
+For patrol paths, patrol schedules, homing presets, and calibration, see
+[camera app controls](camera-app-controls.md). These are separate from point movement.
+
 ## Request contract
 
 - PUT `/v3/iot-feature/action/<serial>/<resource>/<index>/PTZManualCtrl/CtrlPTZ3DPosition`

@@ -392,7 +392,13 @@ and the [pagelist fixture](../tests/fixtures/page_list_response.json).
   `GET /v3/clouds/cloudspace/recordPlanDevice`, not a device settings write.
   EZVIZ's [24/7 recording instructions][ezviz-all-day-recording] describe a
   working mode or an All Day memory-card switch, not a weekly editor.
-  None of these establishes how to edit the on-device weekly schedule.
+  The 7.4.1 dashcam library does have a recording-schedule setter, but it
+  sends a dashcam command through its RTSP client, not an EZVIZ camera cloud
+  request. Both Android builds declare HCNetSDK recording-config write
+  commands, but those declarations do not establish a consumer-camera
+  app call or validate a LAN setter. None of these establishes how to
+  edit the on-device weekly schedule or change storage allocation through
+  the camera cloud API.
 - Both `soundSelect.js` and `sd7SoundSelect.js` pass the serial, current
   custom index and optional serialized voice list to
   `EzvizRNBridge.pushCustomSoundBellSetting`. They consume

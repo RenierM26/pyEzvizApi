@@ -31,12 +31,14 @@ def test_directional_ptz_wire(device_requests, monkeypatch) -> None:
     monkeypatch.setattr("pyezvizapi.client.time.time", lambda: 1_700_000_000.125)
     replies.extend([{"meta": {"code": 200}}] * 2)
     for action in ("START", "STOP"):
-        assert client.ptz_control("UPLEFT", "CAM001", action, 4, channel=2)
+        success = client.ptz_control("UPLEFT", "CAM001", action, 4, channel=2)
+        assert success
     for request, action in zip(sent, ("START", "STOP"), strict=True):
         assert request.method == "PUT"
         assert urlsplit(request.url).path == "/v3/devices/CAM001/ptzControl"
         form = parse_qs(request.body)
-        assert form.pop("uuid")[0]
+        uuid = form.pop("uuid")
+        assert uuid[0]
         assert form == {
             "command": ["UPLEFT"],
             "action": [action],
@@ -60,7 +62,8 @@ def test_preset_list_recall_and_delete_wire(device_requests) -> None:
     client, sent, replies = device_requests
     row = {"subSerial": "CAM001", "channelNo": 2, "index": 7, "name": "Gate"}
     replies.extend([{"resultCode": "0", "data": [row]}, {"resultCode": 0}, {"resultCode": "0"}])
-    assert ptz.list_ptz_presets(client, "CAM001", channel=2) == [row]
+    presets = ptz.list_ptz_presets(client, "CAM001", channel=2)
+    assert presets == [row]
     ptz.goto_ptz_preset(client, "CAM001", 7, channel=2)
     ptz.delete_ptz_preset(client, "CAM001", 7, channel=2)
     for request, path in zip(sent, ("list", "config", "config"), strict=True):
@@ -79,8 +82,10 @@ def test_preset_create_and_rename_multipart(device_requests) -> None:
     client, sent, replies = device_requests
     row = {"subSerial": "CAM001", "channelNo": 2, "index": 7}
     replies.extend([{"resultCode": 0, "Preset": row}] * 2)
-    assert ptz.create_ptz_preset(client, "CAM001", "Gate", channel=2, thumbnail=b"image") == row
-    assert ptz.rename_ptz_preset(client, "CAM001", 7, "Drive", channel=2, pic_url="/p.jpg") == row
+    created_preset = ptz.create_ptz_preset(client, "CAM001", "Gate", channel=2, thumbnail=b"image")
+    assert created_preset == row
+    renamed_preset = ptz.rename_ptz_preset(client, "CAM001", 7, "Drive", channel=2, pic_url="/p.jpg")
+    assert renamed_preset == row
     for request, path in zip(sent, ("set", "update"), strict=True):
         assert request.method == "POST"
         assert urlsplit(request.url).path == f"/api/device/preset/{path}"
@@ -112,7 +117,8 @@ def test_preset_errors_are_not_success_or_empty_list(device_requests) -> None:
         ptz.goto_ptz_preset(client, "CAM001", 1, channel=1)
     with pytest.raises(PyEzvizError, match="invalid PTZ preset list"):
         ptz.list_ptz_presets(client, "CAM001", channel=1)
-    assert ptz.list_ptz_presets(client, "CAM001", channel=1) == []
+    presets = ptz.list_ptz_presets(client, "CAM001", channel=1)
+    assert presets == []
     with pytest.raises(PyEzvizError, match="invalid PTZ preset"):
         ptz.rename_ptz_preset(client, "CAM001", 1, "Gate", channel=1, pic_url="")
     with pytest.raises(ValueError, match="index"):
@@ -150,7 +156,8 @@ def test_resource_panorama_wire(device_requests) -> None:
         [{"meta": {"code": 200}}, {"meta": {"code": 200}, "data": info}, {"meta": {"code": 403}}]
     )
     ptz.start_panorama_capture(client, "CAM001", channel=channel)
-    assert ptz.get_panorama_info(client, "CAM001", channel=channel) == info
+    progress = ptz.get_panorama_info(client, "CAM001", channel=channel)
+    assert progress == info
     assert sent[0].method == "POST"
     assert urlsplit(sent[0].url).path == "/v3/panoramicDevices/action/pics/collect/CAM001/2"
     assert json.loads(sent[0].body) == {

@@ -38,7 +38,11 @@ python -m pip check
 ```
 
 `python -m pytest tests/push -q` is an example quick loop; the default collection
-is under `tests/`. Run affected controls plus the full required checks before
+is under `tests/`. The documentation checker validates local links, headings,
+CLI argument syntax, and the changelog's Unreleased section. It does not run
+examples or check third-party URLs. Use `--links-only` without installing the SDK.
+
+Run affected controls plus the full required checks before
 submitting behavior changes. Use `ruff format pyezvizapi` for the package's
 100-character style. Lint and format checks are separate.
 
@@ -72,8 +76,10 @@ separate from tests with a stubbed broker or FFmpeg process.
 - Document new imports/CLI flags beside their canonical owner. Validate examples
   offline; never execute control/media commands against real devices as a docs check.
 - State whether a guide is current user guidance, a development-only workflow,
-  or pinned historical evidence. Keep research records accessible without making
-  them the installation path. Add new guides to [the index](docs/README.md).
+  or pinned historical evidence. Link user guides from the relevant task page
+  or [main index](docs/README.md); add specialist and historical material to
+  [development and evidence](docs/development-and-evidence.md). Link to the
+  existing instructions instead of copying setup, command, or upgrade steps.
 - Call out changes to imports, client methods, status keys, auth categories,
   token persistence and push lifetimes; an import probe is not full HA acceptance.
 - Do not embed credentials or real payload identifiers in code, logs or screenshots.

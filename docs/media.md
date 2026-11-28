@@ -11,25 +11,22 @@ successful remux is not evidence of HA/browser playback or audible audio.
 | Save an image or bounded clip | CLI `save` or `EzvizClient.save_*` | Credentials/keys and source support; FFmpeg for remux, sometimes FFprobe; [saving guide](media-saving.md) |
 | LAN-only SD-card recording download | `save clip --source local-playback` | Explicit IP, device password and UTC range; no account/cloud; [LAN SD downloads](lan-sd-playback.md) |
 | Camera SD-card recording download | `save clip --source cloud-playback` | Explicit UTC range, MPEG-PS, byte/time budgets; [SD playback](cloud-sd-playback.md) |
+| Catalog and resume a batch of SD downloads | `recordings list` / `recordings download` | Choose LAN or cloud-mediated routes explicitly; [catalog guide](recording-catalog.md) |
+| Decode or split multi-image responses | `pyezvizapi.devices.images` | Pillow for image processing, not for basic decryption; [image formats and helpers](image-decryption.md) |
 | Cloud replay download | `cloud_video_download` | Account recording access and ticket/replay metadata; [CLI](cli.md#cloud_videos) |
 | Inspect VTM/local transports | `stream trace`, `dump`, `proxy`, local SDK commands | Specialist/debug workflow, source-specific credentials, finite limits; [stream CLI](stream-cli.md) |
 | Continuous native MPEG-PS owner | `NativeMpegTsStream` | `pyezvizapi[streaming]` / PyAV 19.x and an explicit supported source/track selection; [API](native-ha-stream.md) |
 | Native stream inside HA | Isolated `ezviz_native` validation example | Real HA/PyAV test environment and explicit configuration; not the cloud integration; [validation](ha-native-integration.md) |
 | Inspect configured capabilities offline | `pyezvizapi-capabilities` | Explicit inventory/optional saved samples; does not acquire a stream; [capability schema](ha-streaming-plan.md) |
-| Compare native player behavior | Developer playback/decoder tools | Separate platform-specific software; [specialist guides](README.md#development-media-and-protocol-guides), not runtime library dependencies |
+| Compare native player behavior | Developer playback/decoder tools | Separate platform-specific software; [specialist guides](development-and-evidence.md#development-media-and-protocol-guides), not runtime library dependencies |
 
 ## Install only the selected dependencies
 
-```bash
-python -m pip install 'pyezvizapi[streaming]'
-ffmpeg -version
-ffprobe -version
-```
-
-Pip does not install FFmpeg/FFprobe. PyAV-backed APIs and subprocess-remux paths
-are different: having one does not prove the other is available. The pure Python
-cloud/device client does not require HA, PyAV, Android binaries or a desktop player.
-The HA validation environment has its own Python 3.14 and dependency pins.
+See [optional dependencies](getting-started.md#optional-dependencies) for install
+commands. PyAV-backed APIs and subprocess remuxing are separate: installing PyAV
+does not install the FFmpeg or FFprobe executables. Check `ffmpeg -version` and
+`ffprobe -version` if your selected route invokes them. The cloud/device client
+does not require Home Assistant or media extras.
 
 ## Choose explicit bounds and keep original clocks
 

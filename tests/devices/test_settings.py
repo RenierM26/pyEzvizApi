@@ -641,3 +641,175 @@ def test_resource_app_discovery_preserves_identity_and_state():
     assert not list(
         iter_resource_intelligent_apps(data, feature_group="10", resource_identifier="Video_1")
     )
+
+
+@pytest.mark.parametrize(
+    ("setting", "path"),
+    [
+        (settings.ImageSwitch.ANTI_BANDING, "ImageExposure/AntiBandingParams"),
+        (settings.ImageSwitch.LOW_LIGHT_ENHANCEMENT, "ImageEnhance/LowLightImageEnhanceCfg"),
+        (settings.ImageSwitch.ADAPTIVE_NIGHT_VISION, "FillLight/NightVisionAdaptMode"),
+    ],
+)
+def test_graphics_switch_uses_app_wire_contract(device_requests, setting, path) -> None:
+    client, sent, replies = device_requests
+    replies.extend([{"meta": {"code": 200}, "data": {"enabled": False}}, {"meta": {"code": 200}}])
+    assert settings.get_image_switch(client, "CAM001", setting) is False
+    settings.set_image_switch(client, "CAM001", setting, True)
+
+    url = f"https://api.example.invalid/v3/iot-feature/feature/CAM001/Video/1/{path}"
+    assert [(request.method, request.url) for request in sent] == [("GET", url), ("PUT", url)]
+    assert sent[0].body is None
+    assert json.loads(sent[1].body) == {"value": {"enabled": True}}
+
+
+@pytest.mark.parametrize("data", [None, {}, {"enabled": "false"}, {"enabled": 0}])
+def test_graphics_switch_keeps_unknown_distinct_from_disabled(device_requests, data) -> None:
+    client, sent, replies = device_requests
+    replies.append({"meta": {"code": 200}, "data": data})
+    assert settings.get_image_switch(client, "CAM001", settings.ImageSwitch.ANTI_BANDING) is None
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("method", ["GET", "PUT"])
+def test_graphics_switch_api_rejection_does_not_fall_back(device_requests, method) -> None:
+    client, sent, replies = device_requests
+    replies.append({"meta": {"code": 403}})
+    with pytest.raises(PyEzvizError, match="Could not"):
+        if method == "GET":
+            settings.get_image_switch(client, "CAM001", settings.ImageSwitch.ANTI_BANDING)
+        else:
+            settings.set_image_switch(client, "CAM001", settings.ImageSwitch.ANTI_BANDING, False)
+    assert [request.method for request in sent] == [method]
+
+
+def test_legacy_icr_and_iot_black_and_white_use_distinct_routes(device_requests) -> None:
+    client, sent, replies = device_requests
+    replies.extend(
+        [
+            {"meta": {"code": 200}},
+            {"meta": {"code": 200}, "data": {"mode": 0}},
+            {"meta": {"code": 200}},
+        ]
+    )
+    settings.set_cloud_day_night_settings(client, "CAM001", 0, 2, channel=2)
+    assert (
+        settings.get_black_and_white_mode(client, "CAM001") is settings.BlackAndWhiteMode.INFRARED
+    )
+    settings.set_black_and_white_mode(
+        client, "CAM001", settings.BlackAndWhiteMode.ENHANCED_INFRARED
+    )
+
+    legacy, read, write = sent
+    url = urlsplit(legacy.url)
+    query = parse_qs(url.query)
+    assert legacy.method == "PUT" and not legacy.body
+    assert url.path == "/v3/devconfig/v1/keyValue/CAM001/2/op"
+    assert query["key"] == ["device_ICR_DSS"]
+    assert json.loads(query["value"][0]) == {"mode": 0, "sensitivity": 2}
+    iot = "https://api.example.invalid/v3/iot-feature/feature/CAM001/Video/1/FillLight/BlackAndWhiteCfg"
+    assert [(r.method, r.url) for r in (read, write)] == [("GET", iot), ("PUT", iot)]
+    assert json.loads(write.body) == {"value": {"mode": 3}}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ('{"mode":0,"sensitivity":3}', {"mode": 0, "sensitivity": 3}),
+        ({"mode": False, "sensitivity": 2}, {"mode": None, "sensitivity": 2}),
+        ({"mode": 3, "sensitivity": 0}, {"mode": None, "sensitivity": None}),
+    ],
+)
+def test_legacy_icr_snapshot_reports_no_fallback_defaults(raw, expected) -> None:
+    assert (
+        settings.reported_cloud_day_night_settings({"optionals": {"device_ICR_DSS": raw}})
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("setter", "args"),
+    [
+        (settings.set_image_switch, (settings.ImageSwitch.ANTI_BANDING, 0)),
+        (settings.set_image_switch, ("AntiBandingParams", False)),
+        (settings.set_cloud_day_night_settings, (3, 1)),
+        (settings.set_cloud_day_night_settings, (0, True)),
+        (settings.set_black_and_white_mode, (3,)),
+    ],
+)
+def test_invalid_image_setting_never_reaches_transport(device_requests, setter, args) -> None:
+    client, sent, _ = device_requests
+    with pytest.raises(PyEzvizError):
+        setter(client, "CAM001", *args)
+    assert sent == []
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({"hdrSwitchEnabled": "close", "WDRLevel1": 0}, {"enabled": False, "level": 0}),
+        ({"hdrSwitchEnabled": "open", "WDRLevel1": 50}, {"enabled": True, "level": 50}),
+        ({"hdrSwitchEnabled": True, "WDRLevel1": True}, {"enabled": None, "level": None}),
+    ],
+)
+def test_wdr_getter_does_not_substitute_another_route(device_requests, data, expected) -> None:
+    client, sent, replies = device_requests
+    replies.append({"meta": {"code": 200}, "data": data})
+    assert settings.get_iot_wdr_settings(client, "CAM001", local_index="2") == expected
+    (request,) = sent
+    assert request.method == "GET"
+    assert request.url.endswith("/CAM001/Video/2/ImageBacklight/WDR")
+
+
+@pytest.mark.parametrize("mode", [False, "3", 255])
+def test_black_and_white_getter_does_not_default_to_infrared(device_requests, mode) -> None:
+    client, _, replies = device_requests
+    replies.append({"meta": {"code": 200}, "data": {"mode": mode}})
+    assert settings.get_black_and_white_mode(client, "CAM001") is None
+
+
+@pytest.mark.parametrize(
+    ("mode", "state"),
+    [
+        (
+            settings.NightFillLightMode.OFF,
+            {"enabled": False, "supplementLightSwitchMode": "irLight"},
+        ),
+        (
+            settings.NightFillLightMode.INFRARED,
+            {"enabled": True, "supplementLightSwitchMode": "irLight"},
+        ),
+        (
+            settings.NightFillLightMode.SMART,
+            {"enabled": True, "supplementLightSwitchMode": "eventIntelligence"},
+        ),
+    ],
+)
+def test_night_fill_light_distinguishes_off_infrared_and_smart(
+    device_requests, mode, state
+) -> None:
+    client, sent, replies = device_requests
+    replies.extend([{"meta": {"code": 200}, "data": state}, {"meta": {"code": 200}}])
+    assert settings.get_night_fill_light_mode(client, "CAM001") is mode
+    settings.set_night_fill_light_mode(client, "CAM001", mode)
+
+    url = (
+        "https://api.example.invalid/v3/iot-feature/feature/CAM001/Video/1/"
+        "SupplementLightMgr/ImageSupplementLightModeSwitchParams"
+    )
+    assert [(r.method, r.url) for r in sent] == [("GET", url), ("PUT", url)]
+    assert json.loads(sent[1].body) == {"value": state}
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"enabled": True},
+        {"enabled": 0, "supplementLightSwitchMode": "irLight"},
+        {"enabled": False, "supplementLightSwitchMode": "eventIntelligence"},
+    ],
+)
+def test_night_fill_light_does_not_guess_a_picker_mode(device_requests, data) -> None:
+    client, _, replies = device_requests
+    replies.append({"meta": {"code": 200}, "data": data})
+    assert settings.get_night_fill_light_mode(client, "CAM001") is None

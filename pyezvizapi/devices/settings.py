@@ -1,17 +1,17 @@
-"""Typed helpers for the app's cloud recording, indicator, and WDR routes."""
+"""Typed helpers for the app's cloud recording, indicator, and image routes."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import time
-from enum import IntEnum
+from enum import Enum, IntEnum
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from pyezvizapi._shared.coercion import decode_json
 from pyezvizapi.devices.capabilities import SupportExtView
 from pyezvizapi.devices.channels import CameraChannel
-from pyezvizapi.devices.features import optionals_mapping
+from pyezvizapi.devices.features import device_icr_dss_config, optionals_mapping
 from pyezvizapi.exceptions import PyEzvizError
 
 if TYPE_CHECKING:
@@ -179,6 +179,158 @@ def set_indicator_night_mode(client: EzvizClient, serial: str, enabled: bool) ->
         "IndicatorLightCfg",
         {"value": {"enabled": enabled, "mode": "nightMode"}},
     )
+
+
+class ImageSwitch(Enum):
+    """Boolean image properties used by the Android graphics screen."""
+
+    ANTI_BANDING = ("ImageExposure", "AntiBandingParams")
+    LOW_LIGHT_ENHANCEMENT = ("ImageEnhance", "LowLightImageEnhanceCfg")
+    ADAPTIVE_NIGHT_VISION = ("FillLight", "NightVisionAdaptMode")
+
+
+def _image_switch_property(setting: ImageSwitch) -> tuple[str, str]:
+    if not isinstance(setting, ImageSwitch):
+        raise PyEzvizError("Expected an ImageSwitch")
+    return setting.value
+
+
+def get_image_switch(client: EzvizClient, serial: str, setting: ImageSwitch) -> bool | None:
+    """Read the app's Video/1 switch; return None for unrecognized enabled state."""
+    domain, prop = _image_switch_property(setting)
+    response = client.get_device_feature_value(serial, "Video", domain, prop, local_index="1")
+    data = response.get("data")
+    enabled = data.get("enabled") if isinstance(data, Mapping) else None
+    return enabled if isinstance(enabled, bool) else None
+
+
+def set_image_switch(client: EzvizClient, serial: str, setting: ImageSwitch, enabled: bool) -> None:
+    """Set an absolute state on Video/1; require a matching product-profile property."""
+    _require_bool(enabled)
+    domain, prop = _image_switch_property(setting)
+    client.set_iot_feature(serial, "Video", "1", domain, prop, {"value": {"enabled": enabled}})
+
+
+class NightFillLightMode(Enum):
+    """Super-night fill-light picker choices, not legacy night-vision modes."""
+
+    OFF = (False, "irLight")
+    INFRARED = (True, "irLight")
+    SMART = (True, "eventIntelligence")
+
+
+_NIGHT_FILL_LIGHT_DOMAIN = "SupplementLightMgr"
+_NIGHT_FILL_LIGHT_PROP = "ImageSupplementLightModeSwitchParams"
+
+
+def get_night_fill_light_mode(client: EzvizClient, serial: str) -> NightFillLightMode | None:
+    """Read both fields of the app's Video/1 fill-light picker."""
+    response = client.get_device_feature_value(
+        serial, "Video", _NIGHT_FILL_LIGHT_DOMAIN, _NIGHT_FILL_LIGHT_PROP, local_index="1"
+    )
+    data = response.get("data")
+    if not isinstance(data, Mapping) or type(data.get("enabled")) is not bool:
+        return None
+    pair = (data["enabled"], data.get("supplementLightSwitchMode"))
+    return next((choice for choice in NightFillLightMode if choice.value == pair), None)
+
+
+def set_night_fill_light_mode(client: EzvizClient, serial: str, mode: NightFillLightMode) -> None:
+    """Set a picker option the device advertises on the Video/1 super-night branch."""
+    if not isinstance(mode, NightFillLightMode):
+        raise PyEzvizError("Expected a NightFillLightMode")
+    enabled, switch_mode = mode.value
+    client.set_iot_feature(
+        serial,
+        "Video",
+        "1",
+        _NIGHT_FILL_LIGHT_DOMAIN,
+        _NIGHT_FILL_LIGHT_PROP,
+        {"value": {"enabled": enabled, "supplementLightSwitchMode": switch_mode}},
+    )
+
+
+class BlackAndWhiteMode(IntEnum):
+    """Mode picker on devices exposing the IoT BlackAndWhiteCfg property."""
+
+    INFRARED = 0
+    DAY = 1
+    NIGHT = 2
+    ENHANCED_INFRARED = 3
+
+
+def get_black_and_white_mode(client: EzvizClient, serial: str) -> BlackAndWhiteMode | None:
+    """Read Video/1 BlackAndWhiteCfg without treating an unknown mode as infrared."""
+    response = client.get_device_feature_value(
+        serial, "Video", "FillLight", "BlackAndWhiteCfg", local_index="1"
+    )
+    data = response.get("data")
+    mode = data.get("mode") if isinstance(data, Mapping) else None
+    return next(
+        (choice for choice in BlackAndWhiteMode if type(mode) is int and mode == choice), None
+    )
+
+
+def set_black_and_white_mode(client: EzvizClient, serial: str, mode: BlackAndWhiteMode) -> None:
+    """Set the IoT picker mode; callers must verify the matching profile and UI branch."""
+    if not isinstance(mode, BlackAndWhiteMode):
+        raise PyEzvizError("Expected a BlackAndWhiteMode")
+    client.set_iot_feature(
+        serial, "Video", "1", "FillLight", "BlackAndWhiteCfg", {"value": {"mode": int(mode)}}
+    )
+
+
+class CloudDayNightSettings(TypedDict):
+    """Reported legacy ICR values, without convenience defaults."""
+
+    mode: int | None
+    sensitivity: int | None
+
+
+def reported_cloud_day_night_settings(camera_data: Mapping[str, Any]) -> CloudDayNightSettings:
+    """Read legacy cloud mode and sensitivity from the device snapshot."""
+    data = device_icr_dss_config(camera_data)
+    mode, sensitivity = data.get("mode"), data.get("sensitivity")
+    return {
+        "mode": mode if type(mode) is int and mode in (0, 1, 2) else None,
+        "sensitivity": sensitivity
+        if type(sensitivity) is int and sensitivity in (1, 2, 3)
+        else None,
+    }
+
+
+def set_cloud_day_night_settings(
+    client: EzvizClient, serial: str, mode: int, sensitivity: int, *, channel: int = 1
+) -> None:
+    """Send the legacy ICR mode and sensitivity together via query-based devconfig."""
+    if type(channel) is not int or channel < 0:
+        raise PyEzvizError("Day/night channel must be a nonnegative integer")
+    if type(mode) is not int or mode not in (0, 1, 2):
+        raise PyEzvizError("Day/night mode must be 0 (auto), 1 (day), or 2 (night)")
+    if type(sensitivity) is not int or sensitivity not in (1, 2, 3):
+        raise PyEzvizError("Day/night sensitivity must be an integer from 1 to 3")
+    client.set_device_key_value(
+        serial, channel, "device_ICR_DSS", json.dumps({"mode": mode, "sensitivity": sensitivity})
+    )
+
+
+class WdrSettings(TypedDict):
+    """Reported IoT WDR state and strength."""
+
+    enabled: bool | None
+    level: int | None
+
+
+def get_iot_wdr_settings(
+    client: EzvizClient, serial: str, *, local_index: str = "1"
+) -> WdrSettings:
+    """Read the same WDR property as the setters, without a switch or lens fallback."""
+    data = _read_video_setting(client, serial, "ImageBacklight", "WDR", local_index)
+    state, level = data.get("hdrSwitchEnabled"), data.get("WDRLevel1")
+    return {
+        "enabled": state == "open" if state in ("open", "close") else None,
+        "level": level if type(level) is int and 0 <= level <= _WDR_LEVEL_MAX else None,
+    }
 
 
 def _require_wdr_level(level: object) -> None:

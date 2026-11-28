@@ -5,6 +5,52 @@ Check the device's product profile or the matching owner-account app control
 before issuing requests. The SDK does not probe other resources or fall back
 to another lens when a request fails.
 
+## Coverage at a glance
+
+| Control | SDK coverage | Evidence |
+| --- | --- | --- |
+| Smart Compression and model-specific IoT properties and switches below | Read/write | Android trace and offline HTTP tests |
+| Sleep and patrol schedules, patrol paths | Read/replace | Android trace and offline HTTP tests; controls seen in the H9c app |
+| PTZ calibration | Action only | Android trace and offline HTTP tests; control seen in the H9c app |
+| Privacy mask and PIR grid | Read/replace | Android trace and offline HTTP tests |
+| Legacy motion area | Read only | Android trace and offline HTTP test; no verified write contract |
+| Recording schedules and storage allocation | Read only | Existing SDK readers; no verified write contract for these properties |
+| Custom alarm sound | Select an existing voice; read selection from refreshed inventory | Android trace and offline tests |
+| Cloud SD formatting | Erase action and progress reader | Android trace and offline HTTP tests |
+
+Seeing a control in the app is not proof that the SDK command works on
+hardware. The commands added here have not been live-write verified.
+
+## Read settings on the exact camera resource
+
+After [signing in](python-api.md#authenticate-and-read-status), use the
+camera's current inventory to resolve the resource key. Select the key for
+your intended lens from the reported list; don't infer it from RTSP or from
+the order of the lenses in the app.
+
+```python
+from pyezvizapi.devices.app_controls import get_patrol_path
+from pyezvizapi.devices.channels import camera_channels, resolve_camera_channel
+
+# client is an authenticated EzvizClient; serial identifies your camera.
+camera = client.get_device_infos(serial)
+resource_keys = [channel.key for channel in camera_channels(camera)]
+resource_key = input(f"Select a reported PTZ resource {resource_keys}: ").strip()
+channel = resolve_camera_channel(camera, resource_key)
+
+# Only call this if the chosen resource supports patrol.
+path = get_patrol_path(client, serial, channel=channel)
+```
+
+An unavailable key raises rather than selecting a different lens. The
+patrol reader uses an HTTP PUT because the app models it as a read action;
+it does not edit the path or move the camera.
+
+**Before writing:** Read and retain the current configuration before
+replacing a schedule, patrol sequence, mask, or PIR grid. Calibration can
+physically move the camera. SD formatting erases recordings and is not
+part of a routine validation run.
+
 ## Recording and maintenance
 
 - **Smart Compression:** `get_smart_recording_compression` reads

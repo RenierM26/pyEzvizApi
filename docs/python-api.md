@@ -7,6 +7,8 @@ controls and cleanup in the application's executor; do not call them directly
 on an event loop. Home Assistant owns its own executor and storage lifecycle.
 
 Point-based camera movement is documented in [point PTZ control](ptz-point-control.md).
+For cloud schedules, patrol paths, privacy masks, and storage settings, see
+[camera app controls](camera-app-controls.md).
 
 ## Authenticate and read status
 

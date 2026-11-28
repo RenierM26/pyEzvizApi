@@ -105,6 +105,11 @@ part of a routine validation run.
   pass all ones explicitly to cover the full frame.
 - `get_legacy_motion_area` is unchanged. The typed setter is not a fallback
   for the untyped editor, PIR grids, or app-scoped plate regions.
+- `client.upload_custom_alarm_audio(encoded_audio)` uploads already-encoded
+  audio bytes and returns a cloud URL. Pass it to
+  `client.add_voice_info(serial, name, url)` to register a sound. Upload
+  alone does not register or activate the recording; the SDK does not
+  transcode audio or guarantee which formats a device supports.
 - `set_custom_alarm_sound` selects an existing voice ID from
   `get_voice_info`. It uses sound type 3 and does not change the older
   `alarm_sound` API. `reported_custom_alarm_sound` reads the selected ID from

@@ -1172,6 +1172,7 @@ class EzvizClient:
         *,
         retry_401: bool = True,
         max_retries: int = 0,
+        allow_redirects: bool = True,
     ) -> requests.Response:
         """Send a prepared request with optional 401 retry.
 
@@ -1198,6 +1199,7 @@ class EzvizClient:
                     self._session,
                     "send",
                     request=prepared,
+                    **({} if allow_redirects else {"allow_redirects": False}),
                     timeout=bounded_request_timeout(self._timeout),
                 )
             req.raise_for_status()
@@ -1207,7 +1209,10 @@ class EzvizClient:
                     raise HTTPError from err
                 self.login()
                 return self._send_prepared(
-                    prepared, retry_401=retry_401, max_retries=max_retries + 1
+                    prepared,
+                    retry_401=retry_401,
+                    max_retries=max_retries + 1,
+                    allow_redirects=allow_redirects,
                 )
             raise HTTPError from err
         return req
@@ -3866,6 +3871,32 @@ class EzvizClient:
             max_retries=max_retries,
             _owner=_sys.modules[__name__],
         )
+
+    def upload_custom_alarm_audio(self, audio: bytes) -> str:
+        """Upload encoded alarm audio and return its cloud URL.
+
+        Audio is sent as supplied, without transcoding. This does not
+        register the recording to a device or select it as the alarm sound.
+        """
+        if not isinstance(audio, bytes) or not audio:
+            raise ValueError("Expected non-empty encoded alarm audio bytes")
+        path = "/v3/clients/v1/file/upload"
+        request = requests.Request(
+            "POST",
+            self._url(path),
+            params={"bizType": 3},
+            files={"file": ("file", audio, "multipart/form-data")},
+        )
+        prepared = self._session.prepare_request(request)
+        response = self._send_prepared(prepared, retry_401=False, allow_redirects=False)
+        if 300 <= response.status_code < 400:
+            raise PyEzvizError("Custom alarm audio upload returned a redirect")
+        payload = self._parse_json(response)
+        self._ensure_ok(payload, "Could not upload custom alarm audio")
+        file_url = payload.get("fileUrl")
+        if not isinstance(file_url, str) or not file_url.strip():
+            raise PyEzvizError("Missing custom alarm audio file URL")
+        return file_url
 
     def add_voice_info(
         self,

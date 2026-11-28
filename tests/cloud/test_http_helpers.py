@@ -4546,6 +4546,19 @@ def test_get_2fa_check_code_builds_request(monkeypatch) -> None:
     assert captured["max_retries"] == 2
 
 
+def test_get_2fa_check_code_includes_explicit_message_type(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        assert method == "POST"
+        assert path == "/v3/users/checkcode/mt"
+        assert kwargs["data"] == {"bizType": "DEVICE_AUTH_CODE", "from": None, "msgType": 0}
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+    client.get_2fa_check_code(msg_type=0)
+
+
 def test_get_2fa_check_code_validates_and_raises_contextual_error(monkeypatch) -> None:
     client = _client()
 

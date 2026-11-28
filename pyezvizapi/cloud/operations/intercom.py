@@ -84,38 +84,19 @@ def get_2fa_check_code(
     username: str | None,
     max_retries: int,
     *,
+    msg_type: int | None = None,
     _owner: _ModuleType,
 ) -> _owner_types.Any:
-    """Initiate 2FA check for sensitive operations. Elevates your session token permission.
-
-    Args:
-        biz_type (str): The operation type. (DEVICE_ENCRYPTION | DEVICE_AUTH_CODE)
-        username (str): The account username.
-        max_retries (int): The maximum number of retries. Defaults to 0.
-
-    Raises:
-        PyEzvizError: If the operation fails.
-
-    Returns:
-        Any: JSON response with the following structure:
-            {
-                "meta": {
-                    "code": int,       # Status code (200 if successful)
-                    "message": str         # Status message in chinese
-                    "moreInfo": null
-                },
-                "contact": {
-                    "type": str,   # 2FA code will be sent to this (EMAIL)
-                    "fuzzyContact": str     # Destination value (e.g., someone@email.local)
-                }
-            }
-    """
+    """Request delivery of an operation-specific verification code."""
     if max_retries > _owner.MAX_RETRIES:
         raise _owner.PyEzvizError("Can't gather proper data. Max retries exceeded.")
+    data: dict[str, str | int | None] = {"bizType": biz_type, "from": username}
+    if msg_type is not None:
+        data["msgType"] = msg_type
     json_output = self._request_json(
         "POST",
         _owner.API_ENDPOINT_2FA_VALIDATE_POST_AUTH,
-        data={"bizType": biz_type, "from": username},
+        data=data,
         retry_401=True,
         max_retries=max_retries,
     )

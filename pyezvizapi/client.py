@@ -3208,34 +3208,27 @@ class EzvizClient:
         )
 
     def get_2fa_check_code(
-        self, biz_type: str = "DEVICE_AUTH_CODE", username: str | None = None, max_retries: int = 0
+        self,
+        biz_type: str = "DEVICE_AUTH_CODE",
+        username: str | None = None,
+        max_retries: int = 0,
+        *,
+        msg_type: int | None = None,
     ) -> Any:
-        """Initiate 2FA check for sensitive operations. Elevates your session token permission.
+        """Request delivery of a verification code for a sensitive operation.
 
-        Args:
-            biz_type (str): The operation type. (DEVICE_ENCRYPTION | DEVICE_AUTH_CODE)
-            username (str): The account username.
-            max_retries (int): The maximum number of retries. Defaults to 0.
-
-        Raises:
-            PyEzvizError: If the operation fails.
-
-        Returns:
-            Any: JSON response with the following structure:
-                {
-                    "meta": {
-                        "code": int,       # Status code (200 if successful)
-                        "message": str         # Status message in chinese
-                        "moreInfo": null
-                    },
-                    "contact": {
-                        "type": str,   # 2FA code will be sent to this (EMAIL)
-                        "fuzzyContact": str     # Destination value (e.g., someone@email.local)
-                    }
-                }
+        Use `DEVICE_AUTH_CODE` for the camera sticker code or
+        `DEVICE_ENCRYPTION` for encryption keys. Pass an app-provided
+        delivery selector as `msg_type`, or omit it for the existing
+        request format. Returns delivery metadata, not the code itself.
         """
         return _intercom.get_2fa_check_code(
-            self, biz_type, username, max_retries, _owner=_sys.modules[__name__]
+            self,
+            biz_type,
+            username,
+            max_retries,
+            msg_type=msg_type,
+            _owner=_sys.modules[__name__],
         )
 
     def create_panoramic(self, serial: str, max_retries: int = 0) -> Any:

@@ -130,26 +130,34 @@ def iter_intelligent_apps(camera_data: dict[str, Any]) -> Iterator[tuple[str, bo
         intelligent_app = first_nested(
             camera_data, ("FEATURE_INFO", WILDCARD_STEP, "IntelligentAPP")
         )
-    intelligent_app = _decode_mapping(intelligent_app)
-    if intelligent_app is None:
-        return
+    for app_id, enabled in _reported_intelligent_apps(intelligent_app):
+        yield app_id.split("$:$", 1)[0], enabled is True
 
-    downloaded = _decode_mapping(intelligent_app.get("DownloadedAPP"))
-    if downloaded is None:
-        return
 
-    apps = _decode_list(downloaded.get("APP", []))
-    if apps is None:
-        return
+def iter_resource_intelligent_apps(
+    camera_data: dict[str, Any], *, feature_group: str, resource_identifier: str
+) -> Iterator[tuple[str, bool | None]]:
+    """Yield exact app IDs and reported state for one explicit FEATURE_INFO section.
 
+    Feature group and resource keys must come from inventory. Missing or
+    unrecognized enabled values are unknown, not proof of an enabled app.
+    """
+    groups = _decode_mapping(camera_data.get("FEATURE_INFO")) or {}
+    group = _decode_mapping(groups.get(feature_group)) or {}
+    resource = _decode_mapping(group.get(resource_identifier)) or {}
+    yield from _reported_intelligent_apps(resource.get("IntelligentAPP"))
+
+
+def _reported_intelligent_apps(section: Any) -> Iterator[tuple[str, bool | None]]:
+    intelligent_app = _decode_mapping(section) or {}
+    downloaded = _decode_mapping(intelligent_app.get("DownloadedAPP")) or {}
+    apps = _decode_list(downloaded.get("APP")) or []
     for app in apps:
         if not isinstance(app, dict):
             continue
-        raw_app_id = app.get("APPID")
-        if not isinstance(raw_app_id, str):
-            continue
-        base = raw_app_id.split("$:$", 1)[0]
-        yield base, bool(app.get("enabled"))
+        app_id = app.get("APPID")
+        if isinstance(app_id, str) and app_id.strip():
+            yield app_id, coerce_bool(app.get("enabled"))
 
 
 def intelligent_app_enabled(camera_data: dict[str, Any], app_name: str) -> bool:

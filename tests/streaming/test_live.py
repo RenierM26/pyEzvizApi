@@ -412,16 +412,24 @@ def test_close_releases_backpressure_from_a_full_child_pipe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _process(monkeypatch, "import time; time.sleep(30)")
-    entered = Event()
+    writing = Event()
+    write_ps = live.LiveMpegtsStream._write_ps
+
+    def write(stream: live.LiveMpegtsStream, packets: Any, stdin: Any) -> None:
+        # Packet iteration starts before the child exists. Wait for the
+        # input writer, after the process has been published, instead.
+        writing.set()
+        write_ps(stream, packets, stdin)
+
+    monkeypatch.setattr(live.LiveMpegtsStream, "_write_ps", write)
 
     def packets(**_kwargs: Any) -> Generator[MediaPacket, None, None]:
-        entered.set()
         yield MediaPacket(b"x" * (8 * 1024 * 1024), MediaPacketMetadata(source="local_sdk"))
 
     source = _source()
     source.iter_media_packets.side_effect = packets
     with live.LiveMpegtsStream(source, "ffmpeg") as stream:
-        assert entered.wait(2)
+        assert writing.wait(2)
         stream.close()
         assert not stream._writer.is_alive()
         assert stream._process is not None

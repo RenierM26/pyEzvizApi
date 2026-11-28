@@ -23,7 +23,12 @@ The SDK recognizes the names `app_human_detect`, `app_car_detect`,
 change, and gesture). Those names are not an exhaustive device capability
 list. To discover the app ID for a property update, inspect the original
 `APPID` on the chosen resource; `iter_intelligent_apps` returns base names
-and is not a source for a versioned property-write ID.
+and is not a source for a versioned property-write ID. Use
+`devices.tracking.iter_resource_intelligent_apps(info, feature_group=group,
+resource_identifier=identifier)` with the exact keys in `FEATURE_INFO`.
+The helper returns full IDs and states (`True`, `False`, or `None` for
+unknown). It never substitutes a different resource or guesses a local index.
+Read the local index separately from the matching resource row.
 
 ## Per-app actions and evidence
 

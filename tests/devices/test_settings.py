@@ -13,7 +13,12 @@ import requests
 from pyezvizapi import EzvizClient
 from pyezvizapi.devices import settings
 from pyezvizapi.devices.channels import CameraChannel, CameraChannelError
-from pyezvizapi.devices.tracking import set_app_auto_tracking, set_intelligent_app_config
+from pyezvizapi.devices.tracking import (
+    intelligent_app_enabled,
+    iter_resource_intelligent_apps,
+    set_app_auto_tracking,
+    set_intelligent_app_config,
+)
 from pyezvizapi.exceptions import PyEzvizError
 
 
@@ -597,3 +602,42 @@ def test_recording_reads_use_distinct_scoped_properties(
     client.get_device_feature_value.return_value = {"data": None}
     with pytest.raises(PyEzvizError, match=property_name):
         reader(client, "TEST", channel=channel)
+
+
+def test_resource_app_discovery_preserves_identity_and_state():
+    data = {
+        "FEATURE_INFO": {
+            "9": {
+                "Video": {
+                    "IntelligentAPP": {
+                        "DownloadedAPP": {
+                            "APP": [
+                                {"APPID": "human$:$v1", "enabled": "false"},
+                            ]
+                        }
+                    }
+                },
+                "Video_1": {
+                    "IntelligentAPP": {
+                        "DownloadedAPP": {
+                            "APP": [
+                                {"APPID": "human$:$v2", "enabled": 1},
+                                {"APPID": "car$:$v3", "enabled": "unexpected"},
+                                {"APPID": " "},
+                            ]
+                        }
+                    }
+                },
+            }
+        }
+    }
+    assert not intelligent_app_enabled(data, "human")
+    assert list(
+        iter_resource_intelligent_apps(data, feature_group="9", resource_identifier="Video")
+    ) == [("human$:$v1", False)]
+    assert list(
+        iter_resource_intelligent_apps(data, feature_group="9", resource_identifier="Video_1")
+    ) == [("human$:$v2", True), ("car$:$v3", None)]
+    assert not list(
+        iter_resource_intelligent_apps(data, feature_group="10", resource_identifier="Video_1")
+    )

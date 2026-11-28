@@ -89,3 +89,13 @@ a successful HTTP status or a legacy success code cannot override a V3 error.
 The app gates resource-scoped capture on the reported panorama action and
 uses a separate workflow for relay capture. The SDK does not try another
 route after a rejection.
+
+For devices using Android's device-wide capture flow, call
+`start_device_panorama_capture(client, serial)` and poll
+`get_stored_panorama(client, serial)`. This is a different V3 endpoint from
+the resource-scoped action and from the legacy `create_panoramic` client
+method. On the tested H9c, the resource action was rejected (code 2009);
+the device-wide request was acknowledged and progressed from 0 to 100
+with 12 image records. A later read returned 100 with an empty image list,
+so check for records as well as completion. The SDK does not download
+or stitch those images.

@@ -285,6 +285,22 @@ def get_panorama_info(
     return object_section(response, "data", required=True)
 
 
+def start_device_panorama_capture(client: EzvizClient, serial: str) -> None:
+    """Start the Android device-wide cloud capture, which may move the camera.
+
+    Use this for the app's device-wide workflow instead of a resource action.
+    Return on V3 acknowledgment, not completion. Read get_stored_panorama
+    separately. This helper never retries using a different route.
+    """
+    response = client._request_json(
+        "POST",
+        "/v3/panoramicDevices/pics/collect",
+        data={"deviceSerial": _panorama_serial(serial)},
+        retry_401=False,
+    )
+    _require_v3_success(client, response, "Could not start device panorama capture")
+
+
 def get_stored_panorama(client: EzvizClient, serial: str) -> dict[str, Any]:
     """Return the Android device-wide panorama record without downloading images.
 

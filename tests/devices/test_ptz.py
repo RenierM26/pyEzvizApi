@@ -306,3 +306,18 @@ def test_stored_panorama_reads_empty_record_without_starting_capture(device_requ
     url = urlsplit(request.url)
     assert url.path == "/v3/panoramicDevices/pics"
     assert parse_qs(url.query) == {"deviceSerial": ["CAM001"]}
+
+
+@pytest.mark.parametrize("code", [200, 2009])
+def test_device_panorama_capture_contract(device_requests, code) -> None:
+    client, sent, replies = device_requests
+    replies.append({"meta": {"code": code}, "resultCode": 0})
+    if code == 200:
+        ptz.start_device_panorama_capture(client, "cam001")
+    else:
+        with pytest.raises(PyEzvizError, match="2009"):
+            ptz.start_device_panorama_capture(client, "cam001")
+    (request,) = sent
+    assert request.method == "POST"
+    assert urlsplit(request.url).path == "/v3/panoramicDevices/pics/collect"
+    assert parse_qs(request.body) == {"deviceSerial": ["CAM001"]}

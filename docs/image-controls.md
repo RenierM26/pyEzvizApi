@@ -122,19 +122,27 @@ The old binary `set_intelligent_fill_light` can send off or smart but not
 infrared; it is unchanged. The new setter does not switch the camera to
 super-night mode.
 
-## Other gaps and evidence
+## Read-only image settings and remaining write gaps
 
-- **Wide angle:** The Android player reads `ImageAdjustment.WideAngleMode`
-  on the selected resource and local index. It treats `value.type == 1`
-  as active and uses it to adjust playback zoom behavior. That read path
-  does not establish how to persist a camera setting.
-- **Multi-camera color balance:** The fixture reports
-  `Video.ImageAdjust.MultiCameraColorBalanceSwitch.enabled`, but the traced
-  graphics paths did not establish an app writer or its resource scope.
-- **Cloud image adjustments:** `image_para`, `Auto_night_vision`, and the
-  generic `ICR` field appear in inventory, but this audit did not establish
-  cloud setters for those fields or for the independent LAN video effects.
-  Cloud display presets are not independent sliders.
+- **Wide angle:** Android `PlayDataInfo.wideAngleMode()` reads
+  `ImageAdjustment.WideAngleMode` for the selected resource and local index.
+  The matching serial/channel event handler updates playback zoom state; it
+  does not send a camera write. `reported_wide_angle_mode` reads the exact
+  Pagelist resource: 1 means on, 0 off, and other values (including the
+  fixture's 255) are unknown. The SDK does not copy the app's UI default.
+- **Multi-camera color balance:** The fixture reports a boolean in
+  `ImageAdjust.MultiCameraColorBalanceSwitch.enabled`.
+  `reported_multi_camera_color_balance` exposes it for an explicit
+  resource and local index. Neither snapshot reader falls back to another
+  resource. The retained settings bundle and Java paths did not establish a
+  writer or whether changes would apply to one lens or multiple lenses.
+- **Individual image levels:** `reported_cloud_image_levels` reads the four
+  integers in `STATUS.optionals.image_para` without substituting defaults.
+  The Android playback brightness path reaches `SystemSetting.setAppBrightness`
+  and changes the phone window's brightness, not the camera's. No cloud
+  write was established for `image_para`, `Auto_night_vision`, or `ICR`.
+  For native LAN, `camera_param_config()` reads the levels and
+  `set_camera_video_effect()` updates one supported field with read-back.
 
 See the [Pagelist field map](pagelist-state.md) for device capability gates
 and the [LAN WDR command](cli.md#lan-wdr) for the separate native backlight

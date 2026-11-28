@@ -181,6 +181,58 @@ def set_indicator_night_mode(client: EzvizClient, serial: str, enabled: bool) ->
     )
 
 
+def _snapshot_feature(
+    camera_data: Mapping[str, Any], channel: CameraChannel, domain: str, prop: str
+) -> Mapping[str, Any]:
+    node: Any = camera_data
+    for key in ("FEATURE_INFO", channel.local_index, channel.resource_identifier, domain, prop):
+        node = decode_json(node.get(key)) if isinstance(node, Mapping) else None
+    return node if isinstance(node, Mapping) else {}
+
+
+def reported_wide_angle_mode(
+    camera_data: Mapping[str, Any], *, channel: CameraChannel
+) -> bool | None:
+    """Read an explicitly selected resource; unrecognized types are unknown."""
+    mode = _snapshot_feature(camera_data, channel, "ImageAdjustment", "WideAngleMode").get("type")
+    return mode == 1 if type(mode) is int and mode in (0, 1) else None
+
+
+def reported_multi_camera_color_balance(
+    camera_data: Mapping[str, Any], *, channel: CameraChannel
+) -> bool | None:
+    """Read the reported boolean, without inferring support or scope for writes."""
+    state = _snapshot_feature(
+        camera_data, channel, "ImageAdjust", "MultiCameraColorBalanceSwitch"
+    ).get("enabled")
+    return state if isinstance(state, bool) else None
+
+
+class CloudImageLevels(TypedDict):
+    """Reported cloud image levels without firmware or LAN defaults."""
+
+    brightness: int | None
+    contrast: int | None
+    saturation: int | None
+    sharpness: int | None
+
+
+def reported_cloud_image_levels(camera_data: Mapping[str, Any]) -> CloudImageLevels:
+    """Read reported image_para integers; do not assume writable ranges."""
+    data = decode_json(optionals_mapping(camera_data).get("image_para"))
+
+    def level(key: str) -> int | None:
+        value = data.get(key) if isinstance(data, Mapping) else None
+        return value if type(value) is int else None
+
+    return {
+        "brightness": level("brightness"),
+        "contrast": level("contrast"),
+        "saturation": level("saturation"),
+        "sharpness": level("sharpness"),
+    }
+
+
 class ImageSwitch(Enum):
     """Boolean image properties used by the Android graphics screen."""
 

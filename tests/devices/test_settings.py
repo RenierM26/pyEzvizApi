@@ -813,3 +813,60 @@ def test_night_fill_light_does_not_guess_a_picker_mode(device_requests, data) ->
     client, _, replies = device_requests
     replies.append({"meta": {"code": 200}, "data": data})
     assert settings.get_night_fill_light_mode(client, "CAM001") is None
+
+
+def test_image_snapshot_readers_stay_on_explicit_resource() -> None:
+    data = {
+        "FEATURE_INFO": {
+            "1": {"Video": {"ImageAdjustment": {"WideAngleMode": {"type": 1}}}},
+            "2": {
+                "Video": {
+                    "ImageAdjustment": {"WideAngleMode": {"type": 0}},
+                    "ImageAdjust": {"MultiCameraColorBalanceSwitch": {"enabled": False}},
+                },
+                "Video_1": {
+                    "ImageAdjustment": {"WideAngleMode": {"type": 255}},
+                    "ImageAdjust": {"MultiCameraColorBalanceSwitch": {"enabled": True}},
+                },
+            },
+        }
+    }
+    primary = CameraChannel("Video", "1")
+    secondary = CameraChannel("Video", "2")
+    sibling = CameraChannel("Video_1", "2")
+    assert settings.reported_wide_angle_mode(data, channel=primary) is True
+    assert settings.reported_wide_angle_mode(data, channel=secondary) is False
+    assert settings.reported_wide_angle_mode(data, channel=sibling) is None
+    assert settings.reported_multi_camera_color_balance(data, channel=primary) is None
+    assert settings.reported_multi_camera_color_balance(data, channel=secondary) is False
+    assert settings.reported_multi_camera_color_balance(data, channel=sibling) is True
+
+
+def test_image_snapshot_readers_do_not_coerce_malformed_values() -> None:
+    data = {
+        "FEATURE_INFO": {
+            "1": {
+                "Video": {
+                    "ImageAdjustment": {"WideAngleMode": {"type": True}},
+                    "ImageAdjust": {"MultiCameraColorBalanceSwitch": {"enabled": "false"}},
+                }
+            }
+        },
+        "STATUS": {
+            "optionals": {
+                "image_para": '{"brightness":0,"contrast":50,"saturation":"50","sharpness":true}'
+            }
+        },
+    }
+    channel = CameraChannel("Video", "1")
+    assert settings.reported_wide_angle_mode(data, channel=channel) is None
+    assert settings.reported_multi_camera_color_balance(data, channel=channel) is None
+    assert settings.reported_cloud_image_levels(data) == {
+        "brightness": 0,
+        "contrast": 50,
+        "saturation": None,
+        "sharpness": None,
+    }
+    assert settings.reported_cloud_image_levels({}) == dict.fromkeys(
+        ("brightness", "contrast", "saturation", "sharpness")
+    )

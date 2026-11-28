@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from pyezvizapi.devices import ptz
+from pyezvizapi.devices import panorama
 from pyezvizapi.devices.channels import CameraChannel, camera_channels
 from pyezvizapi.exceptions import PyEzvizError
 from tests._paths import FIXTURES
@@ -49,14 +49,14 @@ def _panorama_page() -> dict[str, Any]:
 
 def test_resolve_panorama_uses_exact_resource_and_local_index() -> None:
     page = _panorama_page()
-    device = ptz.resolve_panorama_capture_route(page, "cam001", channel=CameraChannel("Video", "1"))
-    resource = ptz.resolve_panorama_capture_route(
+    device = panorama.resolve_panorama_capture_route(page, "cam001", channel=CameraChannel("Video", "1"))
+    resource = panorama.resolve_panorama_capture_route(
         page, "CAM001", channel=CameraChannel("Video_1", "2")
     )
     assert (device, resource) == ("device", "resource")
     profile = next(iter(page["PRODUCTS_INFO"].values()))["profile"]
     profile["resources"][1]["localIndex"] = ["1"]
-    wrong_index = ptz.resolve_panorama_capture_route(
+    wrong_index = panorama.resolve_panorama_capture_route(
         page, "CAM001", channel=CameraChannel("Video_1", "2")
     )
     assert wrong_index == "device"
@@ -65,18 +65,18 @@ def test_resolve_panorama_uses_exact_resource_and_local_index() -> None:
 def test_resolve_panorama_action_does_not_need_fullscreen_ptz_flag() -> None:
     page = _panorama_page()
     page["deviceInfos"][0]["supportExt"] = {}
-    selected = ptz.resolve_panorama_capture_route(
+    selected = panorama.resolve_panorama_capture_route(
         page, "CAM001", channel=CameraChannel("Video_1", "2")
     )
     assert selected == "resource"
     with pytest.raises(PyEzvizError, match="not advertised"):
-        ptz.resolve_panorama_capture_route(page, "CAM001", channel=CameraChannel("Video", "1"))
+        panorama.resolve_panorama_capture_route(page, "CAM001", channel=CameraChannel("Video", "1"))
 
 
 def test_resolve_panorama_relay_takes_precedence_over_cloud_capture() -> None:
     page = _panorama_page()
     page["deviceInfos"][0]["supportExt"] = {"913": "1", "81": 1}
-    selected = ptz.resolve_panorama_capture_route(
+    selected = panorama.resolve_panorama_capture_route(
         page, "CAM001", channel=CameraChannel("Video_1", "2")
     )
     assert selected == "relay"
@@ -95,7 +95,7 @@ def test_resolve_panorama_missing_or_invalid_metadata_does_not_guess(field: str)
         profile = next(iter(page["PRODUCTS_INFO"].values()))["profile"]
         profile["resources"][1]["domains"][0]["actions"] = {}
     with pytest.raises(PyEzvizError):
-        ptz.resolve_panorama_capture_route(page, "CAM001", channel=CameraChannel("Video_1", "2"))
+        panorama.resolve_panorama_capture_route(page, "CAM001", channel=CameraChannel("Video_1", "2"))
 
 
 def test_h9c_inventory_selects_device_scope_for_both_lenses() -> None:
@@ -109,5 +109,5 @@ def test_h9c_inventory_selects_device_scope_for_both_lenses() -> None:
         {"resourceInfos": [row for row in page["resourceInfos"] if row["deviceSerial"] == serial]}
     )
     assert len(channels) == 2
-    routes = [ptz.resolve_panorama_capture_route(page, serial, channel=ch) for ch in channels]
+    routes = [panorama.resolve_panorama_capture_route(page, serial, channel=ch) for ch in channels]
     assert routes == ["device", "device"]

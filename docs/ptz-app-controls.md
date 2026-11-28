@@ -11,9 +11,9 @@ There is no automatic fallback to another lens or from cloud to LAN.
 | Saved viewpoints | `list_ptz_presets`, `goto_ptz_preset`, `create_ptz_preset`, `rename_ptz_preset`, `delete_ptz_preset` in `pyezvizapi.devices.ptz` |
 | Patrol sequence | `get_patrol_path`, `create_patrol_path`, `set_patrol_path`, `delete_patrol_path` in `pyezvizapi.devices.app_controls` |
 | Save a patrol point | `pyezvizapi.devices.ptz.save_patrol_point` |
-| Panorama capture and status | `resolve_panorama_capture_route`, `start_panorama_capture`, `get_panorama_info`, `start_device_panorama_capture`, and `get_stored_panorama` in `pyezvizapi.devices.ptz` |
-| Download a finished device-wide panorama | `pyezvizapi.devices.ptz.download_saved_panorama` |
-| Panorama movement and mark reset | `move_to_panorama_point` and `reset_panorama_mark` in `pyezvizapi.devices.ptz` |
+| Panorama capture and status | `resolve_panorama_capture_route`, `start_panorama_capture`, `get_panorama_info`, `start_device_panorama_capture`, and `get_stored_panorama` in `pyezvizapi.devices.panorama` |
+| Download a finished device-wide panorama | `pyezvizapi.devices.panorama.download_saved_panorama` |
+| Panorama movement and mark reset | `move_to_panorama_point` and `reset_panorama_mark` in `pyezvizapi.devices.panorama` |
 | Patrol schedule, homing preset, calibration | [Camera app controls](camera-app-controls.md) |
 | Human/subject tracking and linked-lens behavior | [AI detection and tracking](ai-detection.md) |
 
@@ -58,6 +58,9 @@ although the Android app renamed a test preset on the same camera. Create,
 list and delete were verified independently.
 
 ## Panorama capture
+
+Use `pyezvizapi.devices.panorama` for new imports. The same helpers remain
+available from `pyezvizapi.devices.ptz`.
 
 Call `resolve_panorama_capture_route(page_list, serial, channel=channel)`
 with a fresh `client.get_page_list()` snapshot and a reported
@@ -110,7 +113,7 @@ and the tile list is empty.
 ```python
 from pathlib import Path
 
-from pyezvizapi.devices.ptz import download_saved_panorama
+from pyezvizapi.devices.panorama import download_saved_panorama
 
 jpeg = download_saved_panorama(client, serial)
 if jpeg is not None:

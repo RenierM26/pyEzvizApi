@@ -494,7 +494,11 @@ class EzvizCamera:
         *,
         channel: int | None = None,
     ) -> bool:
-        """Move camera in a given direction.
+        """Send a START followed immediately by a STOP on the same playback channel.
+
+        This convenience method does not wait for physical movement. It
+        returns True only after both requests succeed; if START raises, STOP
+        is not sent.
 
         direction: one of "right", "left", "down", "up".
         speed: movement speed, expected range 1..10 (inclusive).

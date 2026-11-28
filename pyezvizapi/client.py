@@ -2517,7 +2517,16 @@ class EzvizClient:
     def ptz_control(
         self, command: str, serial: str, action: str, speed: int = 5, *, channel: int = 1
     ) -> bool:
-        """Send a cloud PTZ command to a playback channel (default 1)."""
+        """Send one cloud PTZ command to the specified playback channel.
+
+        Supply the device serial, command (for example LEFT or ZOOMIN), and
+        action (START or STOP). Continuous commands require a separate STOP
+        on the same channel. Channel 1 is the backward-compatible default.
+
+        Return True when the cloud acknowledges the request, not when the
+        camera finishes moving. Cloud rejection raises PyEzvizError; failed
+        requests are not replayed after reauthentication.
+        """
         return _devices.ptz_control(
             self, command, serial, action, speed, channel=channel, _owner=_sys.modules[__name__]
         )

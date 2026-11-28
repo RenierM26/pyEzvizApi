@@ -1,4 +1,9 @@
-"""App-traced cloud controls for saved viewpoints and panorama capture."""
+"""Cloud controls for saved viewpoints, patrol points, and panoramas.
+
+Use the playback channel number for saved viewpoints and a reported
+CameraChannel for resource-scoped panorama actions. These helpers do not
+discover routes, switch lenses, or fall back to LAN controls.
+"""
 
 # ruff: noqa: SLF001
 # Share the SDK's authenticated transport and request deadline.
@@ -88,7 +93,13 @@ def _request_preset(
 
 
 def list_ptz_presets(client: EzvizClient, serial: str, *, channel: int) -> list[dict[str, Any]]:
-    """List saved viewpoints for the specified playback channel."""
+    """List saved viewpoints for a device serial and playback channel.
+
+    Return the raw cloud rows, or an empty list if a successful response has
+    no data. Use each row's subSerial, channelNo, and index for follow-up
+    operations instead of assuming it belongs to the requested route.
+    Raise PyEzvizError on cloud rejection or malformed non-null list data.
+    """
     response = _request_preset(client, "list", _preset_route(serial, channel))
     rows = response.get("data")
     if rows is None:
@@ -99,7 +110,11 @@ def list_ptz_presets(client: EzvizClient, serial: str, *, channel: int) -> list[
 
 
 def goto_ptz_preset(client: EzvizClient, serial: str, index: int, *, channel: int) -> None:
-    """Move to a saved viewpoint using the route and index from its list row."""
+    """Recall a saved viewpoint using its list row's subSerial, channelNo, and index.
+
+    This can physically move the camera. Return after the cloud acknowledges
+    the command, not after movement completes. Cloud rejection raises PyEzvizError.
+    """
     _request_preset(
         client,
         "config",
@@ -112,7 +127,11 @@ def goto_ptz_preset(client: EzvizClient, serial: str, index: int, *, channel: in
 
 
 def delete_ptz_preset(client: EzvizClient, serial: str, index: int, *, channel: int) -> None:
-    """Delete a saved viewpoint using the route and index from its list row."""
+    """Delete a saved viewpoint using its list row's subSerial, channelNo, and index.
+
+    This removes a viewpoint, not a patrol point or path. Return None on
+    cloud acknowledgment; raise PyEzvizError if the cloud rejects the deletion.
+    """
     _request_preset(
         client,
         "config",
@@ -134,7 +153,13 @@ def _preset_result(response: dict[str, Any]) -> dict[str, Any]:
 def create_ptz_preset(
     client: EzvizClient, serial: str, name: str, *, channel: int, thumbnail: bytes
 ) -> dict[str, Any]:
-    """Save the current viewpoint with a caller-supplied JPEG thumbnail."""
+    """Save the current viewpoint on the specified playback channel.
+
+    Supply non-empty JPEG bytes for the current view; this helper neither
+    captures nor decodes the image. Return the raw Preset object. Empty or
+    non-bytes thumbnails raise ValueError, while cloud rejection or a missing
+    or malformed Preset object raises PyEzvizError.
+    """
     if not isinstance(thumbnail, bytes) or not thumbnail:
         raise ValueError("Expected non-empty JPEG thumbnail bytes")
     return _preset_result(
@@ -156,7 +181,12 @@ def rename_ptz_preset(
     channel: int,
     pic_url: str,
 ) -> dict[str, Any]:
-    """Rename a saved viewpoint, preserving its reported thumbnail URL."""
+    """Rename a saved viewpoint and return the raw Preset object.
+
+    Use the list row's subSerial, channelNo, and index, and pass its picUrl
+    unchanged to retain the thumbnail. No image is uploaded. Cloud rejection
+    or a missing or malformed Preset object raises PyEzvizError.
+    """
     return _preset_result(
         _request_preset(
             client,
@@ -176,6 +206,9 @@ def save_patrol_point(client: EzvizClient, serial: str, name: int, *, thumbnail:
 
     Pass the app's positive numeric point name and a JPEG of the current view.
     The returned index is a patrol point ID, not a user-saved viewpoint index.
+    Reference it in an ordered patrol sequence as {"type": 1, "presetID": index}.
+    This helper does not create or enable a path. Cloud rejection or a missing
+    or invalid index raises PyEzvizError.
     """
     if isinstance(name, bool) or not isinstance(name, int) or name < 1:
         raise ValueError("Patrol point name must be a positive integer")
@@ -204,7 +237,12 @@ def _panorama_serial(serial: str) -> str:
 
 
 def start_panorama_capture(client: EzvizClient, serial: str, *, channel: CameraChannel) -> None:
-    """Start a resource-scoped panorama capture (can move the camera)."""
+    """Start panorama capture on an explicitly selected camera resource.
+
+    Capture can physically move the camera. Return None on acknowledgment
+    without waiting for completion; poll get_panorama_info separately using
+    the same device and channel. Cloud rejection raises PyEzvizError.
+    """
     response = client._request_json(
         "POST",
         f"/v3/panoramicDevices/action/pics/collect/{quote(_panorama_serial(serial), safe='')}/{channel.local_index}",
@@ -222,7 +260,12 @@ def start_panorama_capture(client: EzvizClient, serial: str, *, channel: CameraC
 def get_panorama_info(
     client: EzvizClient, serial: str, *, channel: CameraChannel
 ) -> dict[str, Any]:
-    """Read raw panorama progress and picture metadata without fetching media."""
+    """Return the panorama data object for the specified device and resource.
+
+    The object may contain percent and picInfoList. This call does not start a
+    capture, wait for completion, or download or stitch the images. Cloud
+    rejection or a missing or malformed data object raises PyEzvizError.
+    """
     response = client._iot_request(
         "PUT",
         API_ENDPOINT_IOT_ACTION,
@@ -256,7 +299,10 @@ def move_to_panorama_point(
     """Move to a normalized point on the panorama, not on the live view.
 
     Pass an explicit resource channel for RotateFixpoint, or omit it for the
-    legacy device-wide app route. A failed command never tries the other route.
+    legacy device-wide app route. The x and y fractions must be in [0, 1];
+    invalid coordinates raise ValueError before any request. The camera may
+    physically move. Return on cloud acknowledgment, not movement completion.
+    A failed command never tries the other route.
     """
     _panorama_point(x, y)
     device = _panorama_serial(serial)
@@ -285,7 +331,12 @@ def move_to_panorama_point(
 
 
 def reset_panorama_mark(client: EzvizClient, serial: str) -> None:
-    """Send the app's device-wide panorama coordinate reset (mark type 3)."""
+    """Reset the device-wide panorama coordinate mark (Android mark type 3).
+
+    This sends only the mark reset command, not a panorama capture request
+    or a live-view PTZ command. Return None on acknowledgment; cloud rejection
+    raises PyEzvizError.
+    """
     response = client._request_json(
         "PUT",
         "/v3/panoramicDevices/ptz/coordinate/mark",

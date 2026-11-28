@@ -20,10 +20,6 @@ from pyezvizapi.exceptions import PyEzvizError
             "Video/1/MotorVehiclesAnalysis/PlateRecognitionCfg",
         ),
         (app_controls.CameraAppProperty.MICROPHONE_AUTO_GAIN, "Video/1/AudioMgr/MicAdaptive"),
-        (
-            app_controls.CameraAppProperty.PROMPT_TONE_VOLUME,
-            "global/0/SoundSetting/PromptToneVolume",
-        ),
         (app_controls.CameraAppProperty.VOICE_STYLE, "Video/1/SoundSetting/VoiceStyle"),
         (
             app_controls.CameraAppProperty.VEHICLE_TRACKING,
@@ -47,6 +43,35 @@ def test_app_property_wire(device_requests, prop, route) -> None:
     assert [r.method for r in sent] == ["GET", "PUT"]
     assert all(urlsplit(r.url).path == f"/v3/iot-feature/feature/CAM001/{route}" for r in sent)
     assert json.loads(sent[1].body) == {"value": config}
+
+
+@pytest.mark.parametrize("volume", [0, 42, 2_147_483_647])
+def test_prompt_tone_volume_scalar_wire(device_requests, volume: int) -> None:
+    client, sent, replies = device_requests
+    replies.extend([{"meta": {"code": 200}, "data": volume}, {"meta": {"code": 200}}])
+    prop = app_controls.CameraAppProperty.PROMPT_TONE_VOLUME
+    reported = app_controls.get_app_property(client, "CAM001", prop)
+    assert reported == volume
+    app_controls.set_app_property(client, "CAM001", prop, volume)
+    assert [request.method for request in sent] == ["GET", "PUT"]
+    assert all(
+        urlsplit(request.url).path
+        == "/v3/iot-feature/feature/CAM001/global/0/SoundSetting/PromptToneVolume"
+        for request in sent
+    )
+    assert json.loads(sent[1].body) == {"value": volume}
+
+
+@pytest.mark.parametrize("value", [None, True, "42", 42.0, {}, -1, 2_147_483_648])
+def test_prompt_tone_volume_rejects_invalid_values(device_requests, value: Any) -> None:
+    client, sent, replies = device_requests
+    replies.append({"meta": {"code": 200}, "data": value})
+    prop = app_controls.CameraAppProperty.PROMPT_TONE_VOLUME
+    with pytest.raises(PyEzvizError, match="invalid prompt-tone volume"):
+        app_controls.get_app_property(client, "CAM001", prop)
+    with pytest.raises(ValueError, match="must be an integer"):
+        app_controls.set_app_property(client, "CAM001", prop, value)
+    assert [request.method for request in sent] == ["GET"]
 
 
 @pytest.mark.parametrize("plan", list(app_controls.CameraPlan))

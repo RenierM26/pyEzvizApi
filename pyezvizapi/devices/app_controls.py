@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from enum import Enum, IntEnum
 import json
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 from pyezvizapi._shared.coercion import decode_json
 from pyezvizapi.cloud.endpoints import (
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 
 class CameraAppProperty(Enum):
-    """Known Android settings with property-specific JSON objects."""
+    """Known Android settings with property-specific JSON values."""
 
     HOMING_PRESET = ("Video", "1", "PTZMaintenance", "HomingPresetCfg")
     PLATE_REGION = ("Video", "1", "MotorVehiclesAnalysis", "PlateRecognitionCfg")
@@ -45,23 +45,48 @@ class CameraAppProperty(Enum):
     SMART_COMPRESSION = ("Video", "1", "RecordStorage", "RecordCompressionParams")
 
 
-def get_app_property(client: EzvizClient, serial: str, prop: CameraAppProperty) -> dict[str, Any]:
-    """Read the app's exact resource; callers should first check product support."""
+def _is_prompt_tone_volume(value: object) -> TypeGuard[int]:
+    return type(value) is int and 0 <= value <= 2_147_483_647
+
+
+def _read_app_property(client: EzvizClient, serial: str, prop: CameraAppProperty) -> dict[str, Any]:
     resource, index, domain, key = prop.value
-    response = client.get_device_feature_value(serial, resource, domain, key, local_index=index)
+    return client.get_device_feature_value(serial, resource, domain, key, local_index=index)
+
+
+def get_app_property(
+    client: EzvizClient, serial: str, prop: CameraAppProperty
+) -> dict[str, Any] | int:
+    """Read the app's exact resource and return its object or scalar value."""
+    response = _read_app_property(client, serial, prop)
+    if prop is CameraAppProperty.PROMPT_TONE_VOLUME:
+        volume = response.get("data")
+        if not _is_prompt_tone_volume(volume):
+            raise PyEzvizError("Missing or invalid prompt-tone volume")
+        return volume
     return dict(object_section(response, "data", required=True))
 
 
 def set_app_property(
-    client: EzvizClient, serial: str, prop: CameraAppProperty, config: Mapping[str, Any]
+    client: EzvizClient, serial: str, prop: CameraAppProperty, config: Mapping[str, Any] | int
 ) -> None:
-    """Write a model-supported configuration object using the app's envelope."""
+    """Write a model-supported object or scalar using the app's envelope."""
+    if prop is CameraAppProperty.PROMPT_TONE_VOLUME:
+        if not _is_prompt_tone_volume(config):
+            raise ValueError("Prompt-tone volume must be an integer from 0 to 2147483647")
+        value: dict[str, Any] | int = config
+    else:
+        if not isinstance(config, Mapping):
+            raise ValueError("Expected a configuration object for this property")
+        value = dict(config)
     resource, index, domain, key = prop.value
-    client.set_iot_feature(serial, resource, index, domain, key, {"value": dict(config)})
+    client.set_iot_feature(serial, resource, index, domain, key, {"value": value})
 
 
 def _get_app_enabled(client: EzvizClient, serial: str, prop: CameraAppProperty) -> bool | None:
-    enabled = get_app_property(client, serial, prop).get("enabled")
+    enabled = object_section(_read_app_property(client, serial, prop), "data", required=True).get(
+        "enabled"
+    )
     return enabled if isinstance(enabled, bool) else None
 
 
@@ -76,7 +101,9 @@ def _set_app_enabled(
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be a boolean")
     if template is None:
-        config = get_app_property(client, serial, prop)
+        config = dict(
+            object_section(_read_app_property(client, serial, prop), "data", required=True)
+        )
         if not isinstance(config.get("enabled"), bool):
             raise PyEzvizError("Cannot update an image switch with unknown current state")
     else:

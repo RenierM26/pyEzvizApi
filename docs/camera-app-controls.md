@@ -113,8 +113,8 @@ part of a routine validation run.
 ## Model-specific IoT property access
 
 Use `get_app_property(client, serial, CameraAppProperty.X)` to read the
-app's configuration object, and `set_app_property` to send the configuration
-object for that model. The setter wraps it in `{"value": ...}`. Pass the
+app's property value, and `set_app_property` to write it. Most properties
+use configuration objects; prompt-tone volume is an integer. The setter wraps it in `{"value": ...}`. Pass the
 property configuration, not the HTTP response or an already-wrapped value.
 The routes below are fixed to those traced in the app; do not assume they
 apply to a second lens. This API does not guess picker values or validate
@@ -125,7 +125,7 @@ model-specific schemas.
 | `HOMING_PRESET` | `Video/1/PTZMaintenance/HomingPresetCfg` | App sends boolean `enabled`. |
 | `PLATE_REGION` | `Video/1/MotorVehiclesAnalysis/PlateRecognitionCfg` | App saves `plateRecognitionList` with normalized polygon coordinates, not a PIR matrix. |
 | `MICROPHONE_AUTO_GAIN` | `Video/1/AudioMgr/MicAdaptive` | App sends boolean `gainEnabled`. |
-| `PROMPT_TONE_VOLUME` | `global/0/SoundSetting/PromptToneVolume` | Separate from alarm and LAN audio-output volume. |
+| `PROMPT_TONE_VOLUME` | `global/0/SoundSetting/PromptToneVolume` | Integer scalar, not a configuration object. Separate from alarm and LAN audio-output volume. |
 | `VOICE_STYLE` | `Video/1/SoundSetting/VoiceStyle` | App sends a model-supported `mode`. |
 | `VEHICLE_TRACKING` | `Video/1/VehicleDetections/VehicleTraceSwitch` | App sends boolean `enabled`. |
 | `WAKEUP_STRATEGY` | `Video/1/EnergySaving/WakeupStrategyCfg` | Model-specific battery wake-up configuration. |

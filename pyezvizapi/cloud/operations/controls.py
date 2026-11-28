@@ -13,6 +13,11 @@ from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING, TypedDict
 
 from pyezvizapi._shared.coercion import decode_json
+from pyezvizapi._shared.image_settings import (
+    NIGHT_FILL_LIGHT_DOMAIN,
+    NIGHT_FILL_LIGHT_PROPERTY,
+    night_fill_light_payload,
+)
 from pyezvizapi.cloud.endpoints import API_ENDPOINT_PEOPLE_DETECTION_SWITCH
 
 if TYPE_CHECKING:
@@ -783,19 +788,14 @@ def set_intelligent_fill_light(
     _owner: _ModuleType,
 ) -> _owner_types.JsonDict:
     """Toggle the intelligent fill light mode via the IoT feature API."""
-    payload = {
-        "value": {
-            "enabled": bool(enabled),
-            "supplementLightSwitchMode": "eventIntelligence" if enabled else "irLight",
-        }
-    }
+    payload = night_fill_light_payload(bool(enabled), "eventIntelligence" if enabled else "irLight")
     body = self._normalize_json_payload(payload)
     return self.set_iot_feature(
         serial,
         resource_identifier="Video",
         local_index=local_index,
-        domain_id="SupplementLightMgr",
-        action_id="ImageSupplementLightModeSwitchParams",
+        domain_id=NIGHT_FILL_LIGHT_DOMAIN,
+        action_id=NIGHT_FILL_LIGHT_PROPERTY,
         value=body,
         max_retries=max_retries,
     )

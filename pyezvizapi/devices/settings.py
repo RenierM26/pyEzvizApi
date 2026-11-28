@@ -9,6 +9,11 @@ import json
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from pyezvizapi._shared.coercion import decode_json
+from pyezvizapi._shared.image_settings import (
+    NIGHT_FILL_LIGHT_DOMAIN,
+    NIGHT_FILL_LIGHT_PROPERTY,
+    night_fill_light_payload,
+)
 from pyezvizapi.devices.capabilities import SupportExtView
 from pyezvizapi.devices.channels import CameraChannel
 from pyezvizapi.devices.features import device_icr_dss_config, optionals_mapping
@@ -271,14 +276,10 @@ class NightFillLightMode(Enum):
     SMART = (True, "eventIntelligence")
 
 
-_NIGHT_FILL_LIGHT_DOMAIN = "SupplementLightMgr"
-_NIGHT_FILL_LIGHT_PROP = "ImageSupplementLightModeSwitchParams"
-
-
 def get_night_fill_light_mode(client: EzvizClient, serial: str) -> NightFillLightMode | None:
     """Read both fields of the app's Video/1 fill-light picker."""
     response = client.get_device_feature_value(
-        serial, "Video", _NIGHT_FILL_LIGHT_DOMAIN, _NIGHT_FILL_LIGHT_PROP, local_index="1"
+        serial, "Video", NIGHT_FILL_LIGHT_DOMAIN, NIGHT_FILL_LIGHT_PROPERTY, local_index="1"
     )
     data = response.get("data")
     if not isinstance(data, Mapping) or type(data.get("enabled")) is not bool:
@@ -296,9 +297,9 @@ def set_night_fill_light_mode(client: EzvizClient, serial: str, mode: NightFillL
         serial,
         "Video",
         "1",
-        _NIGHT_FILL_LIGHT_DOMAIN,
-        _NIGHT_FILL_LIGHT_PROP,
-        {"value": {"enabled": enabled, "supplementLightSwitchMode": switch_mode}},
+        NIGHT_FILL_LIGHT_DOMAIN,
+        NIGHT_FILL_LIGHT_PROPERTY,
+        night_fill_light_payload(enabled, switch_mode),
     )
 
 
@@ -351,6 +352,19 @@ def reported_cloud_day_night_settings(camera_data: Mapping[str, Any]) -> CloudDa
     }
 
 
+def _require_day_night_sensitivity(sensitivity: int) -> None:
+    if type(sensitivity) is not int or sensitivity not in (1, 2, 3):
+        raise PyEzvizError("Day/night sensitivity must be an integer from 1 to 3")
+
+
+def _write_day_night_settings(
+    client: EzvizClient, serial: str, channel: int, mode: int, sensitivity: int
+) -> None:
+    client.set_device_key_value(
+        serial, channel, "device_ICR_DSS", json.dumps({"mode": mode, "sensitivity": sensitivity})
+    )
+
+
 def set_cloud_day_night_settings(
     client: EzvizClient, serial: str, mode: int, sensitivity: int, *, channel: int = 1
 ) -> None:
@@ -359,11 +373,8 @@ def set_cloud_day_night_settings(
         raise PyEzvizError("Day/night channel must be a nonnegative integer")
     if type(mode) is not int or mode not in (0, 1, 2):
         raise PyEzvizError("Day/night mode must be 0 (auto), 1 (day), or 2 (night)")
-    if type(sensitivity) is not int or sensitivity not in (1, 2, 3):
-        raise PyEzvizError("Day/night sensitivity must be an integer from 1 to 3")
-    client.set_device_key_value(
-        serial, channel, "device_ICR_DSS", json.dumps({"mode": mode, "sensitivity": sensitivity})
-    )
+    _require_day_night_sensitivity(sensitivity)
+    _write_day_night_settings(client, serial, channel, mode, sensitivity)
 
 
 def set_enhanced_infrared_sensitivity(client: EzvizClient, serial: str, sensitivity: int) -> None:
@@ -372,13 +383,10 @@ def set_enhanced_infrared_sensitivity(client: EzvizClient, serial: str, sensitiv
     Callers must verify the device exposes the enhanced-infrared picker.
     This does not enable or select enhanced infrared.
     """
-    if type(sensitivity) is not int or sensitivity not in (1, 2, 3):
-        raise PyEzvizError("Day/night sensitivity must be an integer from 1 to 3")
+    _require_day_night_sensitivity(sensitivity)
     if get_black_and_white_mode(client, serial) is not BlackAndWhiteMode.ENHANCED_INFRARED:
         raise PyEzvizError("Enhanced infrared must be active before setting its sensitivity")
-    client.set_device_key_value(
-        serial, 1, "device_ICR_DSS", json.dumps({"mode": 3, "sensitivity": sensitivity})
-    )
+    _write_day_night_settings(client, serial, 1, 3, sensitivity)
 
 
 class WdrSettings(TypedDict):
@@ -400,9 +408,10 @@ def get_iot_wdr_settings(
     }
 
 
-def _require_wdr_level(level: object) -> None:
+def _require_wdr_level(level: object) -> int:
     if type(level) is not int or not 0 <= level <= _WDR_LEVEL_MAX:
         raise PyEzvizError("WDR level must be an integer from 0 to 100")
+    return level
 
 
 def set_iot_wdr_enabled(
@@ -412,12 +421,8 @@ def set_iot_wdr_enabled(
 
     _require_bool(enabled)
     data = _read_video_setting(client, serial, "ImageBacklight", "WDR", local_index)
-    level = data.get("WDRLevel1")
-    _require_wdr_level(level)
-    payload = {"hdrSwitchEnabled": "open" if enabled else "close", "WDRLevel1": level}
-    client.set_iot_feature(
-        serial, "Video", local_index, "ImageBacklight", "WDR", {"value": payload}
-    )
+    level = _require_wdr_level(data.get("WDRLevel1"))
+    _write_iot_wdr(client, serial, local_index, enabled, level)
 
 
 def set_iot_wdr_level(
@@ -429,7 +434,13 @@ def set_iot_wdr_level(
     data = _read_video_setting(client, serial, "ImageBacklight", "WDR", local_index)
     if data.get("hdrSwitchEnabled") != "open":
         raise PyEzvizError("WDR must be enabled before setting its level")
-    payload = {"hdrSwitchEnabled": "open", "WDRLevel1": level}
+    _write_iot_wdr(client, serial, local_index, True, level)
+
+
+def _write_iot_wdr(
+    client: EzvizClient, serial: str, local_index: str, enabled: bool, level: int
+) -> None:
+    payload = {"hdrSwitchEnabled": "open" if enabled else "close", "WDRLevel1": level}
     client.set_iot_feature(
         serial, "Video", local_index, "ImageBacklight", "WDR", {"value": payload}
     )

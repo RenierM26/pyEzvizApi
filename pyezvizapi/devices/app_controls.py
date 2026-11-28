@@ -13,6 +13,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from pyezvizapi._shared.coercion import decode_json
+from pyezvizapi.cloud.responses import object_section
 from pyezvizapi.devices.channels import CameraChannel
 from pyezvizapi.exceptions import PyEzvizError
 
@@ -39,21 +40,11 @@ class CameraAppProperty(Enum):
     SMART_COMPRESSION = ("Video", "1", "RecordStorage", "RecordCompressionParams")
 
 
-def _object(value: object, label: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise PyEzvizError(f"Missing or invalid {label}")
-    return dict(value)
-
-
 def get_app_property(client: EzvizClient, serial: str, prop: CameraAppProperty) -> dict[str, Any]:
     """Read the app's exact resource; callers should first check product support."""
     resource, index, domain, key = prop.value
-    return _object(
-        client.get_device_feature_value(serial, resource, domain, key, local_index=index).get(
-            "data"
-        ),
-        key,
-    )
+    response = client.get_device_feature_value(serial, resource, domain, key, local_index=index)
+    return dict(object_section(response, "data", required=True))
 
 
 def set_app_property(
@@ -64,17 +55,41 @@ def set_app_property(
     client.set_iot_feature(serial, resource, index, domain, key, {"value": dict(config)})
 
 
+def _get_app_enabled(client: EzvizClient, serial: str, prop: CameraAppProperty) -> bool | None:
+    enabled = get_app_property(client, serial, prop).get("enabled")
+    return enabled if isinstance(enabled, bool) else None
+
+
+def _set_app_enabled(
+    client: EzvizClient,
+    serial: str,
+    prop: CameraAppProperty,
+    *,
+    enabled: bool,
+    template: Mapping[str, Any] | None,
+) -> None:
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be a boolean")
+    if template is None:
+        config = get_app_property(client, serial, prop)
+        if not isinstance(config.get("enabled"), bool):
+            raise PyEzvizError("Cannot update an image switch with unknown current state")
+    else:
+        config = dict(template)
+    config["enabled"] = enabled
+    set_app_property(client, serial, prop, config)
+
+
 def get_smart_recording_compression(client: EzvizClient, serial: str) -> bool | None:
     """Return the reported Smart Compression flag, or None for an unknown flag."""
-    enabled = get_app_property(client, serial, CameraAppProperty.SMART_COMPRESSION).get("enabled")
-    return enabled if isinstance(enabled, bool) else None
+    return _get_app_enabled(client, serial, CameraAppProperty.SMART_COMPRESSION)
 
 
 def set_smart_recording_compression(client: EzvizClient, serial: str, *, enabled: bool) -> None:
     """Set Smart Compression on models exposing the app's Video/1 property."""
-    if not isinstance(enabled, bool):
-        raise ValueError("enabled must be a boolean")
-    set_app_property(client, serial, CameraAppProperty.SMART_COMPRESSION, {"enabled": enabled})
+    _set_app_enabled(
+        client, serial, CameraAppProperty.SMART_COMPRESSION, enabled=enabled, template={}
+    )
 
 
 _APP_SWITCH_WRITES = {
@@ -89,25 +104,16 @@ def get_camera_app_switch(client: EzvizClient, serial: str, prop: CameraAppPrope
     """Read a traced switch, keeping an unknown flag distinct from off."""
     if prop not in _APP_SWITCH_WRITES:
         raise ValueError("Not a supported camera app switch")
-    enabled = get_app_property(client, serial, prop).get("enabled")
-    return enabled if isinstance(enabled, bool) else None
+    return _get_app_enabled(client, serial, prop)
 
 
 def set_camera_app_switch(
     client: EzvizClient, serial: str, prop: CameraAppProperty, *, enabled: bool
 ) -> None:
     """Set a traced switch using its app-specific payload."""
-    if prop not in _APP_SWITCH_WRITES or not isinstance(enabled, bool):
-        raise ValueError("Expected a supported camera app switch and a boolean")
-    template = _APP_SWITCH_WRITES[prop]
-    if template is None:
-        config = get_app_property(client, serial, prop)
-        if not isinstance(config.get("enabled"), bool):
-            raise PyEzvizError("Cannot update an image switch with unknown current state")
-    else:
-        config = dict(template)
-    config["enabled"] = enabled
-    set_app_property(client, serial, prop, config)
+    if prop not in _APP_SWITCH_WRITES:
+        raise ValueError("Not a supported camera app switch")
+    _set_app_enabled(client, serial, prop, enabled=enabled, template=_APP_SWITCH_WRITES[prop])
 
 
 class CameraPlan(IntEnum):
@@ -164,7 +170,7 @@ def get_patrol_path(client: EzvizClient, serial: str, *, channel: CameraChannel)
         "GetPTZPatrolPath",
         {"value": {"patrolID": 1}},
     )
-    return _object(response.get("data"), "patrol path")
+    return object_section(response, "data", required=True)
 
 
 def set_patrol_path(
@@ -214,7 +220,10 @@ def get_privacy_mask(client: EzvizClient, serial: str, *, channel: int) -> dict[
         "GET", f"/v3/devconfig/v1/keyValue/{serial}/{channel}/op", params={"key": "pri_cover_area"}
     )
     client._ensure_ok(response, "Could not read privacy mask")
-    return _object(decode_json(response.get("valueInfo")), "privacy mask")
+    config = decode_json(response.get("valueInfo"))
+    if not isinstance(config, dict):
+        raise PyEzvizError("Missing or invalid privacy mask")
+    return dict(config)
 
 
 def set_privacy_mask(
@@ -262,7 +271,7 @@ def get_pir_detection_grid(
     """Read the PIR grid on the app's sub-device serial and explicit channel."""
     response = client._request_json("GET", f"/v3/alarms/device/pir/area/{sub_serial}/{channel}")
     client._ensure_ok(response, "Could not read PIR grid")
-    area = _object(response.get("area"), "PIR area")
+    area = object_section(response, "area", required=True)
     grid = decode_json(area.get("area"))
     if (
         not isinstance(grid, list)
@@ -298,7 +307,7 @@ def get_legacy_motion_area(client: EzvizClient, serial: str, *, channel: int) ->
         params={"category": "TEL"},
     )
     client._ensure_ok(response, "Could not read legacy motion area")
-    return _object(response.get("motionDetectAreaInfo"), "legacy motion area")
+    return object_section(response, "motionDetectAreaInfo", required=True)
 
 
 class MotionAreaEncoding(Enum):
@@ -324,7 +333,7 @@ def get_motion_detection_area(
     path = _motion_area_path(serial, channel, detection_type)
     response = client._request_json("GET", f"{path}/{detection_type}")
     client._ensure_ok(response, "Could not read motion detection area")
-    return _object(response.get("detectAreaInfo"), "motion detection area")
+    return object_section(response, "detectAreaInfo", required=True)
 
 
 def _motion_area_data(grid: list[list[int]], encoding: MotionAreaEncoding) -> str:
